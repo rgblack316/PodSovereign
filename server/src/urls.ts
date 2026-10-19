@@ -1,14 +1,14 @@
 /**
  * Public URL layout — the one place it's defined.
  *
- *   Feed:   <PUBLIC_BASE_URL>/feed/<slug>/feed.xml
+ *   Feed:   <PUBLIC_BASE_URL>/<slug>/feed.xml
  *   Media:  <MEDIA_BASE_URL>/<slug>/media/<type>/<file>
  *
  * Changing this after podcasts are live breaks every subscriber's URLs, so
  * treat it as fixed once real shows are imported.
  */
 
-export const feedPath = (slug: string) => `/feed/${slug}/feed.xml`;
+export const feedPath = (slug: string) => `/${slug}/feed.xml`;
 
 export const mediaPath = (slug: string, typeDir: string, file: string) => `/${slug}/media/${typeDir}/${file}`;
 

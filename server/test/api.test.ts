@@ -174,7 +174,7 @@ describe('importing and per-user isolation', () => {
     assert.equal(list.json.podcasts.length, 1);
     slug = list.json.podcasts[0].slug;
     assert.equal(list.json.podcasts[0].role, 'owner');
-    assert.equal(list.json.podcasts[0].feedUrl, `http://feeds.mine.test/feed/${slug}/feed.xml`);
+    assert.equal(list.json.podcasts[0].feedUrl, `http://feeds.mine.test/${slug}/feed.xml`);
   });
 
   test("bob can't see, change or delete alice's podcast — every route answers 404", async () => {
@@ -212,11 +212,11 @@ describe('importing and per-user isolation', () => {
 
 describe('stats prefixes and the public feed', () => {
   test('the prefix checkboxes change the public feed', async () => {
-    const feed1 = await anon.get(`/feed/${slug}/feed.xml`);
+    const feed1 = await anon.get(`/${slug}/feed.xml`);
     assert.equal(feed1.status, 200);
     assert.match(feed1.headers.get('content-type')!, /application\/rss\+xml/);
     assert.ok(feed1.text.includes(`url="http://feeds.mine.test/${slug}/media/audio/`));
-    assert.ok(feed1.text.includes(`<atom:link href="http://feeds.mine.test/feed/${slug}/feed.xml" rel="self"`));
+    assert.ok(feed1.text.includes(`<atom:link href="http://feeds.mine.test/${slug}/feed.xml" rel="self"`));
 
     const r = await alice.put(`/api/podcasts/${alicePodcast}/prefixes`, {
       settings: [
@@ -228,7 +228,7 @@ describe('stats prefixes and the public feed', () => {
     assert.equal(r.status, 200, r.text);
     assert.deepEqual(r.json.chain, ['https://op3.dev/e/', 'https://dts.podtrac.com/redirect.mp3/']);
 
-    const feed2 = await anon.get(`/feed/${slug}/feed.xml`);
+    const feed2 = await anon.get(`/${slug}/feed.xml`);
     assert.ok(feed2.text.includes(`url="https://op3.dev/e/dts.podtrac.com/redirect.mp3/feeds.mine.test/${slug}/media/audio/`));
     assert.notEqual(feed2.headers.get('etag'), feed1.headers.get('etag'));
   });
@@ -244,13 +244,13 @@ describe('stats prefixes and the public feed', () => {
   });
 
   test('feeds support ETag / 304', async () => {
-    const a = await anon.get(`/feed/${slug}/feed.xml`);
-    const b = await anon.get(`/feed/${slug}/feed.xml`, { 'If-None-Match': a.headers.get('etag')! });
+    const a = await anon.get(`/${slug}/feed.xml`);
+    const b = await anon.get(`/${slug}/feed.xml`, { 'If-None-Match': a.headers.get('etag')! });
     assert.equal(b.status, 304);
   });
 
   test('unknown feeds 404', async () => {
-    assert.equal((await anon.get('/feed/nope/feed.xml')).status, 404);
+    assert.equal((await anon.get('/nope/feed.xml')).status, 404);
   });
 
   test('media is served with byte ranges (dev server)', async () => {
@@ -302,7 +302,7 @@ describe('deleting', () => {
     assert.ok(existsSync(dir));
     assert.equal((await alice.del(`/api/podcasts/${alicePodcast}`)).status, 204);
     assert.equal((await alice.get(`/api/podcasts/${alicePodcast}`)).status, 404);
-    assert.equal((await anon.get(`/feed/${slug}/feed.xml`)).status, 404);
+    assert.equal((await anon.get(`/${slug}/feed.xml`)).status, 404);
     assert.ok(!existsSync(dir));
     const { rows } = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM episodes WHERE podcast_id = $1`, [alicePodcast]);
     assert.equal(rows[0]!.n, 0);

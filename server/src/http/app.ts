@@ -302,7 +302,7 @@ export function createApp(deps: AppDeps) {
 
   // ───────────── public feed + media ─────────────
 
-  router.get('/feed/:slug/feed.xml', async (ctx) => {
+  router.get('/:slug/feed.xml', async (ctx) => {
     const p = await getPodcastBySlug(db, ctx.params.slug!);
     if (!p || p.status !== 'active') throw new HttpError(404, 'Feed not found');
 

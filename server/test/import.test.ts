@@ -83,7 +83,7 @@ test('imports a feed end to end: saves everything, copies media, rewrites URLs',
 
   // Rebuilt feed points at our server, except the file that failed
   const feed = (await loadFeed(db, job.podcast_id))!;
-  const xml = buildFeed(feed, { selfUrl: `https://feeds.mine.test/feed/${pod.slug}/feed.xml` });
+  const xml = buildFeed(feed, { selfUrl: `https://feeds.mine.test/${pod.slug}/feed.xml` });
   const leftovers = xml.split('\n').filter((l) => l.includes(`${host.base}/old/`)).map((l) => l.trim());
   assert.deepEqual(leftovers, [
     `<podcast:transcript url="${host.base}/old/ep2.srt" type="application/x-subrip" rel="captions"/>`, // copy failed

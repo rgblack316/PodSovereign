@@ -28,7 +28,7 @@ CREATE TABLE sessions (
 CREATE TABLE podcasts (
   id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   owner_id         uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-  slug             text UNIQUE NOT NULL,          -- /feed/{slug}/feed.xml and /{slug}/media/...
+  slug             text UNIQUE NOT NULL,          -- /{slug}/feed.xml and /{slug}/media/...
   source_feed_url  text,                          -- original feed imported from
   imported_at      timestamptz,
 

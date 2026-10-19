@@ -40,7 +40,7 @@ Migrations run automatically on startup. The **first account registered becomes 
 ### Public URLs
 
 ```
-Feed:   https://podcasts.johnscreekstudios.com/feed/<show>/feed.xml
+Feed:   https://podcasts.johnscreekstudios.com/<show>/feed.xml
 Media:  https://podcasts.johnscreekstudios.com/<show>/media/<type>/<file>
 ```
 
@@ -85,7 +85,7 @@ sudo cloudflared service install && sudo systemctl enable --now cloudflared
 **4. Cloudflare dashboard settings.** These matter because podcast apps and directories (Apple, Spotify, Overcast, Podcast Index) fetch feeds automatically, without a browser, and challenge pages break them.
 - Turn **Bot Fight Mode off**. On the free plan it can't be limited to certain paths.
 - Never enable **"I'm Under Attack" mode** for this hostname.
-- Add a WAF custom rule with the **Skip** action for paths starting with `/feed/` or containing `/media/`. Have it skip Browser Integrity Check and Security Level challenges.
+- Add a WAF custom rule with the **Skip** action for paths ending in `/feed.xml` or containing `/media/`. Have it skip Browser Integrity Check and Security Level challenges.
 - Feeds (`.xml`) aren't cached by Cloudflare by default, so new episodes show up immediately. Media files are cacheable, and the app sends a one-day `Cache-Control` for them.
 
 **What the app already handles behind the tunnel**
@@ -111,7 +111,7 @@ All `/api` calls use a session cookie. Requests that change something must send 
 | PUT | `/api/podcasts/:id/prefixes` | editor+ |
 | DELETE | `/api/podcasts/:id` | owner |
 | POST | `/api/imports` `{url, slug?}` · GET `/api/imports` · `/api/imports/:id` | your own imports |
-| GET | `/feed/:slug/feed.xml` · `/:slug/media/:type/:file` | public |
+| GET | `/:slug/feed.xml` · `/:slug/media/:type/:file` | public |
 
 If you don't have access to a podcast, you get **404**, so the existence of other people's shows isn't revealed.
 
