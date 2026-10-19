@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+  xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"
+  xmlns:podcast="https://podcastindex.org/namespace/1.0"
+  xmlns:content="http://purl.org/rss/1.0/modules/content/"
+  xmlns:atom="http://www.w3.org/2005/Atom"
+  xmlns:googleplay="http://www.google.com/schemas/play-podcasts/1.0"
+  xmlns:fh="https://example.com/ns/custom">
+  <channel>
+    <title>The Test Show &amp; Friends</title>
+    <link>https://testshow.example.com</link>
+    <description><![CDATA[<p>A show about <strong>testing</strong> feeds.</p>]]></description>
+    <language>en-us</language>
+    <copyright>© 2026 Test Media</copyright>
+    <atom:link href="https://oldhost.example.com/feed.xml" rel="self" type="application/rss+xml"/>
+    <atom:link href="https://pubsubhubbub.appspot.com/" rel="hub"/>
+    <lastBuildDate>Mon, 12 Oct 2026 10:00:00 GMT</lastBuildDate>
+    <generator>OldHost 3.1</generator>
+    <image>
+      <url>https://oldhost.example.com/art.jpg</url>
+      <title>The Test Show</title>
+      <link>https://testshow.example.com</link>
+    </image>
+    <itunes:image href="https://oldhost.example.com/art-3000.jpg"/>
+    <itunes:author>Randy Example</itunes:author>
+    <itunes:summary>Plain summary text.</itunes:summary>
+    <itunes:owner>
+      <itunes:name>Randy Example</itunes:name>
+      <itunes:email>owner@example.com</itunes:email>
+    </itunes:owner>
+    <itunes:category text="Technology"/>
+    <itunes:category text="Society &amp; Culture">
+      <itunes:category text="Documentary"/>
+    </itunes:category>
+    <itunes:type>episodic</itunes:type>
+    <itunes:explicit>no</itunes:explicit>
+    <googleplay:block>no</googleplay:block>
+    <podcast:guid>917393e3-1b1e-5cef-ace4-edaa54e1f810</podcast:guid>
+    <podcast:locked owner="owner@example.com">no</podcast:locked>
+    <podcast:medium>podcast</podcast:medium>
+    <podcast:funding url="https://example.com/donate">Support the show!</podcast:funding>
+    <podcast:location geo="geo:38.4192,-82.4452" osm="R123456">Huntington, WV</podcast:location>
+    <podcast:license url="https://creativecommons.org/licenses/by/4.0/">cc-by-4.0</podcast:license>
+    <podcast:txt purpose="verify">S6lpp-7ZCn8-dZfGc-OoyaG</podcast:txt>
+    <podcast:updateFrequency rrule="FREQ=WEEKLY">Weekly</podcast:updateFrequency>
+    <podcast:trailer pubdate="Thu, 01 Oct 2026 08:00:00 GMT" url="https://oldhost.example.com/trailer.mp3" length="12345678" type="audio/mpeg" season="1">Season 1 Trailer</podcast:trailer>
+    <podcast:person role="host" img="https://oldhost.example.com/randy.jpg" href="https://example.com/randy">Randy Example</podcast:person>
+    <podcast:value type="lightning" method="keysend" suggested="0.00000005000">
+      <podcast:valueRecipient name="Host" type="node" address="02d5c1bf8b940dc9cadca86d1b0a3c37fbe39cee4c7e839e33bef9174531d27f52" split="95"/>
+      <podcast:valueRecipient name="Podcastindex.org" type="node" address="03ae9f91a0cb8ff43840e3c322c4c61f019d8c1c3cea15a25cfc425ac605e61a4a" split="5" fee="true"/>
+    </podcast:value>
+    <podcast:podroll>
+      <podcast:remoteItem feedGuid="4c2c4ca4-2f2d-5e3e-9b36-1a5c0b0f7d8a"/>
+    </podcast:podroll>
+    <podcast:liveItem status="pending" start="2026-11-01T19:00:00-04:00" end="2026-11-01T20:00:00-04:00">
+      <title>Live Q&amp;A</title>
+      <guid>live-2026-11-01</guid>
+      <enclosure url="https://stream.example.com/live.mp3" type="audio/mpeg" length="0"/>
+      <podcast:contentLink href="https://youtube.com/live/abc">Watch on YouTube</podcast:contentLink>
+    </podcast:liveItem>
+    <fh:customThing level="3">Kept even though nobody knows what it is</fh:customThing>
+
+    <item>
+      <title>Episode 2: Prefixes &amp; Things</title>
+      <description><![CDATA[<p>Show notes with a <a href="https://example.com">link</a>.</p>]]></description>
+      <content:encoded><![CDATA[<p>Longer notes</p><ul><li>One</li></ul>]]></content:encoded>
+      <link>https://testshow.example.com/2</link>
+      <guid isPermaLink="false">ep-0002</guid>
+      <pubDate>Mon, 12 Oct 2026 10:00:00 +0000</pubDate>
+      <enclosure url="https://op3.dev/e/dts.podtrac.com/redirect.mp3/chtbl.com/track/ABC123/oldhost.example.com/media/ep2.mp3" length="45678901" type="audio/mpeg"/>
+      <itunes:title>Prefixes &amp; Things</itunes:title>
+      <itunes:image href="https://oldhost.example.com/ep2.jpg"/>
+      <itunes:duration>1:02:03</itunes:duration>
+      <itunes:episode>2</itunes:episode>
+      <itunes:season>1</itunes:season>
+      <itunes:episodeType>full</itunes:episodeType>
+      <itunes:explicit>false</itunes:explicit>
+      <podcast:season name="Origins">1</podcast:season>
+      <podcast:episode display="Ch. 2">2</podcast:episode>
+      <podcast:transcript url="https://oldhost.example.com/ep2.vtt" type="text/vtt"/>
+      <podcast:transcript url="https://oldhost.example.com/ep2.srt" type="application/x-subrip" rel="captions"/>
+      <podcast:chapters url="https://oldhost.example.com/ep2.chapters.json" type="application/json+chapters"/>
+      <podcast:soundbite startTime="73.0" duration="60.0">The best minute</podcast:soundbite>
+      <podcast:person role="guest" href="https://example.com/guest">Guest Person</podcast:person>
+      <podcast:alternateEnclosure type="video/mp4" length="987654321" title="Video" default="false">
+        <podcast:source uri="https://oldhost.example.com/media/ep2.mp4"/>
+        <podcast:source uri="ipfs://QmX33FYehk6ckGQ6g1D9D3FqZPix5JpKstKQKbaS8quUFb"/>
+        <podcast:integrity type="sri" value="sha384-ExVqijgYHm15PqQqdXfW95x+Rs6C+d6E/ICxyQOeFevnxNLR/wtJNrNYTjIysUBo"/>
+      </podcast:alternateEnclosure>
+      <podcast:socialInteract uri="https://mastodon.example/@show/123" protocol="activitypub" accountId="@show"/>
+      <podcast:chat server="irc.zeronode.net" protocol="irc" accountId="@show" space="#show"/>
+      <podcast:images srcset="https://oldhost.example.com/ep2-1500.jpg 1500w, https://oldhost.example.com/ep2-600.jpg 600w"/>
+    </item>
+
+    <item>
+      <title>Episode 1</title>
+      <description>Plain notes, no markup.</description>
+      <pubDate>Mon, 05 Oct 2026 10:00:00 GMT</pubDate>
+      <enclosure url="https://oldhost.example.com/media/ep1.m4a" length="34567890" type="audio/x-m4a"/>
+      <itunes:duration>3600</itunes:duration>
+      <itunes:episodeType>trailer</itunes:episodeType>
+      <itunes:explicit>yes</itunes:explicit>
+    </item>
+  </channel>
+</rss>
