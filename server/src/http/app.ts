@@ -27,6 +27,9 @@ import { latestPings, podpingEnabled, queuePing, setShowPodping } from '../podpi
 import { feedPath } from '../urls.js';
 import { checkRedirect, saveRedirectResult } from './redirect-check.js';
 import { serveStatic } from './static.js';
+import { changeStorage, latestMove, MoveError } from '../storage/move.js';
+import { PROVIDERS, StorageConfigError, validateSettings, type StorageSettings } from '../storage/providers.js';
+import { localPath, storeFor, testConnection, type StorageState } from '../storage/store.js';
 import {
   readSiteAsset,
   removeSiteAsset,
@@ -281,11 +284,22 @@ export function createApp(deps: AppDeps) {
   router.delete('/api/podcasts/:id', async (ctx) => {
     const { podcastId } = await requirePodcast(ctx, 'owner');
     const p = (await getPodcastRow(db, podcastId))!;
+    const { rows: where } = await db.query<{ storage_provider: string }>(
+      `SELECT DISTINCT storage_provider FROM media_files WHERE podcast_id = $1 AND storage_provider <> 'local'`,
+      [podcastId],
+    );
     await db.query(`DELETE FROM podcasts WHERE id = $1`, [podcastId]);
-    // Remove copied media. The slug is validated on creation, but double-check the path stays inside mediaDir.
-    const dir = path.resolve(config.mediaDir, p.slug);
-    if (path.dirname(dir) === path.resolve(config.mediaDir) && /^[a-z0-9-]+$/.test(p.slug)) {
-      await rm(dir, { recursive: true, force: true });
+    // Remove copied media wherever it lives. The slug is validated on creation; check again anyway.
+    if (/^[a-z0-9-]+$/.test(p.slug)) {
+      const dir = path.resolve(config.mediaDir, p.slug);
+      if (path.dirname(dir) === path.resolve(config.mediaDir)) await rm(dir, { recursive: true, force: true });
+      for (const w of where) {
+        try {
+          await storeFor(config, w.storage_provider).deletePrefix(`${p.slug}/`);
+        } catch (e) {
+          deps.log?.(`couldn't delete ${p.slug}/ from ${w.storage_provider}: ${(e as Error).message}`);
+        }
+      }
     }
     sendJson(ctx.res, 204, undefined);
   });
@@ -493,12 +507,19 @@ export function createApp(deps: AppDeps) {
     if (!/^[a-z0-9-]+$/.test(slug) || !KIND_DIR_NAMES.has(kind) || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(file)) {
       throw new HttpError(404, 'Not found');
     }
-    const full = path.join(config.mediaDir, slug, kind, file);
-    const row = await maybeOne<{ mime_type: string | null }>(
+    const key = `${slug}/media/${kind}/${file}`;
+    const row = await maybeOne<{ mime_type: string | null; storage_provider: string }>(
       db,
-      `SELECT mime_type FROM media_files WHERE storage_path = $1 AND status = 'done'`,
-      [full],
+      `SELECT mime_type, storage_provider FROM media_files WHERE storage_key = $1 AND status = 'done'`,
+      [key],
     );
+    // Moved to a storage provider: send apps holding an older feed copy to the file's new home.
+    if (row && row.storage_provider !== 'local') {
+      ctx.res.writeHead(301, { Location: `${config.mediaBaseUrl}/${key}`, 'Cache-Control': 'public, max-age=86400' });
+      ctx.res.end();
+      return;
+    }
+    const full = localPath(config.mediaDir, key);
     const st = row && (await stat(full).catch(() => null));
     if (!row || !st?.isFile()) throw new HttpError(404, 'Not found');
     sendFile(ctx.req, ctx.res, full, st.size, row.mime_type ?? 'application/octet-stream');
@@ -551,6 +572,72 @@ export function createApp(deps: AppDeps) {
     });
   }
 
+  // ───────────── media storage (admin) ─────────────
+
+  /** Form input → storage state; a blank secret keeps the saved one when the provider is unchanged. */
+  function storageInput(body: Record<string, unknown>): StorageState {
+    const provider = String(body.provider ?? '');
+    if (provider === 'local') return { provider: 'local', settings: {}, secret: null };
+    const settings = (body.settings && typeof body.settings === 'object' ? body.settings : {}) as StorageSettings;
+    let secret = typeof body.secret === 'string' && body.secret.trim() ? body.secret.trim() : null;
+    if (!secret && config.storage.provider === provider) secret = config.storage.secret;
+    return { provider, settings: validateSettings(provider, settings, secret), secret };
+  }
+
+  async function storageView() {
+    const s = config.storage;
+    const counts = (await maybeOne<{ files: number; bytes: number; local: number }>(
+      db,
+      `SELECT count(*)::int AS files, COALESCE(sum(bytes), 0)::bigint AS bytes,
+              count(*) FILTER (WHERE storage_provider = 'local')::int AS local
+         FROM media_files WHERE status = 'done' AND storage_key IS NOT NULL`,
+    ))!;
+    const move = await latestMove(db);
+    return {
+      providers: PROVIDERS,
+      current: { provider: s.provider, settings: s.settings, secretSet: !!s.secret, publicBase: config.mediaBaseUrl },
+      media: counts,
+      move: move && {
+        id: move.id,
+        status: move.status,
+        to: move.to_state.provider,
+        total: move.total,
+        moved: move.moved,
+        failed: move.failed,
+        bytes: move.bytes,
+        error: move.error,
+        createdAt: move.created_at,
+        finishedAt: move.finished_at,
+      },
+    };
+  }
+
+  router.get('/api/admin/storage', async (ctx) => {
+    await requireAdmin(ctx);
+    sendJson(ctx.res, 200, await storageView());
+  });
+
+  /** Try the settings without saving: upload, read back, download publicly, delete. */
+  router.post('/api/admin/storage/test', async (ctx) => {
+    await requireAdmin(ctx);
+    const state = storageInput(await readJson(ctx.req));
+    if (state.provider === 'local') {
+      return sendJson(ctx.res, 200, { ok: true, steps: [{ step: 'This server', ok: true, detail: 'Files are stored on this server’s disk.' }] });
+    }
+    sendJson(ctx.res, 200, await testConnection(config, state));
+  });
+
+  router.put('/api/admin/storage', async (ctx) => {
+    const admin = await requireAdmin(ctx);
+    const state = storageInput(await readJson(ctx.req));
+    if (state.provider !== 'local') {
+      const test = await testConnection(config, state);
+      if (!test.ok) return sendJson(ctx.res, 400, { error: 'The connection test failed, so nothing was changed.', test });
+    }
+    const result = await changeStorage(db, config, state, admin.id);
+    sendJson(ctx.res, result.move ? 202 : 200, { ...result, storage: await storageView() });
+  });
+
   // ───────────── dashboard (static) ─────────────
 
   router.get('/', async (ctx) => serveStatic(ctx, 'index.html'));
@@ -592,7 +679,7 @@ export function createApp(deps: AppDeps) {
       }
       if (e instanceof HttpError) return sendJson(res, e.status, { error: e.message }, e.headers);
       if (e instanceof AuthError || e instanceof LiveError) return sendJson(res, e.status, { error: e.message });
-      if (e instanceof ImportError || e instanceof PrefixError || e instanceof SettingsError) {
+      if (e instanceof ImportError || e instanceof PrefixError || e instanceof SettingsError || e instanceof StorageConfigError || e instanceof MoveError) {
         return sendJson(res, 400, { error: e.message });
       }
       deps.log?.(`500 ${req.method} ${url.pathname}: ${(e as Error).stack ?? e}`);

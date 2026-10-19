@@ -215,7 +215,7 @@ test('copies images from show notes and chapter files, and stores files in per-t
   const pub = `https://feeds.mine.test/${slug}/media/images/`;
 
   // Folder layout
-  const dirs = (await readdir(path.join(mediaDir, slug))).sort();
+  const dirs = (await readdir(path.join(mediaDir, slug, 'media'))).sort();
   assert.deepEqual(dirs, ['audio', 'chapters', 'images', 'transcripts', 'video']);
 
   const { rows: media } = await db.query<{ original_url: string; kind: string; status: string; storage_path: string; bytes: number }>(
@@ -228,7 +228,7 @@ test('copies images from show notes and chapter files, and stores files in per-t
     assert.ok(m, `copied ${u}`);
     assert.equal(m.status, 'done');
     assert.equal(m.kind, 'image');
-    assert.ok(m.storage_path.includes(`/${slug}/images/`));
+    assert.ok(m.storage_path.includes(`/${slug}/media/images/`));
   }
   assert.ok(!byUrl.has(`${B}/old/notes/page.html`), 'plain links are not downloaded');
   assert.ok(!byUrl.has(`${B}/old/not-a-file`), 'chapter links are not downloaded');

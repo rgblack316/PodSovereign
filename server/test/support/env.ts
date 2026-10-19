@@ -46,6 +46,8 @@ export function testConfig(over: Partial<Config> = {}): Config {
     siteName: 'FeedHost',
     siteDir: '',
     siteVersion: 0,
+    storage: { provider: 'local', settings: {}, secret: null },
+    storageMoveFrom: null,
     previousHosts: [],
     ...over,
   };

@@ -6,7 +6,8 @@
 import http from 'node:http';
 import { createRequire } from 'node:module';
 import { createApp } from '../../src/http/app.js';
-import { claimNextJob, enqueueImport, runImportJob } from '../../src/import/importer.js';
+import { claimNextJob, enqueueImport, runImportJob, startImportWorker } from '../../src/import/importer.js';
+import { startFakeS3 } from './fake-storage.js';
 import { createLiveItem, setLiveStatus } from '../../src/live/live.js';
 import { setShowPodping } from '../../src/podping/podping.js';
 import { hashPassword } from '../../src/auth/passwords.js';
@@ -82,6 +83,11 @@ await createLiveItem(db, night, {
   start: '2026-11-03T20:00:00-05:00',
   streamUrl: 'https://stream.johnscreekstudios.com/nightshift.mp3',
 });
+
+// A local fake S3 bucket for trying Media storage → "Other S3-compatible".
+const s3 = await startFakeS3({ bucket: 'demo-bucket', accessKeyId: 'DEMOKEY', secret: 'demo-secret', region: 'us-east-1' });
+console.log(`fake S3: endpoint ${s3.endpoint}  bucket demo-bucket  key DEMOKEY / demo-secret  public ${s3.publicUrl}`);
+startImportWorker({ db, config, log: console.log }, 500);
 
 const server = http.createServer(createApp({ db, config, log: console.log }));
 server.listen(port, '127.0.0.1', () => console.log(`demo ready on http://127.0.0.1:${port}  (randy@johnscreekstudios.com / demo password 123)`));

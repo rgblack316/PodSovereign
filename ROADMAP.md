@@ -1,27 +1,13 @@
 # Roadmap
 
-## Revisit after testing: serve media from a CDN instead of the Cloudflare Tunnel
+## Media on a CDN instead of the Cloudflare Tunnel
 
-**Status:** deferred until the tunnel setup has been tested with real shows.
+**Status:** built. Choose a provider under Site settings → Media storage. Still to do after testing with real shows:
+- [ ] Try each provider with a real account: R2, B2, S3, Wasabi, Spaces, Bunny
+- [ ] Decide which to use for John's Creek Studios. R2 has no egress fees and sits on the same Cloudflare account as the tunnel.
+- [ ] Optional: copy files to the provider directly from the old host, without staging on this server first (saves disk space during large imports)
 
-**Why revisit**
-- Cloudflare's terms restrict serving video, or a disproportionate amount of large files, through its CDN on Free, Pro and Business plans, and this covers Tunnel hostnames. Audio-only shows are probably fine at small scale; video episodes are not. ([Cloudflare policy](https://developers.cloudflare.com/fundamentals/reference/policies-compliances/delivering-videos-with-cloudflare/))
-- Every uncached download comes from the home internet connection's upload bandwidth.
-
-**Options to evaluate**
-- **Cloudflare R2** behind a custom domain, such as `media.johnscreekstudios.com`. R2 has no egress fees.
-- **Bunny CDN**, either with a storage zone or pulling from the tunnel origin.
-- **Backblaze B2** in front of a CDN.
-
-**Already prepared**
-- **Media address** in Site settings (or `MEDIA_BASE_URL`) sets the address used in media links, separately from the site.
-- Changing it rewrites every stored media link, including chapter files, automatically.
-- Media is already laid out as `<slug>/media/<type>/<file>`, so it can be copied to a bucket as-is.
-
-**Still needed**
-- Upload new media to the CDN or bucket during import, and sync existing files.
-- Keep the old `/<slug>/media/...` URLs on this server working, for example with 301 redirects to the CDN, for apps that cached older feed copies. Today, redirects only happen when the *hostname* changes.
-- Re-check the stats prefixes (OP3, Podtrac and so on) against the new media host.
+Background: Cloudflare's terms restrict serving video, or a disproportionate amount of large files, through its CDN and Tunnel hostnames on Free, Pro and Business plans ([policy](https://developers.cloudflare.com/fundamentals/reference/policies-compliances/delivering-videos-with-cloudflare/)), and every uncached download through the tunnel uses the home connection's upload bandwidth.
 
 ## Live shows (`podcast:liveItem`)
 
@@ -45,6 +31,7 @@ FeedHost doesn't stream today. Live items point at an outside stream (Icecast, Y
 
 ## Other open items
 - [ ] Self-host the dashboard font instead of loading it from Google Fonts
+- [ ] Encrypt saved provider secrets and the Podping key at rest (today they're stored in the database as-is)
 - [ ] Podcast ownership verification on import (email code to the itunes:owner address, or a `podcast:txt` token)
 - [ ] Storage quotas per account or per podcast, with a usage display
 - [ ] Episode editing and new uploads (beyond import)

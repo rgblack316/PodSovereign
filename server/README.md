@@ -35,6 +35,29 @@ Admins can change these from the dashboard. Saved values override the environmen
 | Sign-ups | Whether anyone can create an account |
 | Podping key | Kept on the server and never shown again after saving |
 
+## Media storage
+
+Under **Site settings → Media storage**, admins choose where episode files, artwork, transcripts and chapter files are kept.
+
+| Provider | You'll need | Public address |
+|---|---|---|
+| This server | Nothing (the default) | The site address, or a pull-through CDN set as the media address |
+| Cloudflare R2 | Account ID, an R2 API token's access key ID and secret (Object Read & Write), bucket | A custom domain connected to the bucket (r2.dev is for testing only) |
+| Backblaze B2 | S3 endpoint (`s3.<region>.backblazeb2.com`), application key ID and key (not the master key), bucket | Public bucket's friendly URL `https://f00X.backblazeb2.com/file/<bucket>` |
+| Amazon S3 | Region, access key ID and secret, bucket | CloudFront, or a public bucket |
+| Wasabi | Region (all 16 listed), access key and secret, bucket | Public bucket or a CDN; optional per-file public-read |
+| DigitalOcean Spaces | Region (all 13 listed), access key and secret, bucket | Spaces CDN; uploads are marked public-read automatically |
+| Bunny Storage | Storage zone name, its **password**, main region | The linked pull zone, `https://<zone>.b-cdn.net` |
+| Other S3-compatible | Endpoint, region, keys, bucket, path-style option | Whatever the provider gives |
+
+- **Test connection** uploads a small file, reads it back, downloads it from the public address (as podcast apps will), and deletes it. Each step shows a pass or fail with an explanation.
+- **Saving** runs the same test first and changes nothing if it fails. Secrets are never sent back to the browser; leave the field blank to keep the saved one.
+- **Switching with media already stored** starts a background move. Every file is copied to the new storage while the current one keeps serving, and imports pause meanwhile. Once every file has moved, links are rewritten and the switch happens. If any file fails, nothing switches and you can save again to retry. Moving off this server deletes the local copies afterwards; moving between providers leaves the old bucket untouched.
+- **Old links keep working:** after files leave this server, requests for their old `/<show>/media/...` addresses are redirected (301) to the new location.
+- The S3 client signs requests with AWS Signature V4 and is checked against AWS's published examples; uploads over 64 MB go up in parts. Bunny uses its own storage API with SHA-256 checksums.
+
+Files are laid out by their URL path everywhere: `<show>/media/<type>/<file>`, on disk (under `MEDIA_DIR`) and in buckets alike.
+
 **Changing the web or media address after shows exist** rewrites every stored link to this server's media: episodes, artwork, transcripts, chapters (including chapter files on disk), people images and show notes. GUIDs are never changed. The old hostname is remembered: any request that still reaches this server on it is permanently redirected to the new address. So keep the old hostname pointed at this server, through DNS or your tunnel, and subscribers follow along.
 
 ## Dashboard
@@ -179,6 +202,7 @@ All `/api` calls use a session cookie. Requests that change something must send 
 | GET · POST | `/api/admin/users` | admin |
 | GET · PUT | `/api/admin/site` · POST/DELETE `/api/admin/site/logo` and `/favicon` | admin |
 | GET | `/site/logo` · `/site/favicon` | public |
+| GET · PUT | `/api/admin/storage` · POST `/api/admin/storage/test` | admin |
 | GET | `/api/podcasts` | your own shows, plus ones shared with you |
 | GET | `/api/podcasts/:id` · `/episodes` · `/prefixes` | viewer+ |
 | POST | `/api/podcasts/:id/redirect-check` (is the old feed 301-redirecting here?) | editor+ |
@@ -196,7 +220,7 @@ If you don't have access to a podcast, you get **404**, so the existence of othe
 ## Tests
 
 ```bash
-npm test     # 93 tests: feed engine, import worker, API and isolation
+npm test     # 121 tests: feed engine, import worker, API and isolation
 ```
 
 `npm run demo` starts a throwaway demo (two imported shows, one on air) at `http://127.0.0.1:8099`, signed in as `randy@johnscreekstudios.com` with the password `demo password 123`. It uses the same local test database as the tests below.
@@ -213,6 +237,7 @@ The import and API tests need a local PostgreSQL that allows trust auth for the 
 | Accounts | `src/auth/`: scrypt passwords, hashed session tokens, login rate limiting |
 | HTTP | `src/http/`: routes, CSRF checks, public feed with ETag caching, 301 check, dashboard files |
 | Dashboard | `web/`: index.html, app.js, styles.css |
+| Media storage | `src/storage/`: local disk, S3-compatible (SigV4) and Bunny clients, connection test, background moves |
 | Site settings | `src/site/`: branding, web and media address (with link rewrite and old-host redirects), sign-ups, Podping key |
 | Podping | `src/podping/`: change queue, podping.cloud sender, scheduled-episode announcer |
 | Live | `src/live/`: `podcast:liveItem` create, edit, status changes (with live and liveEnd pings) |
@@ -227,9 +252,10 @@ The import and API tests need a local PostgreSQL that allows trust auth for the 
 ### Storage layout
 
 ```
-MEDIA_DIR/
-└── <podcast-slug>/          one folder per podcast
-    ├── audio/   video/   images/   transcripts/   chapters/   other/
+MEDIA_DIR/                    (or the bucket root)
+└── <podcast-slug>/
+    └── media/
+        ├── audio/   video/   images/   transcripts/   chapters/   other/
 ```
 
 Files are named `<10-char hash>-<original name>`, for example `3f9a1c22b0-episode-12.mp3`. Deleting a podcast removes its folder. Public URLs follow the same layout: `MEDIA_BASE_URL/<slug>/media/<type>/<file>`.

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { Config } from '../config.js';
 import { maybeOne, one, type Db } from '../db/db.js';
@@ -14,6 +14,8 @@ import {
 import { chapterImageUrls, collectMediaRefs, rewriteChapterImages, type MediaKind } from '../feed/media.js';
 import { parseFeed } from '../feed/parser.js';
 import type { Feed } from '../feed/types.js';
+import { claimMove, runMove } from '../storage/move.js';
+import { activeStore, localPath, storeFor } from '../storage/store.js';
 import { mediaPath, mediaPrefix, RESERVED_SLUGS } from '../urls.js';
 import { downloadToFile, FetchError, fetchFeedText, withRetry } from './http.js';
 
@@ -63,6 +65,8 @@ export async function enqueueImport(db: Db, userId: string, sourceUrl: string, o
   if (options.slug !== undefined && RESERVED_SLUGS.has(options.slug)) {
     throw new ImportError(`"${options.slug}" is reserved; choose a different feed address`);
   }
+  const moving = await maybeOne(db, `SELECT 1 FROM storage_moves WHERE status IN ('queued', 'running')`);
+  if (moving) throw new ImportError('Media is being moved to new storage right now. Try the import again when the move finishes.');
   return one<{ id: string }>(
     db,
     `INSERT INTO import_jobs (user_id, source_url, options, progress) VALUES ($1, $2, $3, $4) RETURNING id`,
@@ -257,13 +261,16 @@ interface MediaRow {
   original_url: string;
   status: string;
   storage_path: string | null;
+  storage_key: string | null;
+  storage_provider: string;
   public_path: string | null;
   bytes: number | null;
 }
 
 interface Copied {
   publicUrl: string;
-  storagePath: string;
+  key: string;
+  provider: string;
   bytes: number;
 }
 
@@ -282,6 +289,7 @@ async function copyMedia(
   warnings: string[],
 ) {
   const { db, config } = deps;
+  const store = activeStore(config);
   const publicPrefix = config.mediaBaseUrl + mediaPrefix(slug);
   const refs = collectMediaRefs(feed).filter((r) => !r.url.startsWith(publicPrefix));
   const result = new Map<string, Copied>();
@@ -304,14 +312,14 @@ async function copyMedia(
       [podcastId, JSON.stringify([...wanted].map(([url, kind]) => ({ url, kind })))],
     );
     const { rows } = await db.query<MediaRow>(
-      `SELECT id, kind, original_url, status, storage_path, public_path, bytes FROM media_files
+      `SELECT id, kind, original_url, status, storage_path, storage_key, storage_provider, public_path, bytes FROM media_files
         WHERE podcast_id = $1 AND original_url IN (SELECT jsonb_array_elements_text($2::jsonb))`,
       [podcastId, JSON.stringify([...wanted.keys()])],
     );
     progress.mediaTotal! += rows.length;
     const todo = rows.filter((m) => {
-      if (m.status === 'done' && m.public_path && m.storage_path) {
-        result.set(m.original_url, { publicUrl: config.mediaBaseUrl + m.public_path, storagePath: m.storage_path, bytes: m.bytes ?? 0 });
+      if (m.status === 'done' && m.public_path && m.storage_key) {
+        result.set(m.original_url, { publicUrl: config.mediaBaseUrl + m.public_path, key: m.storage_key, provider: m.storage_provider, bytes: m.bytes ?? 0 });
         progress.mediaDone!++;
         return false;
       }
@@ -325,26 +333,33 @@ async function copyMedia(
         const m = todo[next++]!;
         const dir = KIND_DIRS[m.kind] ?? 'other';
         const filename = mediaFilename(m.original_url);
-        const storagePath = path.join(config.mediaDir, slug, dir, filename);
         const publicPath = mediaPath(slug, dir, filename);
+        const key = publicPath.slice(1);
+        // Download onto this server first; a remote store then uploads it and removes the local copy.
+        const downloadPath = localPath(config.mediaDir, key);
         try {
           const d = await withRetry(() =>
-            downloadToFile(m.original_url, storagePath, {
+            downloadToFile(m.original_url, downloadPath, {
               allowPrivate: config.allowPrivateNetworks,
               maxBytes: config.maxMediaBytes,
               timeoutMs: 60_000,
             }),
           );
+          const contentType = d.mimeType ?? 'application/octet-stream';
+          const { storagePath } = await withRetry(() =>
+            store.putFile(key, downloadPath, { size: d.bytes, contentType, sha256: d.sha256 }),
+          );
           await db.query(
             `UPDATE media_files SET status = 'done', error = NULL, storage_path = $2, public_path = $3,
-                    mime_type = $4, bytes = $5, sha256 = $6 WHERE id = $1`,
-            [m.id, storagePath, publicPath, d.mimeType, d.bytes, d.sha256],
+                    mime_type = $4, bytes = $5, sha256 = $6, storage_key = $7, storage_provider = $8 WHERE id = $1`,
+            [m.id, storagePath, publicPath, d.mimeType, d.bytes, d.sha256, key, store.id],
           );
-          result.set(m.original_url, { publicUrl: config.mediaBaseUrl + publicPath, storagePath, bytes: d.bytes });
+          result.set(m.original_url, { publicUrl: config.mediaBaseUrl + publicPath, key, provider: store.id, bytes: d.bytes });
           progress.mediaDone!++;
           progress.mediaBytes! += d.bytes;
         } catch (e) {
           const msg = (e as Error).message;
+          if (!store.isLocal) await rm(downloadPath, { force: true }); // don't leave a half-moved copy behind
           await db.query(`UPDATE media_files SET status = 'failed', error = $2 WHERE id = $1`, [m.id, msg]);
           warnings.push(`Couldn't copy ${m.original_url}: ${msg} (left pointing at the original)`);
           progress.mediaFailed!++;
@@ -368,7 +383,7 @@ async function copyMedia(
   const chapterImages = new Map<string, MediaKind>();
   for (const { url, copy } of chapterFiles) {
     try {
-      const json = JSON.parse(await readFile(copy.storagePath, 'utf8'));
+      const json = JSON.parse((await storeFor(config, copy.provider).getBuffer(copy.key)).toString('utf8'));
       parsedChapters.set(url, json);
       for (const img of chapterImageUrls(json)) if (!img.startsWith(publicPrefix)) chapterImages.set(img, 'image');
     } catch {
@@ -381,7 +396,7 @@ async function copyMedia(
     if (JSON.stringify(swapped) === JSON.stringify(json)) continue;
     const copy = result.get(url)!;
     const body = Buffer.from(JSON.stringify(swapped, null, 2));
-    await writeFile(copy.storagePath, body);
+    await storeFor(config, copy.provider).putBuffer(copy.key, body, 'application/json');
     copy.bytes = body.length;
     await db.query(`UPDATE media_files SET bytes = $2, sha256 = $3 WHERE podcast_id = $1 AND original_url = $4`, [
       podcastId,
@@ -446,6 +461,13 @@ export function startImportWorker(deps: ImporterDeps, pollMs = 2000): { stop: ()
     await requeueStaleJobs(deps.db).catch(() => {});
     while (!stopped) {
       try {
+        // Storage moves take priority (imports are paused while one is queued).
+        const move = await claimMove(deps.db);
+        if (move) {
+          current = runMove(deps, move);
+          await current;
+          continue;
+        }
         const job = await claimNextJob(deps.db);
         if (job) {
           current = runImportJob(deps, job);

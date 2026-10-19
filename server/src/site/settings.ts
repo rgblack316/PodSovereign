@@ -9,6 +9,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Config } from '../config.js';
 import { maybeOne, type Db, type Queryable } from '../db/db.js';
+import { storeFor } from '../storage/store.js';
 import { mediaPrefix } from '../urls.js';
 
 export class SettingsError extends Error {}
@@ -24,6 +25,9 @@ interface Row {
   favicon_file: string | null;
   favicon_type: string | null;
   previous_hosts: string[];
+  storage_provider: string;
+  storage_settings: Record<string, string | boolean> | null;
+  storage_secret: string | null;
   updated_at: Date;
 }
 
@@ -34,12 +38,26 @@ async function getRow(q: Queryable): Promise<Row> {
   return (await maybeOne<Row>(q, `SELECT * FROM site_settings WHERE id`))!;
 }
 
+/** Public base for media links given a settings row: the storage provider's public address, or the media/site address. */
+export function mediaBaseFor(config: Config, row: Pick<Row, 'public_base_url' | 'media_base_url' | 'storage_provider' | 'storage_settings'>): string {
+  if (row.storage_provider && row.storage_provider !== 'local' && row.storage_settings?.publicUrl) {
+    return String(row.storage_settings.publicUrl).replace(/\/+$/, '');
+  }
+  const env = config.envDefaults;
+  return row.media_base_url || env.mediaBaseUrl || row.public_base_url || env.publicBaseUrl;
+}
+
 /** Copy saved settings onto the live config (blank = environment default). */
 export function applyRow(config: Config, row: Row): void {
   const env = config.envDefaults;
   config.siteName = row.site_name || process.env.SITE_NAME?.trim() || 'FeedHost';
   config.publicBaseUrl = row.public_base_url || env.publicBaseUrl;
-  config.mediaBaseUrl = row.media_base_url || env.mediaBaseUrl || config.publicBaseUrl;
+  config.mediaBaseUrl = mediaBaseFor(config, row);
+  config.storage = {
+    provider: row.storage_provider || 'local',
+    settings: row.storage_settings ?? {},
+    secret: row.storage_secret,
+  };
   config.allowRegistration = row.allow_registration ?? env.allowRegistration;
   config.podpingToken = row.podping_token || env.podpingToken;
   config.cookieSecure = env.cookieSecure ?? config.publicBaseUrl.startsWith('https://');
@@ -61,6 +79,7 @@ export async function siteSettingsView(db: Db, config: Config) {
     allowRegistration: config.allowRegistration,
     podpingKeySet: !!config.podpingToken,
     podpingKeyFromEnv: !row.podping_token && !!config.envDefaults.podpingToken,
+    storageProvider: row.storage_provider,
     hasLogo: !!row.logo_file,
     hasFavicon: !!row.favicon_file,
     previousHosts: config.previousHosts,
@@ -143,7 +162,11 @@ export async function saveSiteSettings(db: Db, config: Config, input: SettingsIn
   if (!sets.length) return { addressChanged: false, rewrittenShows: 0 };
 
   const row = await getRow(db);
-  const newMedia = (mediaSetting === undefined ? row.media_base_url : mediaSetting) || config.envDefaults.mediaBaseUrl || newPublic;
+  const newMedia = mediaBaseFor(config, {
+    ...row,
+    public_base_url: newPublic,
+    media_base_url: mediaSetting === undefined ? row.media_base_url : mediaSetting,
+  });
   const oldHost = new URL(before.publicBaseUrl).host;
   const newHost = new URL(newPublic).host;
   const hostChanged = oldHost !== newHost;
@@ -164,7 +187,7 @@ export async function saveSiteSettings(db: Db, config: Config, input: SettingsIn
     }
   });
   applyRow(config, await getRow(db));
-  if (newMedia !== before.mediaBaseUrl) await rewriteChapterFiles(db, before.mediaBaseUrl, newMedia);
+  if (newMedia !== before.mediaBaseUrl) await rewriteChapterFiles(db, config, before.mediaBaseUrl, newMedia);
   return { addressChanged: newPublic !== before.publicBaseUrl || newMedia !== before.mediaBaseUrl, rewrittenShows };
 }
 
@@ -172,7 +195,7 @@ export async function saveSiteSettings(db: Db, config: Config, input: SettingsIn
  * Point every stored link to our media at a new base address. Only links
  * under <old>/<slug>/media/ are touched; GUIDs are never changed.
  */
-async function rewriteMediaBase(q: Queryable, oldBase: string, newBase: string): Promise<number> {
+export async function rewriteMediaBase(q: Queryable, oldBase: string, newBase: string): Promise<number> {
   const { rows } = await q.query<{ id: string; slug: string }>(`SELECT id, slug FROM podcasts`);
   for (const p of rows) {
     const from = oldBase + mediaPrefix(p.slug);
@@ -196,26 +219,27 @@ async function rewriteMediaBase(q: Queryable, oldBase: string, newBase: string):
   return rows.length;
 }
 
-/** Chapter files on disk hold image links too. */
-async function rewriteChapterFiles(db: Db, oldBase: string, newBase: string): Promise<void> {
-  const { rows } = await db.query<{ id: string; storage_path: string; slug: string }>(
-    `SELECT m.id, m.storage_path, p.slug FROM media_files m JOIN podcasts p ON p.id = m.podcast_id
-      WHERE m.kind = 'chapters' AND m.status = 'done' AND m.storage_path IS NOT NULL`,
+/** Chapter files hold image links too (wherever they're stored). */
+export async function rewriteChapterFiles(db: Db, config: Config, oldBase: string, newBase: string): Promise<void> {
+  const { rows } = await db.query<{ id: string; storage_key: string; storage_provider: string; slug: string }>(
+    `SELECT m.id, m.storage_key, m.storage_provider, p.slug FROM media_files m JOIN podcasts p ON p.id = m.podcast_id
+      WHERE m.kind = 'chapters' AND m.status = 'done' AND m.storage_key IS NOT NULL`,
   );
   for (const r of rows) {
     const from = oldBase + mediaPrefix(r.slug);
     try {
-      const text = await readFile(r.storage_path, 'utf8');
+      const store = storeFor(config, r.storage_provider);
+      const text = (await store.getBuffer(r.storage_key)).toString('utf8');
       if (!text.includes(from)) continue;
       const body = Buffer.from(text.split(from).join(newBase + mediaPrefix(r.slug)));
-      await writeFile(r.storage_path, body);
+      await store.putBuffer(r.storage_key, body, 'application/json');
       await db.query(`UPDATE media_files SET bytes = $2, sha256 = $3 WHERE id = $1`, [
         r.id,
         body.length,
         createHash('sha256').update(body).digest('hex'),
       ]);
     } catch {
-      /* file missing — nothing to rewrite */
+      /* file missing or storage unreachable — nothing to rewrite */
     }
   }
 }

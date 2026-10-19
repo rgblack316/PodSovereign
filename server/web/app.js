@@ -1046,7 +1046,8 @@ async function refreshSetup() {
 }
 
 async function viewSite() {
-  const { settings: s } = await api('GET', '/api/admin/site');
+  const [{ settings: s }, storage] = await Promise.all([api('GET', '/api/admin/site'), api('GET', '/api/admin/storage')]);
+  const remoteStorage = storage.current.provider !== 'local';
 
   // Branding: name + logo + favicon
   const nameErr = formError();
@@ -1168,7 +1169,9 @@ async function viewSite() {
   h('p', { class: 'muted' }, 'The address listeners and podcast apps use. Every show’s feed lives at this address followed by /show-name/feed.xml.'),
   field('Site address', base, 'Just the address, without a path, for example https://podcasts.example.com.'),
   useHere,
-  field('Media address (optional)', media, 'Leave blank to serve episode files from the site address. Set it if you move media to a CDN.'),
+  remoteStorage
+    ? h('p', { class: 'hint' }, `Episode files are served from ${storage.current.publicBase} (see Media storage below).`)
+    : field('Media address (optional)', media, 'Leave blank to serve episode files from the site address. Set it to a pull-through CDN address that fetches from this server.'),
   s.previousHosts.length ? h('p', { class: 'hint' }, `Requests that reach this server at ${s.previousHosts.join(', ')} are redirected to the current address.`) : null,
   s.showCount ? h('p', { class: 'warn-note' }, 'Changing this after shows are live moves every feed. Subscribers only follow along if the old address still reaches this server.') : null,
   addrErr,
@@ -1237,11 +1240,197 @@ async function viewSite() {
       h('p', { class: 'muted' }, 'These apply to the whole site and every podcaster on it.')),
     brandForm,
     addrForm,
+    storagePanel(storage),
     h('section', { class: 'panel' },
       h('h2', null, 'Sign-ups'),
       h('label', { class: 'switch', style: 'margin-top:12px' }, reg, 'Anyone can create an account'),
       h('p', { class: 'hint', style: 'margin-top:8px' }, 'When off, only admins can add podcasters (under People).')),
     keyForm);
+}
+
+// ───────────── media storage ─────────────
+
+function storagePanel(storage) {
+  const panel = h('section', { class: 'panel' });
+  const providers = [{ id: 'local', name: 'This server', blurb: 'Files are stored on this server’s disk and served from the site address.', fields: [] }, ...storage.providers];
+  const cur = storage.current;
+  let chosen = cur.provider;
+  const values = { ...cur.settings };
+  let secretValue = '';
+  const err = formError();
+  const results = h('div');
+
+  const move = storage.move;
+  const moving = move && (move.status === 'queued' || move.status === 'running');
+  const nameOf = (id) => providers.find((p) => p.id === id)?.name ?? id;
+
+  const status = h('div', { class: 'storage-now' },
+    h('span', { class: `light ${cur.provider === 'local' ? '' : 'on'}` },
+      cur.provider === 'local' ? 'Stored on this server' : `Stored with ${nameOf(cur.provider)}`),
+    h('span', { class: 'hint' }, `${storage.media.files} files, ${fmtBytes(storage.media.bytes)}. Served from ${cur.publicBase}`));
+
+  const moveBox = h('div');
+  const drawMove = (m) => {
+    if (!m) return moveBox.replaceChildren();
+    if (m.status === 'queued' || m.status === 'running') {
+      const pct = m.total ? Math.round((100 * (m.moved + m.failed)) / m.total) : 2;
+      moveBox.replaceChildren(h('div', { class: 'move' },
+        h('p', null, h('span', { class: 'light warn' }, `Moving media to ${nameOf(m.to)}: ${m.moved} of ${m.total || '…'} files (${fmtBytes(m.bytes)})`)),
+        h('div', { class: 'meter', role: 'progressbar', 'aria-valuenow': pct, 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-label': 'Move progress' }, h('span', { style: `width:${pct}%` })),
+        h('p', { class: 'hint' }, 'Shows keep working from the current storage until every file has moved. Imports are paused meanwhile.')));
+    } else if (m.status === 'failed') {
+      moveBox.replaceChildren(h('p', { class: 'warn-note' }, `The last move to ${nameOf(m.to)} stopped: ${m.error} Your shows are still served from the current storage; fix the problem and save again to retry.`));
+    } else moveBox.replaceChildren();
+  };
+  drawMove(move);
+  if (moving) {
+    const t = setInterval(async () => {
+      try {
+        const s2 = await api('GET', '/api/admin/storage');
+        drawMove(s2.move);
+        if (s2.move && !['queued', 'running'].includes(s2.move.status)) {
+          clearInterval(t);
+          await refreshSetup();
+          toast(s2.move.status === 'done' ? `Media moved to ${nameOf(s2.move.to)}` : 'The move stopped');
+          render();
+        }
+      } catch { /* keep polling */ }
+    }, 2000);
+    cleanup.push(() => clearInterval(t));
+  }
+
+  const picker = h('div', { class: 'providers', role: 'radiogroup', 'aria-label': 'Where media is stored' });
+  const fieldsBox = h('div');
+
+  const drawPicker = () => picker.replaceChildren(...providers.map((p) => {
+    const input = h('input', {
+      type: 'radio', name: 'provider', value: p.id, checked: p.id === chosen, disabled: moving,
+      onchange: () => {
+        chosen = p.id;
+        if (chosen !== cur.provider) { for (const k of Object.keys(values)) delete values[k]; } else Object.assign(values, cur.settings);
+        secretValue = '';
+        results.replaceChildren();
+        err.hidden = true;
+        drawPicker();
+        drawFields();
+      },
+    });
+    return h('label', { class: `provider ${p.id === chosen ? 'chosen' : ''}` }, input,
+      h('span', null, h('b', null, p.name, p.id === cur.provider ? h('span', { class: 'hint' }, ' (current)') : null), h('span', { class: 'hint' }, p.blurb)));
+  }));
+
+  const drawFields = () => {
+    const p = providers.find((x) => x.id === chosen);
+    if (!p || p.id === 'local') {
+      fieldsBox.replaceChildren(h('p', { class: 'hint' }, 'To put a pull-through CDN in front of this server, set the media address under Web address.'));
+      return;
+    }
+    const inputs = p.fields.map((f) => {
+      if (f.type === 'checkbox') {
+        const cb = h('input', { type: 'checkbox', checked: values[f.key] ?? f.default ?? false, onchange: () => { values[f.key] = cb.checked; } });
+        return h('div', { class: 'field wide' }, h('label', { class: 'check' }, cb, h('span', null, f.label)), f.hint ? h('p', { class: 'hint' }, f.hint) : null);
+      }
+      if (f.type === 'secret') {
+        const saved = cur.provider === p.id && cur.secretSet;
+        const inp = h('input', { type: 'password', autocomplete: 'off', placeholder: saved ? 'Saved. Leave blank to keep it.' : '', oninput: (e) => { secretValue = e.target.value; } });
+        return field(f.label, inp, f.hint);
+      }
+      if (f.type === 'select') {
+        const v = values[f.key] ?? f.default ?? '';
+        const known = f.options.some((o) => o.value === v);
+        const other = h('input', { type: 'text', value: known ? '' : v, placeholder: 'Type the hostname', hidden: known || !f.allowOther, 'aria-label': `${f.label} (other)`, oninput: (e) => { values[f.key] = e.target.value; } });
+        const sel = h('select', {
+          onchange: () => {
+            if (sel.value === '__other') { other.hidden = false; values[f.key] = other.value; other.focus(); } else { other.hidden = true; values[f.key] = sel.value; }
+          },
+        }, f.options.map((o) => h('option', { value: o.value }, o.label)), f.allowOther ? h('option', { value: '__other' }, 'Other…') : null);
+        sel.value = known ? v : f.allowOther ? '__other' : f.options[0].value;
+        if (!values[f.key]) values[f.key] = sel.value === '__other' ? '' : sel.value;
+        const wrap = field(f.label, sel, f.hint);
+        wrap.append(other);
+        return wrap;
+      }
+      if (values[f.key] === undefined && typeof f.default === 'string') values[f.key] = f.default;
+      const inp = h('input', { type: 'text', value: values[f.key] ?? '', placeholder: f.placeholder ?? '', autocomplete: 'off', oninput: (e) => { values[f.key] = e.target.value; } });
+      return field(f.label, inp, f.hint);
+    });
+    const pub = h('input', { type: 'url', value: values.publicUrl ?? '', placeholder: p.publicUrlPlaceholder, oninput: (e) => { values.publicUrl = e.target.value; } });
+    fieldsBox.replaceChildren(
+      h('p', { class: 'hint' }, h('a', { href: p.docsUrl, target: '_blank', rel: 'noopener' }, `${p.name} setup guide`)),
+      h('div', { class: 'fields-grid' }, inputs),
+      field('Public address', pub, p.publicUrlHint));
+  };
+
+  const body = () => ({ provider: chosen, settings: values, secret: secretValue || undefined });
+  const showSteps = (test) => {
+    results.replaceChildren(h('ul', { class: 'test-steps' }, test.steps.map((st) =>
+      h('li', null, h('span', { class: `light ${st.ok ? 'on' : 'bad'}` }, st.step), h('p', { class: 'hint' }, st.detail)))));
+  };
+
+  const testBtn = h('button', {
+    type: 'button',
+    disabled: moving,
+    onclick: async () => {
+      err.hidden = true;
+      testBtn.disabled = true;
+      testBtn.textContent = 'Testing…';
+      results.replaceChildren(h('p', { class: 'hint' }, 'Uploading a small test file…'));
+      try {
+        const test = await api('POST', '/api/admin/storage/test', body());
+        showSteps(test);
+        toast(test.ok ? 'Connection works' : 'Connection test failed');
+      } catch (e) {
+        results.replaceChildren();
+        showError(err, e);
+      }
+      testBtn.disabled = false;
+      testBtn.textContent = 'Test connection';
+    },
+  }, 'Test connection');
+
+  const saveBtn = h('button', {
+    type: 'button',
+    class: 'primary',
+    disabled: moving,
+    onclick: async () => {
+      err.hidden = true;
+      const changingPlace = chosen !== cur.provider;
+      if (changingPlace && storage.media.files &&
+        !confirm(`Move ${storage.media.files} files (${fmtBytes(storage.media.bytes)}) to ${nameOf(chosen)}?\n\n` +
+          'Shows keep working from the current storage during the move, and switch over once every file has been copied. Imports pause until it finishes.' +
+          (cur.provider === 'local' ? '\n\nCopies on this server are deleted after the move succeeds.' : ''))) return;
+      saveBtn.disabled = true;
+      try {
+        const res = await fetch('/api/admin/storage', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body()) });
+        const data = await res.json();
+        if (!res.ok) {
+          if (data.test) showSteps(data.test);
+          throw new Error(data.error);
+        }
+        await refreshSetup();
+        toast(data.move ? `Moving media to ${nameOf(chosen)}` : 'Storage settings saved');
+        render();
+      } catch (e) {
+        showError(err, e);
+        saveBtn.disabled = false;
+      }
+    },
+  }, 'Save storage settings');
+
+  drawPicker();
+  drawFields();
+  panel.append(
+    h('h2', null, 'Media storage'),
+    h('p', { class: 'muted' }, 'Where episode audio, video, artwork, transcripts and chapter files are kept. A storage provider serves downloads from its own network instead of this server’s connection.'),
+    status,
+    moveBox,
+    picker,
+    fieldsBox,
+    results,
+    err,
+    h('div', { class: 'actions' }, testBtn, saveBtn),
+    h('p', { class: 'hint', style: 'margin-top:12px' }, 'Saving runs the same test first and changes nothing if it fails.'));
+  return panel;
 }
 
 boot().catch((e) => {

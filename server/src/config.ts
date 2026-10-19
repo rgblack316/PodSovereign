@@ -33,6 +33,10 @@ export interface Config {
   siteDir: string;
   /** Bumped when branding changes, for cache-busting logo/favicon URLs. */
   siteVersion: number;
+  /** Where media is stored: this server's disk, or a storage provider (Site settings → Media storage). */
+  storage: { provider: string; settings: Record<string, string | boolean>; secret: string | null };
+  /** While existing media is being moved to new storage: the store it is moving from. */
+  storageMoveFrom: { provider: string; settings: Record<string, string | boolean>; secret: string | null } | null;
   /** Hostnames this site used before a base-URL change; requests for them are 301-redirected. */
   previousHosts: string[];
   /**
@@ -75,6 +79,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     siteName: env.SITE_NAME?.trim() || 'FeedHost',
     siteDir: env.SITE_DIR ?? '/var/lib/feedhost/site',
     siteVersion: 0,
+    storage: { provider: 'local', settings: {}, secret: null },
+    storageMoveFrom: null,
     previousHosts: [],
     envDefaults: {
       publicBaseUrl,
