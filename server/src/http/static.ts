@@ -22,7 +22,7 @@ for (const f of readdirSync(WEB_DIR)) {
 
 /**
  * Content Security Policy: only our own scripts and styles (plus Google Fonts);
- * images may come from anywhere over https since show art can be remote until copied.
+ * images and audio previews may come from anywhere over https, since files can be hosted elsewhere.
  */
 const CSP = [
   "default-src 'self'",
@@ -30,6 +30,7 @@ const CSP = [
   "style-src 'self' https://fonts.googleapis.com",
   "font-src https://fonts.gstatic.com",
   "img-src 'self' https: data:",
+  "media-src 'self' https:",
   "connect-src 'self'",
   "frame-ancestors 'none'",
   "base-uri 'none'",

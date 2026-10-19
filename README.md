@@ -1,6 +1,6 @@
 # podcast-feed-import-and-host
 
-Self-hosted podcast feed host. It imports an existing podcast RSS feed, replicates it with full iTunes and Podcasting 2.0 tag support, and serves it from your own server (Ubuntu Server). Each podcaster has their own login and can only see their own shows.
+Self-hosted podcast feed host. It imports an existing podcast RSS feed (or starts a new show), replicates it with full iTunes and Podcasting 2.0 tag support, and serves it from your own server (Ubuntu Server). Each podcaster has their own login and can only see their own shows.
 
 Clone it and run your own: the site's name, logo, favicon and web address are all set from the admin panel.
 
@@ -18,6 +18,7 @@ Clone it and run your own: the site's name, logo, favicon and web address are al
 - [x] Admin Site settings: name, logo, favicon, web and media address (stored links rewritten, old hostname redirected), sign-ups, Podping key
 - [x] Web dashboard: shows, move checklist with 301 check, import progress, stats prefixes, Podping, live shows, people
 - [x] Ownership verification on import: podcast:txt tag or a code emailed to the feed's owner (via Resend or SMTP), admin skip
+- [x] Publishing: start new shows, publish/schedule/edit episodes, resumable uploads (audio, art, transcripts, chapters), show details with an Apple/Spotify checklist
 - [x] Docker Compose deployment with one-line install and update scripts (optional Cloudflare Tunnel container)
 
 ## Install

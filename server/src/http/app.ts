@@ -29,6 +29,12 @@ import { latestPings, podpingEnabled, queuePing, setShowPodping } from '../podpi
 import { feedPath } from '../urls.js';
 import { checkRedirect, saveRedirectResult } from './redirect-check.js';
 import { serveStatic } from './static.js';
+import { appendChunk, cancelUpload, completeUpload, getMedia, startUpload, UploadError, uploadStatus } from '../media/uploads.js';
+import { isReferenced, ownMediaPaths, pruneMedia } from '../media/prune.js';
+import { createEpisode, deleteEpisode, getEpisode, listEpisodes, updateEpisode } from '../publish/episodes.js';
+import { PublishError } from '../publish/fields.js';
+import { createShow, getShow, updateShow } from '../publish/show.js';
+import { APPLE_CATEGORIES, MEDIUMS } from '../publish/categories.js';
 import { changeStorage, latestMove, MoveError } from '../storage/move.js';
 import { PROVIDERS, StorageConfigError, validateSettings, type StorageSettings } from '../storage/providers.js';
 import { localPath, storeFor, testConnection, type StorageState } from '../storage/store.js';
@@ -306,15 +312,109 @@ export function createApp(deps: AppDeps) {
     sendJson(ctx.res, 204, undefined);
   });
 
+  // ───────────── publishing: new shows, show details, episodes ─────────────
+
+  /** Start a show from scratch (the other way in is an import). */
+  router.post('/api/podcasts', async (ctx) => {
+    const user = await requireUser(ctx);
+    const body = await readJson(ctx.req);
+    const id = await db.tx((q) => createShow(q, config, user.id, body));
+    sendJson(ctx.res, 201, { podcast: await podcastDetail(id, 'owner') });
+  });
+
+  router.get('/api/categories', async (ctx) => {
+    await requireUser(ctx);
+    sendJson(ctx.res, 200, { categories: APPLE_CATEGORIES, mediums: MEDIUMS });
+  });
+
+  router.get('/api/podcasts/:id/details', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'viewer');
+    sendJson(ctx.res, 200, await getShow(db, podcastId));
+  });
+
+  router.put('/api/podcasts/:id/details', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    const body = await readJson(ctx.req, 1024 * 1024);
+    const { dropped } = await db.tx((q) => updateShow(q, config, podcastId, body));
+    await pruneMedia(db, config, podcastId, dropped, deps.log);
+    sendJson(ctx.res, 200, await getShow(db, podcastId));
+  });
+
   router.get('/api/podcasts/:id/episodes', async (ctx) => {
     const { podcastId } = await requirePodcast(ctx, 'viewer');
-    const { rows } = await db.query<Record<string, unknown>>(
-      `SELECT id, guid, title, status, pub_date, enclosure_url, enclosure_length, enclosure_type,
-              itunes_duration, itunes_episode, itunes_season, itunes_episode_type
-         FROM episodes WHERE podcast_id = $1 ORDER BY pub_date DESC NULLS LAST, sort_index`,
-      [podcastId],
-    );
-    sendJson(ctx.res, 200, { episodes: rows });
+    sendJson(ctx.res, 200, { episodes: await listEpisodes(db, podcastId) });
+  });
+
+  router.post('/api/podcasts/:id/episodes', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    const body = await readJson(ctx.req, 1024 * 1024);
+    const id = await db.tx((q) => createEpisode(q, config, podcastId, body));
+    sendJson(ctx.res, 201, { episode: await getEpisode(db, podcastId, id) });
+  });
+
+  router.get('/api/podcasts/:id/episodes/:episodeId', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'viewer');
+    sendJson(ctx.res, 200, { episode: await getEpisode(db, podcastId, ctx.params.episodeId!) });
+  });
+
+  /** Only the fields sent are changed. */
+  router.patch('/api/podcasts/:id/episodes/:episodeId', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    const body = await readJson(ctx.req, 1024 * 1024);
+    const { dropped } = await db.tx((q) => updateEpisode(q, config, podcastId, ctx.params.episodeId!, body));
+    await pruneMedia(db, config, podcastId, dropped, deps.log);
+    sendJson(ctx.res, 200, { episode: await getEpisode(db, podcastId, ctx.params.episodeId!) });
+  });
+
+  router.delete('/api/podcasts/:id/episodes/:episodeId', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    const { dropped } = await db.tx((q) => deleteEpisode(q, config, podcastId, ctx.params.episodeId!));
+    await pruneMedia(db, config, podcastId, dropped, deps.log);
+    sendJson(ctx.res, 204, undefined);
+  });
+
+  // ───────────── uploads ─────────────
+
+  router.post('/api/podcasts/:id/uploads', async (ctx) => {
+    const { podcastId, user } = await requirePodcast(ctx, 'editor');
+    const body = await readJson(ctx.req);
+    sendJson(ctx.res, 201, { upload: await startUpload(db, config, podcastId, user.id, body) });
+  });
+
+  /** How much has arrived, to resume an interrupted upload. */
+  router.get('/api/podcasts/:id/uploads/:uploadId', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    sendJson(ctx.res, 200, { upload: await uploadStatus(db, podcastId, ctx.params.uploadId!) });
+  });
+
+  /** One chunk of raw bytes, sent as application/octet-stream, at ?offset= */
+  router.put('/api/podcasts/:id/uploads/:uploadId', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    const offset = Number(ctx.url.searchParams.get('offset') ?? 'NaN');
+    sendJson(ctx.res, 200, await appendChunk(db, config, podcastId, ctx.params.uploadId!, offset, ctx.req));
+  });
+
+  router.post('/api/podcasts/:id/uploads/:uploadId/complete', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    sendJson(ctx.res, 201, { media: await completeUpload(db, config, podcastId, ctx.params.uploadId!) });
+  });
+
+  router.delete('/api/podcasts/:id/uploads/:uploadId', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    await cancelUpload(db, config, podcastId, ctx.params.uploadId!);
+    sendJson(ctx.res, 204, undefined);
+  });
+
+  /** Remove an uploaded file that isn't used anywhere (an upload the editor didn't save). */
+  router.delete('/api/podcasts/:id/media/:mediaId', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    const m = await getMedia(db, config, podcastId, ctx.params.mediaId);
+    if (!m) throw new HttpError(404, 'File not found');
+    const [publicPath] = ownMediaPaths((await getPodcastRow(db, podcastId))!.slug, [m.url]);
+    if (!publicPath) throw new HttpError(404, 'File not found');
+    if (await isReferenced(db, podcastId, publicPath)) throw new HttpError(409, 'That file is in use');
+    await pruneMedia(db, config, podcastId, [publicPath], deps.log);
+    sendJson(ctx.res, 204, undefined);
   });
 
   // ───────────── stats prefixes ─────────────
@@ -742,7 +842,7 @@ export function createApp(deps: AppDeps) {
       }
       if (url.pathname.startsWith('/api/')) {
         res.setHeader('X-Frame-Options', 'DENY');
-        if (!['GET', 'HEAD'].includes(method)) checkCsrf(req, new URL(config.publicBaseUrl).origin);
+        if (!['GET', 'HEAD'].includes(method)) checkCsrf(req, new URL(config.publicBaseUrl).origin, method === 'PUT' && UPLOAD_CHUNK.test(url.pathname));
       }
       const m = router.match(method, url.pathname);
       if (m === null) throw new HttpError(404, 'Not found');
@@ -754,7 +854,8 @@ export function createApp(deps: AppDeps) {
         return;
       }
       if (e instanceof HttpError) return sendJson(res, e.status, { error: e.message }, e.headers);
-      if (e instanceof AuthError || e instanceof LiveError || e instanceof VerifyError) return sendJson(res, e.status, { error: e.message });
+      if (e instanceof AuthError || e instanceof LiveError || e instanceof VerifyError || e instanceof PublishError) return sendJson(res, e.status, { error: e.message });
+      if (e instanceof UploadError) return sendJson(res, e.status, { error: e.message, ...e.extra });
       if (e instanceof ImportError || e instanceof PrefixError || e instanceof SettingsError || e instanceof StorageConfigError || e instanceof MoveError) {
         return sendJson(res, 400, { error: e.message });
       }
@@ -767,12 +868,18 @@ export function createApp(deps: AppDeps) {
 /**
  * CSRF defence for cookie-authenticated API calls: state-changing requests
  * must be JSON (cross-site forms can't send that without a CORS preflight,
- * which we never approve) and, when the browser says where they came from,
+ * which we never approve; upload chunks use application/octet-stream, which
+ * needs one too) and, when the browser says where they came from,
  * must come from our own origin.
  */
-function checkCsrf(req: IncomingMessage, publicOrigin: string) {
+const UPLOAD_CHUNK = /^\/api\/podcasts\/[^/]+\/uploads\/[^/]+$/;
+
+function checkCsrf(req: IncomingMessage, publicOrigin: string, isChunk = false) {
   const type = (req.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase();
-  if (type !== 'application/json') throw new HttpError(415, 'Send requests as application/json');
+  // Upload chunks are raw bytes. Like JSON, application/octet-stream can't be sent cross-site without a preflight.
+  if (isChunk ? type !== 'application/octet-stream' : type !== 'application/json') {
+    throw new HttpError(415, isChunk ? 'Send upload chunks as application/octet-stream' : 'Send requests as application/json');
+  }
   const site = req.headers['sec-fetch-site'];
   if (site && site !== 'same-origin' && site !== 'none') throw new HttpError(403, 'Cross-site request blocked');
   const origin = req.headers.origin;

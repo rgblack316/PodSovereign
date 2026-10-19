@@ -166,7 +166,7 @@ function showLights(p) {
   const m = p.media ?? { done: 0, failed: 0, pending: 0 };
   if (p.status === 'importing') lights.push({ cls: 'warn', text: `Copying media (${m.done} done)` });
   else if (m.failed) lights.push({ cls: 'warn', text: `${m.failed} file${m.failed === 1 ? '' : 's'} not copied` });
-  else if (m.done) lights.push({ cls: 'on', text: `Media copied (${fmtBytes(m.bytes)})` });
+  else if (m.done) lights.push({ cls: 'on', text: `${p.sourceFeedUrl ? 'Media copied' : 'Media stored'} (${fmtBytes(m.bytes)})` });
   else lights.push({ cls: '', text: 'No media' });
 
   if (p.sourceFeedUrl) {
@@ -240,12 +240,13 @@ async function render() {
   lastHash = location.hash;
   if (!state.me) return renderAuth();
 
-  const [section, a, b] = route();
+  const [section, a, b, c] = route();
   let view;
   try {
     if (section === 'import' && a) view = await viewImportJob(a);
     else if (section === 'import') view = await viewImport();
-    else if (section === 'show' && a) view = await viewShow(a, b ?? 'overview');
+    else if (section === 'new') view = await viewNewShow();
+    else if (section === 'show' && a) view = await viewShow(a, b ?? 'overview', c);
     else if (section === 'account') view = await viewAccount();
     else if (section === 'people' && state.me.isAdmin) view = await viewPeople();
     else if (section === 'site' && state.me.isAdmin) view = await viewSite();
@@ -334,7 +335,9 @@ function frame(view) {
             h('span', { class: 'name' }, p.title),
             miniLights(p)))))
         : h('p', { class: 'hint', style: 'margin:0 8px' }, 'No shows yet.')),
-    h('a', { class: 'btn primary import', href: '#/import' }, 'Import a show'),
+    h('div', { class: 'rail-actions' },
+      h('a', { class: 'btn primary import', href: '#/import', 'aria-current': section === 'import' ? 'page' : null }, 'Import a show'),
+      h('a', { class: 'btn import', href: '#/new', 'aria-current': section === 'new' ? 'page' : null }, 'Start a new show')),
     h('div', { class: 'rail-foot' },
       h('div', { class: 'who' }, state.me.displayName || state.me.email),
       h('a', { href: '#/account' }, 'Account'),
@@ -358,9 +361,11 @@ function frame(view) {
 async function viewHome() {
   if (!state.podcasts.length) {
     return h('div', { class: 'page' }, h('div', { class: 'empty' },
-      h('h1', { style: 'font-size:var(--t-xl);margin-bottom:12px' }, 'Bring your first show over'),
-      h('p', { class: 'muted' }, 'Paste the RSS feed address from your current host. Every episode, image, transcript and chapter file is copied to this server, and the show gets a new feed address.'),
-      h('a', { class: 'btn primary', href: '#/import' }, 'Import a show')));
+      h('h1', { style: 'font-size:var(--t-xl);margin-bottom:12px' }, 'Add your first show'),
+      h('p', { class: 'muted' }, 'Moving from another host? Paste your current feed address and every episode, image, transcript and chapter file is copied here. Starting fresh? Create the show and publish your first episode.'),
+      h('div', { class: 'actions' },
+        h('a', { class: 'btn primary', href: '#/import' }, 'Import a show'),
+        h('a', { class: 'btn', href: '#/new' }, 'Start a new show'))));
   }
   if (state.podcasts.length === 1) {
     location.replace(`#/show/${state.podcasts[0].id}`);
@@ -381,7 +386,7 @@ async function viewHome() {
 async function viewImport() {
   const err = formError();
   const url = h('input', { type: 'url', name: 'url', required: true, placeholder: 'https://feeds.example.com/my-show.xml' });
-  const slug = h('input', { type: 'text', name: 'slug', pattern: '[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?', placeholder: 'my-show' });
+  const slug = h('input', { type: 'text', name: 'slug', pattern: '[a-z0-9](?:[a-z0-9\\-]{0,58}[a-z0-9])?', placeholder: 'my-show' });
   const previewText = h('span');
   const updatePreview = () => {
     previewText.textContent = `${state.setup.publicBaseUrl}/${slug.value || '<from the show title>'}/feed.xml`;
@@ -624,20 +629,22 @@ function verificationView(job) {
 const TABS = [
   ['overview', 'Overview'],
   ['episodes', 'Episodes'],
+  ['details', 'Show details'],
   ['prefixes', 'Stats prefixes'],
   ['podping', 'Podping'],
   ['live', 'Live'],
   ['settings', 'Settings'],
 ];
 
-async function viewShow(id, tab) {
+async function viewShow(id, tab, sub) {
   const { podcast: p } = await api('GET', `/api/podcasts/${id}`);
   const canEdit = p.role !== 'viewer';
   const body = h('div');
   const reload = () => render();
 
-  const views = { overview: tabOverview, episodes: tabEpisodes, prefixes: tabPrefixes, podping: tabPodping, live: tabLive, settings: tabSettings };
-  body.append(await (views[tab] ?? tabOverview)(p, canEdit, reload));
+  const views = { overview: tabOverview, episodes: tabEpisodes, details: tabDetails, prefixes: tabPrefixes, podping: tabPodping, live: tabLive, settings: tabSettings };
+  if (tab === 'episodes' && sub) body.append(await viewEpisode(p, canEdit, sub));
+  else body.append(await (views[tab] ?? tabOverview)(p, canEdit, reload));
 
   return h('div', { class: 'page' },
     h('header', { class: 'strip' },
@@ -720,6 +727,15 @@ async function tabOverview(p, canEdit, reload) {
             h('a', { class: 'btn', href: `#/show/${p.id}/podping` }, 'Podping settings'))))));
   }
 
+  if (!p.sourceFeedUrl && canEdit) {
+    const { checklist } = await api('GET', `/api/podcasts/${p.id}/details`);
+    if (checklist.length) {
+      parts.push(checklistPanel(checklist, h('div', { class: 'actions' },
+        h('a', { class: 'btn primary', href: `#/show/${p.id}/details` }, 'Edit show details'),
+        h('a', { class: 'btn', href: `#/show/${p.id}/episodes/new` }, 'New episode'))));
+    }
+  }
+
   parts.push(h('section', { class: 'panel' },
     h('h2', null, 'About this show'),
     h('dl', { class: 'facts', style: 'margin-top:12px' },
@@ -741,25 +757,744 @@ async function tabOverview(p, canEdit, reload) {
   return h('div', null, parts);
 }
 
-async function tabEpisodes(p) {
+// ───────────── uploads ─────────────
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Name to show for a stored file: the last part of its address, without our 8-character prefix. */
+function fileLabel(url, name) {
+  if (name) return name.replace(/^[0-9a-f]{8,10}-/, '');
+  try {
+    return decodeURIComponent(new URL(url).pathname.split('/').pop() || url).replace(/^[0-9a-f]{8,10}-/, '');
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * Upload a file in chunks of a few MB. Cloudflare Tunnel limits a single request to 100 MB,
+ * and chunks let a dropped connection pick up where it stopped. Returns the stored file.
+ */
+async function uploadFile(podcastId, file, kind, { onProgress, signal } = {}) {
+  const { upload } = await api('POST', `/api/podcasts/${podcastId}/uploads`, { filename: file.name, size: file.size, kind });
+  const base = `/api/podcasts/${podcastId}/uploads/${upload.id}`;
+  let offset = upload.received;
+  try {
+    while (offset < file.size) {
+      if (signal?.aborted) throw new DOMException('Upload cancelled', 'AbortError');
+      const end = Math.min(file.size, offset + upload.chunkSize);
+      for (let attempt = 1; ; attempt++) {
+        let res = null;
+        let data = null;
+        try {
+          res = await fetch(`${base}?offset=${offset}`, {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: file.slice(offset, end),
+            signal,
+          });
+          data = await res.json().catch(() => null);
+        } catch (e) {
+          if (e.name === 'AbortError') throw e;
+        }
+        if (res?.ok || (res?.status === 409 && typeof data?.received === 'number')) {
+          offset = data.received;
+          break;
+        }
+        if (res && res.status < 500 && res.status !== 408 && res.status !== 429) {
+          throw new ApiError(res.status, data?.error ?? `Upload failed (${res.status})`);
+        }
+        if (attempt >= 6) throw new Error('The connection keeps dropping. Check your internet connection, then try again.');
+        await sleep(Math.min(30_000, 1000 * 2 ** attempt));
+      }
+      onProgress?.(offset / file.size);
+    }
+    return (await api('POST', `${base}/complete`)).media;
+  } catch (e) {
+    if (e.name === 'AbortError') api('DELETE', base).catch(() => {});
+    throw e;
+  }
+}
+
+/**
+ * "Choose file" button with progress and cancel. `dropTarget` (optional) also accepts a dragged file.
+ * Calls onDone(media) when the file is stored.
+ */
+function uploader({ podcastId, kind, accept, label, onDone, onStart, dropTarget, primary = false }) {
+  const input = h('input', { type: 'file', accept, hidden: true });
+  const pick = h('button', { type: 'button', class: primary ? 'primary' : '', onclick: () => input.click() }, label);
+  const bar = h('span');
+  const meter = h('div', { class: 'meter', role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-label': 'Upload progress' }, bar);
+  const what = h('span', { class: 'hint' });
+  const cancel = h('button', { type: 'button', class: 'quiet' }, 'Cancel');
+  const progress = h('div', { class: 'upload-progress', hidden: true }, meter, h('div', { class: 'upload-line' }, what, cancel));
+  const err = formError();
+  let ctrl = null;
+
+  async function start(file) {
+    if (!file || ctrl) return;
+    err.hidden = true;
+    ctrl = new AbortController();
+    pick.disabled = true;
+    progress.hidden = false;
+    const set = (f) => {
+      const pct = Math.floor(f * 100);
+      bar.style.width = `${pct}%`;
+      meter.setAttribute('aria-valuenow', pct);
+      what.textContent = f < 1 ? `Uploading ${file.name}: ${pct}% of ${fmtBytes(file.size)}` : `Checking ${file.name}…`;
+    };
+    set(0);
+    onStart?.();
+    try {
+      const media = await uploadFile(podcastId, file, kind, { onProgress: set, signal: ctrl.signal });
+      onDone(media);
+    } catch (e) {
+      if (e.name !== 'AbortError') showError(err, e);
+    } finally {
+      ctrl = null;
+      pick.disabled = false;
+      progress.hidden = true;
+      input.value = '';
+    }
+  }
+  input.addEventListener('change', () => start(input.files[0]));
+  cancel.addEventListener('click', () => ctrl?.abort());
+  if (dropTarget) {
+    dropTarget.addEventListener('dragover', (ev) => {
+      ev.preventDefault();
+      dropTarget.classList.add('over');
+    });
+    dropTarget.addEventListener('dragleave', () => dropTarget.classList.remove('over'));
+    dropTarget.addEventListener('drop', (ev) => {
+      ev.preventDefault();
+      dropTarget.classList.remove('over');
+      start(ev.dataTransfer.files[0]);
+    });
+  }
+  return { button: pick, el: h('div', { class: 'uploader' }, input, progress, err), busy: () => !!ctrl };
+}
+
+// ───────────── episodes list ─────────────
+
+function episodeState(e) {
+  if (e.status === 'draft') return h('span', { class: 'pill draft' }, 'Draft');
+  if (!e.inFeed) return h('span', { class: 'pill scheduled' }, `Scheduled ${fmtDate(e.pub_date ?? e.pubDate, true)}`);
+  return null;
+}
+
+async function tabEpisodes(p, canEdit) {
   const { episodes } = await api('GET', `/api/podcasts/${p.id}/episodes`);
-  if (!episodes.length) return h('div', { class: 'panel' }, h('p', { class: 'muted' }, 'This show has no episodes yet.'));
-  return h('div', { class: 'panel', style: 'padding:0' }, h('div', { class: 'table-wrap' }, h('table', null,
+  const head = h('div', { class: 'section-head' },
+    h('p', { class: 'muted' }, episodes.length
+      ? `${episodes.length} episode${episodes.length === 1 ? '' : 's'}. Drafts and scheduled episodes aren’t in the feed yet.`
+      : 'No episodes yet.'),
+    canEdit ? h('a', { class: 'btn primary', href: `#/show/${p.id}/episodes/new` }, 'New episode') : null);
+  if (!episodes.length) {
+    return h('div', null, head, h('div', { class: 'panel' },
+      h('h2', null, 'Publish your first episode'),
+      h('p', { class: 'muted' }, 'Upload the audio, give it a title and description, and publish it now or schedule it for later.'),
+      canEdit ? h('a', { class: 'btn primary', href: `#/show/${p.id}/episodes/new` }, 'New episode') : null));
+  }
+  return h('div', null, head, h('div', { class: 'panel', style: 'padding:0' }, h('div', { class: 'table-wrap' }, h('table', { class: 'episodes' },
     h('thead', null, h('tr', null,
       h('th', null, 'Episode'), h('th', null, 'Published'), h('th', { class: 'num' }, 'Length'),
-      h('th', { class: 'num' }, 'Size'), h('th', null, ''))),
+      h('th', { class: 'num' }, 'Size'))),
     h('tbody', null, episodes.map((e) => h('tr', null,
       h('td', null,
-        h('div', { class: 'ep-title' }, e.title),
+        h('a', { class: 'ep-title', href: `#/show/${p.id}/episodes/${e.id}` }, e.title || 'Untitled'),
+        ' ', episodeState(e),
         h('div', { class: 'hint' }, [
           e.itunes_season ? `Season ${e.itunes_season}` : null,
           e.itunes_episode ? `Episode ${e.itunes_episode}` : null,
           e.itunes_episode_type && e.itunes_episode_type !== 'full' ? e.itunes_episode_type[0].toUpperCase() + e.itunes_episode_type.slice(1) : null,
-        ].filter(Boolean).join(', '))),
-      h('td', { class: 'nowrap' }, fmtDate(e.pub_date)),
+          e.hasTranscript ? 'Transcript' : null,
+          e.hasChapters ? 'Chapters' : null,
+          !e.enclosure_url ? 'No audio yet' : null,
+        ].filter(Boolean).join(' · '))),
+      h('td', { class: 'nowrap' }, e.status === 'draft' ? '—' : fmtDate(e.pub_date)),
       h('td', { class: 'num' }, fmtDuration(e.itunes_duration)),
-      h('td', { class: 'num nowrap' }, e.enclosure_length ? fmtBytes(e.enclosure_length) : '—'),
-      h('td', null, e.status !== 'published' ? h('span', { class: `pill ${e.status}` }, e.status === 'draft' ? 'Draft' : 'Scheduled') : null)))))));
+      h('td', { class: 'num nowrap' }, e.enclosure_length ? fmtBytes(Number(e.enclosure_length)) : '—'))))))));
+}
+
+// ───────────── episode editor ─────────────
+
+const TRANSCRIPT_TYPES = [
+  ['text/vtt', 'WebVTT (.vtt)'], ['application/x-subrip', 'SubRip (.srt)'], ['text/html', 'HTML'],
+  ['application/json', 'JSON'], ['text/plain', 'Plain text'],
+];
+
+async function viewEpisode(p, canEdit, episodeId) {
+  const isNew = episodeId === 'new';
+  const ep = isNew
+    ? { status: 'draft', inFeed: false, title: '', description: '', link: null, enclosure: null, duration: null, season: null, episode: null,
+        episodeType: 'full', explicit: null, imageUrl: null, block: false, transcripts: [], chapters: null, otherTags: '', itunesTitle: null }
+    : (await api('GET', `/api/podcasts/${p.id}/episodes/${episodeId}`)).episode;
+
+  const unsaved = new Set(); // uploads not yet saved into the episode
+  let dirty = false;
+  const markDirty = () => (dirty = true);
+  const onUnload = (ev) => {
+    if (!dirty) return;
+    ev.preventDefault();
+    ev.returnValue = '';
+  };
+  window.addEventListener('beforeunload', onUnload);
+  cleanup.push(() => {
+    window.removeEventListener('beforeunload', onUnload);
+    for (const id of unsaved) api('DELETE', `/api/podcasts/${p.id}/media/${id}`).catch(() => {});
+  });
+
+  // ── Audio ──
+  let enclosure = null; // what to send: undefined = unchanged
+  let enclosureChanged = false;
+  const audioSlot = h('div');
+  const duration = h('input', { type: 'text', inputmode: 'numeric', value: ep.duration != null ? fmtDuration(ep.duration) : '', placeholder: '45:30', pattern: '[0-9:.]*' });
+  const linkUrl = h('input', { type: 'url', placeholder: 'https://cdn.example.com/episode-12.mp3' });
+  const linkType = h('select', null, [['audio/mpeg', 'MP3'], ['audio/x-m4a', 'M4A / AAC'], ['video/mp4', 'MP4 video']].map(([v, t]) => h('option', { value: v }, t)));
+  const linkLength = h('input', { type: 'text', inputmode: 'numeric', placeholder: 'Size in bytes (optional)' });
+  let current = ep.enclosure ? { url: ep.enclosure.url, name: ep.enclosure.name, bytes: ep.enclosure.length, type: ep.enclosure.type, duration: ep.duration } : null;
+
+  const drop = h('div', { class: 'dropzone' });
+  const up = uploader({
+    podcastId: p.id,
+    kind: undefined,
+    accept: '.mp3,.m4a,.aac,.mp4,.m4v,.mov,.ogg,.opus,.wav,.flac,audio/*,video/*',
+    label: current ? 'Replace audio' : 'Choose audio file',
+    primary: !current,
+    dropTarget: drop,
+    onStart: markDirty,
+    onDone: (m) => {
+      if (m.kind !== 'audio' && m.kind !== 'video') return toast('That isn’t an audio or video file');
+      unsaved.add(m.id);
+      enclosure = { mediaId: m.id };
+      enclosureChanged = true;
+      current = { url: m.url, name: m.name, bytes: m.bytes, type: m.mimeType, duration: m.duration };
+      if (m.duration) duration.value = fmtDuration(m.duration);
+      drawAudio();
+      toast('Audio uploaded');
+    },
+  });
+  const useLink = h('details', { class: 'use-link' }, h('summary', null, 'Use a file hosted somewhere else'),
+    h('div', { class: 'row', style: 'margin-top:12px' },
+      h('div', { class: 'field', style: 'flex:3 1 280px' }, h('label', null, 'Address of the audio file'), linkUrl),
+      field('Type', linkType), field('Size', linkLength)),
+    h('div', { class: 'actions', style: 'margin-top:0' }, h('button', {
+      type: 'button',
+      onclick: () => {
+        if (!linkUrl.value) return linkUrl.focus();
+        enclosure = { url: linkUrl.value, type: linkType.value, length: linkLength.value ? Number(linkLength.value) : null };
+        enclosureChanged = true;
+        current = { url: linkUrl.value, name: null, bytes: enclosure.length, type: linkType.value, duration: null };
+        markDirty();
+        drawAudio();
+      },
+    }, 'Use this address')));
+
+  function drawAudio() {
+    up.button.textContent = current ? 'Replace audio' : 'Choose audio file';
+    up.button.className = current ? '' : 'primary';
+    if (current) {
+      const player = /^https?:/.test(current.url) ? h('audio', { controls: true, preload: 'none', src: current.url }) : null;
+      drop.replaceChildren(h('div', { class: 'file-row' },
+        h('div', { class: 'file-icon', 'aria-hidden': 'true' }, (current.type ?? 'audio/').startsWith('video/') ? 'VID' : 'AUD'),
+        h('div', null,
+          h('b', null, fileLabel(current.url, current.name)),
+          h('div', { class: 'hint' }, [current.bytes ? fmtBytes(current.bytes) : null, current.duration ? fmtDuration(current.duration) : null, current.type].filter(Boolean).join(' · ')))),
+      player, h('div', { class: 'actions' }, up.button, h('span', { class: 'hint' }, 'or drop a new file here')));
+    } else {
+      drop.replaceChildren(h('p', { class: 'drop-text' }, 'Drop the episode’s audio here'),
+        h('p', { class: 'hint' }, 'MP3 or M4A recommended. Large files are fine: uploads continue if the connection drops.'),
+        h('div', { class: 'actions', style: 'justify-content:center' }, up.button));
+    }
+  }
+  drawAudio();
+  audioSlot.append(drop, up.el, useLink);
+
+  // ── Details ──
+  const title = h('input', { type: 'text', required: true, value: ep.title, maxlength: 1000 });
+  const desc = h('textarea', { rows: 10 }, ep.description ?? '');
+  const season = h('input', { type: 'text', inputmode: 'numeric', value: ep.season ?? '', pattern: '[0-9]*' });
+  const number = h('input', { type: 'text', inputmode: 'numeric', value: ep.episode ?? '', pattern: '[0-9]*' });
+  const etype = h('select', null, [['full', 'Full episode'], ['trailer', 'Trailer'], ['bonus', 'Bonus']].map(([v, t]) => h('option', { value: v }, t)));
+  etype.value = ep.episodeType ?? 'full';
+  const explicit = h('select', null, [['', 'Same as the show'], ['true', 'Explicit'], ['false', 'Clean']].map(([v, t]) => h('option', { value: v }, t)));
+  explicit.value = ep.explicit === null || ep.explicit === undefined ? '' : String(ep.explicit);
+  const link = h('input', { type: 'url', value: ep.link ?? '', placeholder: 'https://example.com/episodes/12' });
+  const itunesTitle = h('input', { type: 'text', value: ep.itunesTitle ?? '', placeholder: 'Leave blank to use the title' });
+
+  // Episode art
+  let image; // undefined = unchanged
+  let imageUrl = ep.imageUrl;
+  const artSlot = h('div', { class: 'art-pick' });
+  const artUp = uploader({
+    podcastId: p.id,
+    kind: 'image',
+    accept: '.jpg,.jpeg,.png,image/jpeg,image/png',
+    label: 'Upload image',
+    onStart: markDirty,
+    onDone: (m) => {
+      unsaved.add(m.id);
+      image = { mediaId: m.id };
+      imageUrl = m.url;
+      drawArt(m);
+    },
+  });
+  function drawArt(m) {
+    artSlot.replaceChildren(
+      artImg(imageUrl, ep.title || '—'),
+      h('div', null,
+        h('p', { class: 'hint' }, imageUrl
+          ? (m?.width ? `${m.width} × ${m.height} pixels. ` : '') + 'Shown instead of the show artwork in apps that support it.'
+          : 'Optional. Square JPEG or PNG, 1400–3000 pixels. Without one, apps show the show artwork.'),
+        h('div', { class: 'actions', style: 'margin-top:8px' }, artUp.button, imageUrl ? h('button', {
+          type: 'button',
+          class: 'quiet',
+          onclick: () => {
+            image = null;
+            imageUrl = null;
+            markDirty();
+            drawArt();
+          },
+        }, 'Remove') : null),
+        artUp.el));
+  }
+  drawArt();
+
+  // ── Transcripts & chapters ──
+  const transcripts = ep.transcripts.map((t) => ({ ...t, ref: { url: t.url } }));
+  let chapters = ep.chapters ? { ref: { url: ep.chapters.url }, url: ep.chapters.url } : null;
+  let chaptersChanged = false;
+  let transcriptsChanged = false;
+  const tList = h('div', { class: 'file-list' });
+  const tUp = uploader({
+    podcastId: p.id,
+    kind: 'transcript',
+    accept: '.vtt,.srt,.html,.htm,.json,.txt',
+    label: 'Add transcript',
+    onStart: markDirty,
+    onDone: (m) => {
+      unsaved.add(m.id);
+      transcripts.push({ url: m.url, name: m.name, type: m.mimeType, language: ep.language ?? p.language ?? '', rel: /vtt|subrip/.test(m.mimeType) ? 'captions' : null, ref: { mediaId: m.id } });
+      transcriptsChanged = true;
+      drawTranscripts();
+    },
+  });
+  function drawTranscripts() {
+    tList.replaceChildren(...transcripts.map((t, i) => {
+      const lang = h('input', { type: 'text', value: t.language ?? '', placeholder: 'en', 'aria-label': 'Language', class: 'short' });
+      lang.addEventListener('input', () => { t.language = lang.value; transcriptsChanged = true; markDirty(); });
+      const cap = h('input', { type: 'checkbox', checked: t.rel === 'captions' });
+      cap.addEventListener('change', () => { t.rel = cap.checked ? 'captions' : null; transcriptsChanged = true; markDirty(); });
+      const type = TRANSCRIPT_TYPES.find(([v]) => v === t.type)?.[1] ?? t.type;
+      return h('div', { class: 'file-row' },
+        h('div', { class: 'file-icon', 'aria-hidden': 'true' }, 'TXT'),
+        h('div', null, h('b', null, fileLabel(t.url, t.name)), h('div', { class: 'hint' }, type)),
+        h('div', { class: 'file-opts' },
+          lang,
+          /vtt|subrip|srt/.test(t.type) ? h('label', { class: 'check small' }, cap, 'Captions') : null,
+          h('button', { type: 'button', class: 'quiet', onclick: () => { transcripts.splice(i, 1); transcriptsChanged = true; markDirty(); drawTranscripts(); } }, 'Remove')));
+    }));
+    if (!transcripts.length) tList.append(h('p', { class: 'hint' }, 'No transcript. Apple Podcasts and other apps can show one as the episode plays.'));
+  }
+  drawTranscripts();
+
+  const cSlot = h('div', { class: 'file-list' });
+  const cUp = uploader({
+    podcastId: p.id,
+    kind: 'chapters',
+    accept: '.json,application/json',
+    label: 'Upload chapters file',
+    onStart: markDirty,
+    onDone: (m) => {
+      unsaved.add(m.id);
+      chapters = { url: m.url, name: m.name, ref: { mediaId: m.id } };
+      chaptersChanged = true;
+      drawChapters();
+    },
+  });
+  function drawChapters() {
+    cUp.button.textContent = chapters ? 'Replace chapters' : 'Upload chapters file';
+    cSlot.replaceChildren(chapters
+      ? h('div', { class: 'file-row' },
+        h('div', { class: 'file-icon', 'aria-hidden': 'true' }, 'CH'),
+        h('div', null, h('b', null, fileLabel(chapters.url, chapters.name)), h('div', { class: 'hint' }, 'JSON chapters')),
+        h('div', { class: 'file-opts' }, h('button', { type: 'button', class: 'quiet', onclick: () => { chapters = null; chaptersChanged = true; markDirty(); drawChapters(); } }, 'Remove')))
+      : h('p', { class: 'hint' }, 'No chapters. Use a Podcast Namespace JSON chapters file (many editors export one).'));
+  }
+  drawChapters();
+
+  // ── Advanced ──
+  const other = h('textarea', { class: 'code', rows: Math.min(16, Math.max(4, (ep.otherTags.match(/\n/g)?.length ?? 0) + 2)), spellcheck: 'false' }, ep.otherTags);
+  const block = h('input', { type: 'checkbox', checked: ep.block });
+
+  // ── Publishing ──
+  const mode = { value: ep.status === 'draft' ? 'draft' : ep.inFeed ? 'live' : 'schedule' };
+  const when = h('input', { type: 'datetime-local', value: toInputValue(ep.status === 'scheduled' && ep.pubDate ? ep.pubDate : new Date(Date.now() + 86400_000).toISOString()) });
+  const liveDate = h('input', { type: 'datetime-local', value: toInputValue(ep.pubDate) });
+  const save = h('button', { type: 'submit', class: 'primary' });
+  const radio = (value, labelText, extra) => {
+    const r = h('input', { type: 'radio', name: 'when', value, checked: mode.value === value });
+    r.addEventListener('change', () => { mode.value = value; markDirty(); drawMode(); });
+    return h('label', { class: 'choice' }, r, h('span', null, labelText, extra));
+  };
+  const modes = h('div', { class: 'choices' });
+  function drawMode() {
+    const published = !isNew && ep.status !== 'draft' && ep.inFeed;
+    modes.replaceChildren(
+      radio('draft', 'Draft', h('small', null, 'Not in the feed')),
+      radio('live', published ? 'In the feed' : 'Publish now', published ? h('small', null, 'Publish date ', liveDate) : h('small', null, 'Appears in apps within minutes')),
+      radio('schedule', 'Schedule', h('small', null, when)));
+    liveDate.disabled = mode.value !== 'live';
+    when.disabled = mode.value !== 'schedule';
+    save.textContent = mode.value === 'draft' ? (isNew || ep.status === 'draft' ? 'Save draft' : 'Move to drafts')
+      : mode.value === 'schedule' ? (ep.status === 'scheduled' ? 'Save changes' : 'Schedule')
+        : published ? 'Save changes' : 'Publish now';
+  }
+  drawMode();
+
+  const err = formError();
+  const stateLine = isNew ? 'New episode'
+    : ep.status === 'draft' ? 'Draft'
+      : ep.inFeed ? `In the feed since ${fmtDate(ep.pubDate, true)}` : `Scheduled for ${fmtDate(ep.pubDate, true)}`;
+  const pingNote = p.podping.enabled && p.podping.serverEnabled
+    ? 'Podping tells apps as soon as it’s in the feed.'
+    : 'Apps pick it up the next time they check the feed.';
+
+  const body = () => {
+    const b = {
+      title: title.value,
+      description: desc.value,
+      link: link.value || null,
+      season: season.value || null,
+      episode: number.value || null,
+      episodeType: etype.value,
+      explicit: explicit.value === '' ? null : explicit.value === 'true',
+      itunesTitle: itunesTitle.value || null,
+      duration: duration.value || null,
+      otherTags: other.value,
+      block: block.checked,
+    };
+    if (enclosureChanged) b.enclosure = enclosure;
+    if (image !== undefined) b.image = image;
+    if (transcriptsChanged) b.transcripts = transcripts.map((t) => ({ ...t.ref, type: t.type, language: t.language || null, rel: t.rel }));
+    if (chaptersChanged) b.chapters = chapters ? chapters.ref : null;
+    if (mode.value === 'draft') b.status = 'draft';
+    else if (mode.value === 'schedule') {
+      if (!when.value) throw new Error('Choose when to publish');
+      if (new Date(when.value).getTime() <= Date.now()) throw new Error('The scheduled time has passed. Choose a later time, or publish now.');
+      b.status = 'published';
+      b.pubDate = localIso(when.value);
+    } else {
+      b.status = 'published';
+      b.pubDate = liveDate.value && !isNew && ep.status !== 'draft' && ep.inFeed ? localIso(liveDate.value) : null;
+    }
+    return b;
+  };
+
+  const form = h('form', {
+    class: 'editor',
+    novalidate: true,
+    oninput: markDirty,
+    onsubmit: (ev) => {
+      ev.preventDefault();
+      err.hidden = true;
+      if (up.busy() || artUp.busy() || tUp.busy() || cUp.busy()) return showError(err, 'Wait for the upload to finish.');
+      busy(form, async () => {
+        try {
+          const b = body();
+          const r = isNew
+            ? await api('POST', `/api/podcasts/${p.id}/episodes`, b)
+            : await api('PATCH', `/api/podcasts/${p.id}/episodes/${ep.id}`, b);
+          unsaved.clear();
+          dirty = false;
+          const e = r.episode;
+          toast(e.status === 'draft' ? 'Draft saved' : !e.inFeed ? `Scheduled for ${fmtDate(e.pubDate, true)}` : ep.inFeed ? 'Saved' : 'Published');
+          await refreshPodcasts();
+          go(`#/show/${p.id}/episodes/${e.id}`);
+        } catch (e) {
+          showError(err, e);
+          err.scrollIntoView({ block: 'nearest' });
+        }
+      });
+    },
+  },
+  h('fieldset', { class: 'plain', disabled: !canEdit },
+    h('div', { class: 'editor-main' },
+      h('section', { class: 'panel' }, h('h2', null, 'Audio'), audioSlot,
+        h('div', { class: 'row', style: 'margin-top:16px' }, field('Length', duration, 'Filled in from the file. hh:mm:ss'))),
+      h('section', { class: 'panel' }, h('h2', null, 'Details'),
+        field('Title', title),
+        field('Description', desc, 'Show notes. Basic HTML works: <p>, <a href>, <b>, <i>, <ul>, <li>.'),
+        h('div', { class: 'row' }, field('Season', season), field('Episode number', number), field('Type', etype), field('Content', explicit)),
+        h('div', { class: 'field' }, h('label', null, 'Episode art'), artSlot),
+        field('Episode web page', link, 'Optional. A page about this episode on your website.')),
+      h('section', { class: 'panel' }, h('h2', null, 'Transcripts and chapters'),
+        h('h3', { class: 'sub' }, 'Transcripts'), tList, tUp.el, h('div', { class: 'actions', style: 'margin-top:8px' }, tUp.button),
+        h('h3', { class: 'sub' }, 'Chapters'), cSlot, cUp.el, h('div', { class: 'actions', style: 'margin-top:8px' }, cUp.button)),
+      h('section', { class: 'panel' }, h('details', { open: ep.otherTags ? true : null },
+        h('summary', null, 'More tags and options'),
+        h('div', { style: 'margin-top:16px' },
+          field('Title for Apple Podcasts', itunesTitle, 'Only if it should differ from the title, e.g. without the episode number.'),
+          h('div', { class: 'field' },
+            h('label', { for: 'other-tags' }, 'Other tags'),
+            (other.id = 'other-tags', other),
+            h('p', { class: 'hint' }, 'Any other iTunes or Podcasting 2.0 tags for this episode, as XML: people, soundbites, location, value, license, alternate enclosures and so on. For example ',
+              h('code', { class: 'inline' }, '<podcast:person role="guest">Ann Lee</podcast:person>'))),
+          h('label', { class: 'check' }, block, 'Hide this episode from Apple Podcasts'),
+          ep.guid ? h('p', { class: 'hint', style: 'margin-top:12px' }, `GUID: ${ep.guid}`) : null)))),
+    h('aside', { class: 'editor-side' },
+      h('section', { class: 'panel publish' },
+        h('h2', null, 'Publishing'),
+        h('p', { class: 'state' }, stateLine),
+        modes,
+        err,
+        canEdit ? h('div', { class: 'actions' }, save) : null,
+        h('p', { class: 'hint', style: 'margin-top:12px' }, pingNote),
+        !isNew && canEdit ? h('button', {
+          type: 'button',
+          class: 'quiet danger delete',
+          onclick: async () => {
+            if (!confirm(`Delete “${ep.title}”? It disappears from the feed and its files are removed. This can’t be undone.`)) return;
+            try {
+              await api('DELETE', `/api/podcasts/${p.id}/episodes/${ep.id}`);
+              dirty = false;
+              toast('Episode deleted');
+              await refreshPodcasts();
+              go(`#/show/${p.id}/episodes`);
+            } catch (e) {
+              showError(err, e);
+            }
+          },
+        }, 'Delete episode') : null))));
+
+  return h('div', null,
+    h('nav', { class: 'crumbs', 'aria-label': 'Breadcrumb' }, h('a', { href: `#/show/${p.id}/episodes` }, 'Episodes'), h('span', { 'aria-hidden': 'true' }, ' / '),
+      h('span', null, isNew ? 'New episode' : ep.title)),
+    form);
+}
+
+// ───────────── show details ─────────────
+
+const LANGUAGES = [
+  ['en', 'English'], ['en-us', 'English (US)'], ['en-gb', 'English (UK)'], ['es', 'Spanish'], ['es-mx', 'Spanish (Mexico)'],
+  ['fr', 'French'], ['de', 'German'], ['it', 'Italian'], ['pt', 'Portuguese'], ['pt-br', 'Portuguese (Brazil)'], ['nl', 'Dutch'],
+  ['sv', 'Swedish'], ['no', 'Norwegian'], ['da', 'Danish'], ['fi', 'Finnish'], ['pl', 'Polish'], ['ja', 'Japanese'],
+  ['ko', 'Korean'], ['zh', 'Chinese'], ['hi', 'Hindi'], ['ar', 'Arabic'],
+];
+
+function languageInput(value) {
+  const id = `langs-${Math.random().toString(36).slice(2, 8)}`;
+  const input = h('input', { type: 'text', list: id, value: value ?? '', placeholder: 'en', maxlength: 35 });
+  return [input, h('datalist', { id }, LANGUAGES.map(([v, t]) => h('option', { value: v }, t)))];
+}
+
+/** A select of "Category" and "Category › Subcategory". Keeps a category the list doesn't have (from an import). */
+function categorySelect(all, current, optional) {
+  const sel = h('select', null, h('option', { value: '' }, optional ? 'None' : 'Choose a category'));
+  const key = (c) => (c ? (c.sub?.[0] ? `${c.text}|${c.sub[0]}` : c.text) : '');
+  const known = new Set();
+  for (const [top, subs] of Object.entries(all)) {
+    known.add(top);
+    subs.forEach((s) => known.add(`${top}|${s}`));
+    sel.append(h('optgroup', { label: top }, h('option', { value: top }, top), subs.map((s) => h('option', { value: `${top}|${s}` }, `${top} › ${s}`))));
+  }
+  if (current && !known.has(key(current))) sel.prepend(h('option', { value: key(current) }, `${[current.text, ...current.sub].join(' › ')} (not an Apple category)`));
+  sel.value = key(current);
+  const initial = sel.value;
+  return {
+    el: sel,
+    get: () => {
+      if (!sel.value) return null;
+      if (sel.value === initial && current) return current; // unchanged: keep it exactly
+      const [text, sub] = sel.value.split('|');
+      return { text, sub: sub ? [sub] : [] };
+    },
+  };
+}
+
+async function tabDetails(p, canEdit, reload) {
+  const d = await api('GET', `/api/podcasts/${p.id}/details`);
+  const s = d.show;
+  const err = formError();
+
+  // Artwork
+  let image; // undefined = unchanged
+  let art = { url: s.imageUrl, size: s.imageSize };
+  const artSlot = h('div', { class: 'art-pick big' });
+  const artUp = uploader({
+    podcastId: p.id,
+    kind: 'image',
+    accept: '.jpg,.jpeg,.png,image/jpeg,image/png',
+    label: s.imageUrl ? 'Replace artwork' : 'Upload artwork',
+    onDone: (m) => {
+      image = { mediaId: m.id };
+      art = { url: m.url, size: { width: m.width, height: m.height } };
+      drawArt();
+    },
+  });
+  function drawArt() {
+    const sz = art.size;
+    const ok = sz && sz.width === sz.height && sz.width >= 1400 && sz.width <= 3000;
+    artSlot.replaceChildren(artImg(art.url, s.title),
+      h('div', null,
+        h('p', { class: sz && !ok ? 'error' : 'hint' }, sz
+          ? `${sz.width} × ${sz.height} pixels. ${ok ? 'Good for Apple Podcasts.' : 'Apple needs a square image 1400 to 3000 pixels wide.'}`
+          : 'A square JPEG or PNG, 1400 to 3000 pixels wide. This is what listeners see in every app.'),
+        h('div', { class: 'actions', style: 'margin-top:8px' }, artUp.button),
+        artUp.el));
+  }
+  drawArt();
+
+  const title = h('input', { type: 'text', required: true, value: s.title });
+  const desc = h('textarea', { rows: 6 }, s.description ?? '');
+  const author = h('input', { type: 'text', value: s.author ?? '', placeholder: 'The name listeners see under the title' });
+  const [lang, langList] = languageInput(s.language);
+  const cats = [0, 1, 2].map((i) => categorySelect(d.categories, s.categories[i], i > 0));
+  const ownerName = h('input', { type: 'text', value: s.ownerName ?? '' });
+  const ownerEmail = h('input', { type: 'email', value: s.ownerEmail ?? '' });
+  const link = h('input', { type: 'url', value: s.link ?? '', placeholder: 'https://example.com' });
+  const copyright = h('input', { type: 'text', value: s.copyright ?? '', placeholder: `© ${new Date().getFullYear()} ${s.author ?? ''}`.trim() });
+  const type = h('select', null, h('option', { value: 'episodic' }, 'Episodic: newest first'), h('option', { value: 'serial' }, 'Serial: in order, start at episode 1'));
+  type.value = s.type ?? 'episodic';
+  const explicit = h('input', { type: 'checkbox', checked: s.explicit });
+  const medium = h('select', null, h('option', { value: '' }, 'Not set (podcast)'), d.mediums.map((m) => h('option', { value: m }, m[0].toUpperCase() + m.slice(1))));
+  medium.value = s.medium ?? '';
+  const locked = h('select', null, h('option', { value: '' }, 'Not set'), h('option', { value: 'true' }, 'Locked: other hosts may not import this feed'), h('option', { value: 'false' }, 'Unlocked'));
+  locked.value = s.locked === null ? '' : String(s.locked);
+  const lockedOwner = h('input', { type: 'email', value: s.lockedOwner ?? '', placeholder: 'Defaults to the owner email' });
+  const complete = h('input', { type: 'checkbox', checked: s.complete });
+  const block = h('input', { type: 'checkbox', checked: s.block });
+  const newFeed = h('input', { type: 'url', value: s.newFeedUrl ?? '', placeholder: 'Only when moving this show to another host' });
+  const other = h('textarea', { class: 'code', id: 'show-other-tags', rows: Math.min(16, Math.max(4, (s.otherTags.match(/\n/g)?.length ?? 0) + 2)), spellcheck: 'false' }, s.otherTags);
+
+  const form = h('form', {
+    novalidate: true,
+    onsubmit: (ev) => {
+      ev.preventDefault();
+      err.hidden = true;
+      if (artUp.busy()) return showError(err, 'Wait for the upload to finish.');
+      if (newFeed.value && newFeed.value !== (s.newFeedUrl ?? '') &&
+        !confirm('A new feed address tells Apple and other apps to move every subscriber to that address. Only do this when you’re leaving this host. Continue?')) return;
+      busy(form, async () => {
+        try {
+          const body = {
+            title: title.value, description: desc.value, author: author.value, language: lang.value,
+            categories: cats.map((c) => c.get()).filter(Boolean),
+            ownerName: ownerName.value, ownerEmail: ownerEmail.value, link: link.value || null, copyright: copyright.value,
+            type: type.value, explicit: explicit.checked, medium: medium.value || null,
+            locked: locked.value === '' ? null : locked.value === 'true', lockedOwner: lockedOwner.value || null,
+            complete: complete.checked, block: block.checked, newFeedUrl: newFeed.value || null, otherTags: other.value,
+          };
+          if (image !== undefined) body.image = image;
+          await api('PUT', `/api/podcasts/${p.id}/details`, body);
+          toast('Show details saved');
+          await refreshPodcasts();
+          reload();
+        } catch (e) {
+          showError(err, e);
+        }
+      });
+    },
+  },
+  h('fieldset', { class: 'plain', disabled: !canEdit },
+    h('section', { class: 'panel' },
+      h('h2', null, 'Artwork'), artSlot),
+    h('section', { class: 'panel' },
+      h('h2', null, 'About the show'),
+      field('Title', title),
+      field('Description', desc, 'What the show is about. Directories show this on the show page.'),
+      h('div', { class: 'row' }, field('Author', author), h('div', { class: 'field' }, h('label', { for: (lang.id = 'show-lang') }, 'Language'), lang, langList)),
+      h('div', { class: 'row' }, field('Category', cats[0].el), field('Second category', cats[1].el), field('Third category', cats[2].el)),
+      h('div', { class: 'row' }, field('Owner name', ownerName), field('Owner email', ownerEmail)),
+      h('div', { class: 'row' }, field('Website', link), field('Copyright', copyright)),
+      h('div', { class: 'row' }, field('Show type', type), h('div', { class: 'field' }, h('label', { class: 'check' }, explicit, 'Explicit content')))),
+    h('section', { class: 'panel' }, h('details', { open: s.otherTags ? true : null },
+      h('summary', null, 'More tags and options'),
+      h('div', { style: 'margin-top:16px' },
+        h('div', { class: 'row' }, field('Medium', medium), field('Locked', locked), field('Lock owner email', lockedOwner)),
+        h('label', { class: 'check' }, complete, 'This show is finished: no more episodes'),
+        h('label', { class: 'check', style: 'margin-top:8px' }, block, 'Hide this show from Apple Podcasts'),
+        h('div', { class: 'field', style: 'margin-top:16px' },
+          h('label', { for: 'show-other-tags' }, 'Other tags'), other,
+          h('p', { class: 'hint' }, 'Any other iTunes or Podcasting 2.0 channel tags, as XML: funding, value, people, podroll, trailers, location and so on. Live shows are managed on the Live tab.')),
+        field('New feed address', newFeed, 'Sets <itunes:new-feed-url>. Leave blank unless you’re moving this show away from here.'),
+        s.podcastGuid ? h('p', { class: 'hint' }, `Podcast GUID: ${s.podcastGuid}`) : null))),
+    err,
+    canEdit ? h('div', { class: 'actions', style: 'margin-bottom:24px' }, h('button', { class: 'primary', type: 'submit' }, 'Save show details')) : null));
+
+  return h('div', null, d.checklist.length ? checklistPanel(d.checklist) : null, form);
+}
+
+function checklistPanel(items, extra) {
+  return h('section', { class: 'panel checklist' },
+    h('h2', null, 'Before you submit to Apple Podcasts and Spotify'),
+    h('ul', null, items.map((t) => h('li', null, t))),
+    extra ?? null);
+}
+
+// ───────────── new show ─────────────
+
+async function viewNewShow() {
+  const err = formError();
+  const title = h('input', { type: 'text', required: true, placeholder: 'Garden Talk' });
+  const slug = h('input', { type: 'text', pattern: '[a-z0-9](?:[a-z0-9\\-]{0,58}[a-z0-9])?', placeholder: 'garden-talk' });
+  const desc = h('textarea', { rows: 4 });
+  const author = h('input', { type: 'text', value: state.me.displayName ?? '' });
+  const [lang, langList] = languageInput('en');
+  const { categories } = await api('GET', '/api/categories');
+  const cat = categorySelect(categories, null, false);
+  const ownerEmail = h('input', { type: 'email', value: state.me.email });
+  const explicit = h('input', { type: 'checkbox' });
+  const preview = h('span');
+  let slugEdited = false;
+  const auto = () => title.value.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+  const update = () => {
+    if (!slugEdited) slug.value = auto();
+    preview.textContent = `${state.setup.publicBaseUrl}/${slug.value || 'your-show'}/feed.xml`;
+  };
+  title.addEventListener('input', update);
+  slug.addEventListener('input', () => {
+    slugEdited = true;
+    slug.value = slug.value.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+    update();
+  });
+  update();
+
+  const form = h('form', {
+    class: 'panel',
+    onsubmit: (ev) => {
+      ev.preventDefault();
+      err.hidden = true;
+      busy(form, async () => {
+        try {
+          const { podcast } = await api('POST', '/api/podcasts', {
+            title: title.value, slug: slug.value || undefined, description: desc.value, author: author.value,
+            language: lang.value, categories: cat.get() ? [cat.get()] : [], ownerEmail: ownerEmail.value, ownerName: author.value,
+            explicit: explicit.checked,
+          });
+          await refreshPodcasts();
+          toast('Show created. Add the artwork next.');
+          go(`#/show/${podcast.id}/details`);
+        } catch (e) {
+          showError(err, e);
+        }
+      });
+    },
+  },
+  h('h2', null, 'Start a new show'),
+  h('p', { class: 'muted' }, 'You can change everything except the feed address later.'),
+  field('Title', title),
+  field('Feed address', slug, 'Lowercase letters, numbers and dashes. This can’t change once the show is listed.'),
+  h('p', { class: 'preview', style: 'margin-top:-8px;margin-bottom:16px' }, h('b', null, 'Your feed'), preview),
+  field('Description', desc),
+  h('div', { class: 'row' }, field('Author', author), h('div', { class: 'field' }, h('label', { for: (lang.id = 'new-lang') }, 'Language'), lang, langList)),
+  h('div', { class: 'row' }, field('Category', cat.el), field('Owner email', ownerEmail, 'Not shown to listeners in most apps.')),
+  h('label', { class: 'check' }, explicit, 'Explicit content'),
+  err,
+  h('div', { class: 'actions' }, h('button', { class: 'primary', type: 'submit' }, 'Create show')));
+
+  return h('div', { class: 'page' }, h('div', { class: 'page-head' }, h('h1', null, 'Start a new show')), form);
 }
 
 // Stats prefixes: one checkbox per service, ID fields where needed, order for the chain

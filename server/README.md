@@ -87,8 +87,10 @@ The dashboard is served at `/`. It's plain JavaScript and CSS in `web/`, with no
 
 - **Shows:** each show opens with a status strip: feed live, media copied, old feed redirecting here, Podping, and on air.
 - **Finish moving this show:** a checklist that confirms the media is copied, checks for you whether the old host's 301 redirect is in place (and whether it's permanent), and walks you to turning on Podping.
-- **Episodes, Stats prefixes, Podping, Live and Settings** tabs. Stats prefixes are checkboxes, with ID fields where a service needs one, arrows to set the order, and a preview of the resulting episode link.
-- **Import a show,** with live progress and the import notes.
+- **Episodes:** publish new episodes and edit any episode, imported or new (see [Publishing](#publishing)).
+- **Show details:** artwork, title, description, categories, owner and every other channel tag, with a checklist of what Apple Podcasts and Spotify still need.
+- **Stats prefixes, Podping, Live and Settings** tabs. Stats prefixes are checkboxes, with ID fields where a service needs one, arrows to set the order, and a preview of the resulting episode link.
+- **Import a show,** with live progress and the import notes, or **Start a new show** from scratch.
 - **Account** (change password) and **People** (admins add podcasters).
 
 Security: the pages are served with a strict Content Security Policy (scripts only from this server), all feed content is shown as plain text, and every change goes through the same API checks as before.
@@ -96,6 +98,16 @@ Security: the pages are served with a strict Content Security Policy (scripts on
 The typeface (Archivo) loads from Google Fonts. Without internet access, the dashboard falls back to the system font.
 
 Migrations run automatically on startup. The **first account registered becomes the admin**. After that, the admin creates accounts unless `ALLOW_REGISTRATION=1`.
+
+### Publishing
+
+- **New shows** get a feed straight away, a `podcast:guid` made from the feed address, and Podping switched on (there's no old host to move away from).
+- **Episodes** are a draft (not in the feed), published now, or scheduled for a date. Saving a draft without audio is fine; publishing needs it.
+- **Uploads** (audio, video, artwork, transcripts, chapters) are sent in 8 MB chunks, because Cloudflare Tunnel refuses any request over 100 MB. A dropped connection resumes where it stopped. Files are stored with the rest of the show's media (`<show>/media/audio/…`), on this server or the storage provider.
+- **Length and image size are read from the file:** MP3 (including VBR), M4A/MP4, WAV and Opus for `itunes:duration`; PNG, JPEG and WebP for the artwork check. You can type the length over it.
+- **Transcripts and chapters** have their own fields. **Every other tag** (people, soundbites, location, value, alternate enclosures, anything an import brought along) is editable as XML under *More tags and options*, checked before it's saved. Editing one field never changes the others.
+- **Podping:** a newly published or scheduled episode is announced when it appears in the feed; editing or unpublishing a public episode announces the change. The show's Podping switch still applies.
+- **Files are cleaned up:** replacing the audio or artwork, or deleting an episode, removes files nothing else uses. Uploads never saved into an episode are removed after two days.
 
 ### Settings (environment variables)
 
@@ -224,7 +236,7 @@ sudo cloudflared service install && sudo systemctl enable --now cloudflared
 
 ## API
 
-All `/api` calls use a session cookie. Requests that change something must send `Content-Type: application/json`.
+All `/api` calls use a session cookie. Requests that change something must send `Content-Type: application/json` (upload chunks: `application/octet-stream`).
 
 | Method | Path | Who |
 |---|---|---|
@@ -236,7 +248,15 @@ All `/api` calls use a session cookie. Requests that change something must send 
 | GET | `/site/logo` · `/site/favicon` | public |
 | GET · PUT | `/api/admin/storage` · POST `/api/admin/storage/test` | admin |
 | GET | `/api/podcasts` | your own shows, plus ones shared with you |
-| GET | `/api/podcasts/:id` · `/episodes` · `/prefixes` | viewer+ |
+| POST | `/api/podcasts` `{title, slug?, …show details}` (start a new show) | signed in |
+| GET | `/api/categories` (Apple categories, podcast:medium values) | signed in |
+| GET | `/api/podcasts/:id` · `/episodes` · `/episodes/:episodeId` · `/details` · `/prefixes` | viewer+ |
+| PUT | `/api/podcasts/:id/details` (show details) | editor+ |
+| POST · PATCH · DELETE | `/api/podcasts/:id/episodes` · `/episodes/:episodeId` (PATCH changes only the fields sent) | editor+ |
+| POST | `/api/podcasts/:id/uploads` `{filename, size, kind?}` → `{upload}` | editor+ |
+| GET · PUT · DELETE | `/api/podcasts/:id/uploads/:uploadId` (status · chunk at `?offset=` · cancel) | editor+ |
+| POST | `/api/podcasts/:id/uploads/:uploadId/complete` → `{media}` | editor+ |
+| DELETE | `/api/podcasts/:id/media/:mediaId` (only when unused) | editor+ |
 | POST | `/api/podcasts/:id/redirect-check` (is the old feed 301-redirecting here?) | editor+ |
 | PUT | `/api/podcasts/:id/prefixes` | editor+ |
 | GET · PUT | `/api/podcasts/:id/podping` (status · show switch) | viewer+ · editor+ |
