@@ -42,13 +42,15 @@ So nobody can import a show they don't own, each import pauses after reading the
 - **A tag in the feed.** Add `<podcast:txt purpose="verify">feedhost-verify-…</podcast:txt>` (the Podcasting 2.0 verification tag) to the feed at the current host, then click **Check my feed now**. Hosts without custom tags: paste the code into the show description instead. The tag can be removed after the import.
 - **An emailed code.** A 6-digit code goes to the owner address in the feed (`<itunes:owner>`, or `<managingEditor>`), never to the person importing. Codes last 30 minutes, are stored only as a hash, allow 5 tries, and can be resent once a minute, up to 5 times.
 
-Admins can **skip** verification for shows they manage. Unfinished verifications expire after 7 days, and cancelling is always possible. **Site settings → Ownership verification** turns the requirement on or off (on by default) and holds the email server settings:
+Admins can **skip** verification for shows they manage. Unfinished verifications expire after 7 days, and cancelling is always possible. **Site settings → Ownership verification** turns the requirement on or off (on by default) and sets how email is sent, through **Resend** or an **SMTP server**:
 
-| Setting | Notes |
+| Option | Settings |
 |---|---|
-| Mail server · Security · Port | STARTTLS (587), TLS (465) or none; certificates are checked |
-| Username · Password | Optional. AUTH PLAIN or LOGIN. The password is never shown again |
-| From | e.g. `Johns Creek Studios <podcasts@johnscreekstudios.com>` |
+| Resend | API key with Sending access (resend.com/api-keys); the From address must be on a domain verified at resend.com/domains |
+| SMTP server | Mail server, security (STARTTLS 587, TLS 465, or none; certificates are checked), port, optional username and password (AUTH PLAIN or LOGIN) |
+| Both | From, e.g. `Johns Creek Studios <podcasts@johnscreekstudios.com>` |
+
+Keys and passwords are never shown again after saving. Resend requests carry an idempotency key, so a retry never sends twice, and common Resend errors (bad key, unverified domain, quota) are explained in plain words.
 
 **Send test email** confirms the settings work. Without email set up, podcasters verify with the feed tag.
 
@@ -239,7 +241,7 @@ If you don't have access to a podcast, you get **404**, so the existence of othe
 ## Tests
 
 ```bash
-npm test     # 137 tests: feed engine, import worker, API and isolation
+npm test     # 144 tests: feed engine, import worker, API and isolation
 ```
 
 `npm run demo` starts a throwaway demo (two imported shows, one on air) at `http://127.0.0.1:8099`, signed in as `randy@johnscreekstudios.com` with the password `demo password 123`. It uses the same local test database as the tests below.
@@ -253,7 +255,7 @@ The import and API tests need a local PostgreSQL that allows trust auth for the 
 | Feed engine | `src/feed/`: parser, builder, stats prefixes, media references |
 | Database | `src/db/`: migrations, feed save/load, the `podcastRole` access check |
 | Import | `src/import/`: SSRF-guarded HTTP, job queue, ownership verification, resumable media copy |
-| Email | `src/mail/`: SMTP client (TLS, STARTTLS, AUTH PLAIN/LOGIN) |
+| Email | `src/mail/`: Resend API client and SMTP client (TLS, STARTTLS, AUTH PLAIN/LOGIN) |
 | Accounts | `src/auth/`: scrypt passwords, hashed session tokens, login rate limiting |
 | HTTP | `src/http/`: routes, CSRF checks, public feed with ETag caching, 301 check, dashboard files |
 | Dashboard | `web/`: index.html, app.js, styles.css |

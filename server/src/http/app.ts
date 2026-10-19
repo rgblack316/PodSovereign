@@ -23,7 +23,7 @@ import { buildPrefixChain, PREFIX_SERVICES, PrefixError, type PrefixSetting } fr
 import { isPrivateAddress } from '../import/http.js';
 import { enqueueImport, ImportError, KIND_DIRS } from '../import/importer.js';
 import { cancelImport, checkCode, checkFeed, markVerified, sendCode, VERIFY_EXPIRES_DAYS, VerifyError, verifyingJob } from '../import/verify.js';
-import { sendMail, SmtpError } from '../mail/smtp.js';
+import { MailError, sendEmail } from '../mail/mailer.js';
 import { createLiveItem, deleteLiveItem, listLiveItems, LiveError, setLiveStatus, updateLiveItem } from '../live/live.js';
 import { latestPings, podpingEnabled, queuePing, setShowPodping } from '../podping/podping.js';
 import { feedPath } from '../urls.js';
@@ -461,8 +461,8 @@ export function createApp(deps: AppDeps) {
         ? {
             token: verify_token,
             tag: `<podcast:txt purpose="verify">${verify_token}</podcast:txt>`,
-            canEmail: !!config.smtp && !!verify_email,
-            emailReason: !config.smtp ? 'not_configured' : !verify_email ? 'no_owner_email' : null,
+            canEmail: !!config.mail && !!verify_email,
+            emailReason: !config.mail ? 'not_configured' : !verify_email ? 'no_owner_email' : null,
             codeSent: !!verify_code_expires && new Date(verify_code_expires).getTime() > Date.now(),
             expiresInDays: VERIFY_EXPIRES_DAYS,
           }
@@ -484,7 +484,7 @@ export function createApp(deps: AppDeps) {
     try {
       r = await sendCode(db, config, ctx.params.id!, user.id);
     } catch (e) {
-      if (e instanceof SmtpError) throw new VerifyError(`The code couldn’t be sent: ${e.message}. Use the feed tag instead, or ask an admin to check the email settings.`, 502);
+      if (e instanceof MailError) throw new VerifyError(`The code couldn’t be sent: ${e.message}. Use the feed tag instead, or ask an admin to check the email settings.`, 502);
       throw e;
     }
     sendJson(ctx.res, 200, { ...r, job: await jobJson(user.id, ctx.params.id!) });
@@ -513,11 +513,11 @@ export function createApp(deps: AppDeps) {
 
   router.post('/api/admin/site/test-email', async (ctx) => {
     const user = await requireAdmin(ctx);
-    if (!config.smtp) throw new HttpError(400, 'Save the email settings first');
+    if (!config.mail) throw new HttpError(400, 'Save the email settings first');
     const body = await readJson(ctx.req);
     const to = typeof body.to === 'string' && body.to.trim() ? body.to.trim() : user.email;
     try {
-      await sendMail(config.smtp, {
+      await sendEmail(config, {
         to,
         subject: `Test email from ${config.siteName}`,
         text: `This is a test from ${config.siteName} (${config.publicBaseUrl}).\n\nIf you got it, email is set up: podcasters can now confirm they own a show with an emailed code.`,

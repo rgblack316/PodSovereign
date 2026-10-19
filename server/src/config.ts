@@ -39,8 +39,10 @@ export interface Config {
   storageMoveFrom: { provider: string; settings: Record<string, string | boolean>; secret: string | null } | null;
   /** Importers must prove they own a show before it's imported (Site settings). */
   requireVerification: boolean;
-  /** Outgoing email for verification codes; null = not set up. */
-  smtp: import('./mail/smtp.js').SmtpConfig | null;
+  /** Outgoing email for verification codes (SMTP or Resend); null = not set up. */
+  mail: import('./mail/mailer.js').MailSettings | null;
+  /** Resend API base URL (overridable for tests). */
+  resendApiUrl: string;
   /** Hostnames this site used before a base-URL change; requests for them are 301-redirected. */
   previousHosts: string[];
   /**
@@ -86,7 +88,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     storage: { provider: 'local', settings: {}, secret: null },
     storageMoveFrom: null,
     requireVerification: true,
-    smtp: null,
+    mail: null,
+    resendApiUrl: env.RESEND_API_URL ?? 'https://api.resend.com',
     previousHosts: [],
     envDefaults: {
       publicBaseUrl,

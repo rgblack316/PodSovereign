@@ -35,6 +35,8 @@ interface Row {
   smtp_user: string | null;
   smtp_password: string | null;
   smtp_from: string | null;
+  mail_provider: 'smtp' | 'resend';
+  resend_api_key: string | null;
   updated_at: Date;
 }
 
@@ -70,16 +72,24 @@ export function applyRow(config: Config, row: Row): void {
   config.cookieSecure = env.cookieSecure ?? config.publicBaseUrl.startsWith('https://');
   config.previousHosts = row.previous_hosts ?? [];
   config.requireVerification = row.require_verification ?? true;
-  config.smtp = row.smtp_host && row.smtp_from
-    ? {
-        host: row.smtp_host,
-        port: row.smtp_port ?? (row.smtp_security === 'tls' ? 465 : 587),
-        security: row.smtp_security ?? 'starttls',
-        user: row.smtp_user,
-        password: row.smtp_password,
-        from: row.smtp_from,
-      }
-    : null;
+  config.mail =
+    row.mail_provider === 'resend'
+      ? row.resend_api_key && row.smtp_from
+        ? { provider: 'resend', apiKey: row.resend_api_key, from: row.smtp_from, apiUrl: config.resendApiUrl }
+        : null
+      : row.smtp_host && row.smtp_from
+        ? {
+            provider: 'smtp',
+            smtp: {
+              host: row.smtp_host,
+              port: row.smtp_port ?? (row.smtp_security === 'tls' ? 465 : 587),
+              security: row.smtp_security ?? 'starttls',
+              user: row.smtp_user,
+              password: row.smtp_password,
+              from: row.smtp_from,
+            },
+          }
+        : null;
   config.siteVersion = new Date(row.updated_at).getTime();
 }
 
@@ -99,8 +109,14 @@ export async function siteSettingsView(db: Db, config: Config) {
     podpingKeyFromEnv: !row.podping_token && !!config.envDefaults.podpingToken,
     storageProvider: row.storage_provider,
     requireVerification: config.requireVerification,
+    mail: {
+      configured: !!config.mail,
+      provider: row.mail_provider ?? 'smtp',
+      from: row.smtp_from ?? '',
+      resendKeySet: !!row.resend_api_key,
+    },
     smtp: {
-      configured: !!config.smtp,
+      configured: config.mail?.provider === 'smtp',
       host: row.smtp_host ?? '',
       port: row.smtp_port ?? null,
       security: row.smtp_security ?? 'starttls',
@@ -144,6 +160,8 @@ export interface SettingsInput {
   requireVerification?: unknown;
   /** Email server, or null to remove it. A blank password keeps the saved one. */
   smtp?: unknown;
+  /** Resend: { apiKey?, from }. A blank key keeps the saved one. null removes it. */
+  resend?: unknown;
 }
 
 export interface SaveResult {
@@ -194,11 +212,28 @@ export async function saveSiteSettings(db: Db, config: Config, input: SettingsIn
     if (typeof input.requireVerification !== 'boolean') throw new SettingsError('requireVerification must be true or false');
     set('require_verification', input.requireVerification);
   }
+  if (input.resend !== undefined) {
+    if (input.resend === null) {
+      set('resend_api_key', null);
+    } else {
+      const o = (input.resend ?? {}) as Record<string, unknown>;
+      const from = validateFrom(o.from);
+      const key = typeof o.apiKey === 'string' ? o.apiKey.trim() : '';
+      const row = await getRow(db);
+      if (key && !/^re_[A-Za-z0-9_-]{8,}$/.test(key)) throw new SettingsError('A Resend API key starts with re_');
+      if (!key && !row.resend_api_key) throw new SettingsError('Enter your Resend API key');
+      if (key) set('resend_api_key', key);
+      set('smtp_from', from);
+      set('mail_provider', 'resend');
+    }
+  }
   if (input.smtp !== undefined) {
     if (input.smtp === null) {
-      for (const c of ['smtp_host', 'smtp_port', 'smtp_security', 'smtp_user', 'smtp_password', 'smtp_from']) set(c, null);
+      for (const c of ['smtp_host', 'smtp_port', 'smtp_security', 'smtp_user', 'smtp_password']) set(c, null);
+      set('mail_provider', 'smtp');
     } else {
       const m = validateSmtp(input.smtp);
+      set('mail_provider', 'smtp');
       set('smtp_host', m.host);
       set('smtp_port', m.port);
       set('smtp_security', m.security);
@@ -304,6 +339,15 @@ export interface SmtpInput {
   from: string;
 }
 
+export function validateFrom(raw: unknown): string {
+  const from = typeof raw === 'string' ? raw.trim() : '';
+  const fromAddr = (/<([^>]+)>/.exec(from)?.[1] ?? from).trim();
+  if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(fromAddr) || /[\r\n]/.test(from)) {
+    throw new SettingsError('“From” must be an email address, optionally with a name: Studio Name <podcasts@example.com>');
+  }
+  return from;
+}
+
 export function validateSmtp(raw: unknown): SmtpInput {
   const o = (raw ?? {}) as Record<string, unknown>;
   const host = typeof o.host === 'string' ? o.host.trim() : '';
@@ -311,11 +355,7 @@ export function validateSmtp(raw: unknown): SmtpInput {
   const security = o.security === 'tls' || o.security === 'none' ? o.security : 'starttls';
   const port = o.port === undefined || o.port === '' || o.port === null ? (security === 'tls' ? 465 : 587) : Number(o.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new SettingsError('Port must be a number between 1 and 65535');
-  const from = typeof o.from === 'string' ? o.from.trim() : '';
-  const fromAddr = (/<([^>]+)>/.exec(from)?.[1] ?? from).trim();
-  if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(fromAddr) || /[\r\n]/.test(from)) {
-    throw new SettingsError('“From” must be an email address, optionally with a name: Studio Name <podcasts@example.com>');
-  }
+  const from = validateFrom(o.from);
   const user = typeof o.user === 'string' && o.user.trim() ? o.user.trim() : null;
   const password = typeof o.password === 'string' && o.password ? o.password : undefined;
   return { host, port, security, user, password, from };

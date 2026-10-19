@@ -12,7 +12,7 @@ import type { Config } from '../config.js';
 import { maybeOne, type Db } from '../db/db.js';
 import { parseFeed } from '../feed/parser.js';
 import type { Feed } from '../feed/types.js';
-import { sendMail } from '../mail/smtp.js';
+import { sendEmail } from '../mail/mailer.js';
 import { fetchFeedText, withRetry } from './http.js';
 
 export class VerifyError extends Error {
@@ -137,7 +137,7 @@ export async function checkFeed(db: Db, config: Config, jobId: string, userId: s
 /** Email a 6-digit code to the feed's owner address. */
 export async function sendCode(db: Db, config: Config, jobId: string, userId: string): Promise<{ sentTo: string }> {
   const job = await verifyingJob(db, jobId, userId);
-  if (!config.smtp) throw new VerifyError('Email isn’t set up on this server yet. Use the feed tag instead, or ask an admin.');
+  if (!config.mail) throw new VerifyError('Email isn’t set up on this server yet. Use the feed tag instead, or ask an admin.');
   if (!job.verify_email) throw new VerifyError('This feed doesn’t list an owner email (<itunes:owner>), so use the feed tag instead.');
   if (job.verify_sends >= MAX_SENDS) throw new VerifyError('Too many codes sent for this import. Use the feed tag instead, or start the import again later.', 429);
   if (job.verify_code_expires) {
@@ -146,7 +146,7 @@ export async function sendCode(db: Db, config: Config, jobId: string, userId: st
   }
   const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
   const title = job.preview?.title ?? 'your podcast';
-  await sendMail(config.smtp, {
+  await sendEmail(config, {
     to: job.verify_email,
     subject: `${code} is your code to move ${title} to ${config.siteName}`,
     text: [

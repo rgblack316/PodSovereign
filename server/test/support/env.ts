@@ -51,7 +51,8 @@ export function testConfig(over: Partial<Config> = {}): Config {
     storage: { provider: 'local', settings: {}, secret: null },
     storageMoveFrom: null,
     requireVerification: false,
-    smtp: null,
+    mail: null,
+    resendApiUrl: 'http://127.0.0.1:1',
     previousHosts: [],
     ...over,
   };

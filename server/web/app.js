@@ -1408,7 +1408,22 @@ function verifyPanel(s) {
   });
 
   const m = s.smtp;
+  const mail = s.mail;
+  let provider = mail.provider;
   const err = formError();
+  const from = h('input', { type: 'text', value: mail.from, placeholder: `${siteName()} <podcasts@example.com>` });
+
+  // Resend
+  const resendKey = h('input', { type: 'password', autocomplete: 'off', placeholder: mail.resendKeySet ? 'Saved. Leave blank to keep it.' : 're_…' });
+  const resendBox = h('div', null,
+    h('p', { class: 'hint' }, 'Create an API key with Sending access at ',
+      h('a', { href: 'https://resend.com/api-keys', target: '_blank', rel: 'noopener' }, 'resend.com/api-keys'),
+      ', and verify your domain at ',
+      h('a', { href: 'https://resend.com/domains', target: '_blank', rel: 'noopener' }, 'resend.com/domains'),
+      '. The From address must be on that domain.'),
+    h('div', { class: 'fields-grid' }, field('Resend API key', resendKey)));
+
+  // SMTP
   const hostIn = h('input', { type: 'text', value: m.host, placeholder: 'smtp.example.com', autocomplete: 'off' });
   const sec = h('select', null, h('option', { value: 'starttls' }, 'STARTTLS (usually port 587)'), h('option', { value: 'tls' }, 'TLS (usually port 465)'), h('option', { value: 'none' }, 'None (not recommended)'));
   sec.value = m.security;
@@ -1416,8 +1431,20 @@ function verifyPanel(s) {
   sec.addEventListener('change', () => { port.placeholder = sec.value === 'tls' ? '465' : '587'; });
   const user = h('input', { type: 'text', value: m.user, autocomplete: 'off' });
   const pass = h('input', { type: 'password', autocomplete: 'new-password', placeholder: m.passwordSet ? 'Saved. Leave blank to keep it.' : '' });
-  const from = h('input', { type: 'text', value: m.from, placeholder: `${siteName()} <podcasts@example.com>` });
-  const testTo = h('input', { type: 'email', placeholder: state.me.email, 'aria-label': 'Send the test to' });
+  const smtpBox = h('div', { class: 'fields-grid' },
+    field('Mail server', hostIn), field('Security', sec), field('Port', port), field('Username', user), field('Password', pass));
+
+  const boxes = h('div');
+  const drawBox = () => boxes.replaceChildren(provider === 'resend' ? resendBox : smtpBox);
+  const choice = (value, label, blurb) => {
+    const r = h('input', { type: 'radio', name: 'mail-provider', value, checked: provider === value, onchange: () => { provider = value; err.hidden = true; drawBox(); } });
+    return h('label', { class: `provider ${provider === value ? 'chosen' : ''}` }, r, h('span', null, h('b', null, label), h('span', { class: 'hint' }, blurb)));
+  };
+  const choices = h('div', { class: 'providers', role: 'radiogroup', 'aria-label': 'How email is sent' },
+    choice('resend', 'Resend', 'Send through Resend’s API with an API key.'),
+    choice('smtp', 'SMTP server', 'Your email provider’s SMTP server (Postmark, SES, Gmail, your host…).'));
+  choices.addEventListener('change', () => choices.querySelectorAll('.provider').forEach((el) => el.classList.toggle('chosen', el.querySelector('input').checked)));
+  drawBox();
 
   const form = h('form', {
     onsubmit: (ev) => {
@@ -1425,9 +1452,9 @@ function verifyPanel(s) {
       err.hidden = true;
       busy(form, async () => {
         try {
-          await api('PUT', '/api/admin/site', {
-            smtp: { host: hostIn.value, port: port.value, security: sec.value, user: user.value, password: pass.value || undefined, from: from.value },
-          });
+          await api('PUT', '/api/admin/site', provider === 'resend'
+            ? { resend: { apiKey: resendKey.value || undefined, from: from.value } }
+            : { smtp: { host: hostIn.value, port: port.value, security: sec.value, user: user.value, password: pass.value || undefined, from: from.value } });
           toast('Email settings saved');
           render();
         } catch (e) {
@@ -1436,27 +1463,28 @@ function verifyPanel(s) {
       });
     },
   },
-  h('div', { class: 'fields-grid' },
-    field('Mail server', hostIn), field('Security', sec), field('Port', port),
-    field('Username', user), field('Password', pass), field('From', from, 'The sender shown to podcasters.')),
+  choices,
+  boxes,
+  h('div', { class: 'fields-grid' }, field('From', from, 'The sender shown to podcasters, e.g. Studio Name <podcasts@example.com>.')),
   err,
   h('div', { class: 'actions' },
     h('button', { class: 'primary', type: 'submit' }, 'Save email settings'),
-    m.configured ? h('button', {
+    mail.configured ? h('button', {
       type: 'button',
       class: 'quiet',
       onclick: async () => {
         if (!confirm('Remove the email settings? Podcasters will only be able to verify with the feed tag.')) return;
-        await api('PUT', '/api/admin/site', { smtp: null });
+        await api('PUT', '/api/admin/site', { resend: null, smtp: null });
         toast('Email settings removed');
         render();
       },
     }, 'Remove') : null));
 
+  const testTo = h('input', { type: 'email', placeholder: state.me.email, 'aria-label': 'Send the test to' });
   const testMsg = h('p', { class: 'hint', role: 'status' });
   const testBtn = h('button', {
     type: 'button',
-    disabled: !m.configured,
+    disabled: !mail.configured,
     onclick: async () => {
       testBtn.disabled = true;
       testMsg.className = 'hint';
@@ -1477,8 +1505,8 @@ function verifyPanel(s) {
     h('p', { class: 'muted' }, 'Before a show is imported, the person importing it proves they own it: by adding a tag to the feed at their current host, or with a code emailed to the owner address in the feed. Admins can skip it for shows they manage.'),
     h('label', { class: 'switch', style: 'margin:12px 0 20px' }, req, 'Require verification for every import'),
     h('h3', null, 'Email for verification codes'),
-    h('p', { class: 'hint', style: 'margin-bottom:12px' }, m.configured
-      ? h('span', { class: 'light on' }, 'Email is set up')
+    h('p', { class: 'hint', style: 'margin-bottom:12px' }, mail.configured
+      ? h('span', { class: 'light on' }, `Email is set up (${mail.provider === 'resend' ? 'Resend' : 'SMTP'})`)
       : 'Optional. Without it, podcasters verify with the feed tag.'),
     form,
     h('div', { class: 'row', style: 'margin-top:16px' }, h('div', { style: 'flex:0 1 280px' }, testTo), testBtn),
