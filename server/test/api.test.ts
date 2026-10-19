@@ -233,6 +233,19 @@ describe('stats prefixes and the public feed', () => {
     assert.notEqual(feed2.headers.get('etag'), feed1.headers.get('etag'));
   });
 
+  test('the Podping switch: off after import, editors can turn it on, outsiders get 404', async () => {
+    const st = await alice.get(`/api/podcasts/${alicePodcast}/podping`);
+    assert.equal(st.status, 200);
+    assert.equal(st.json.enabled, false);
+    assert.equal(st.json.serverEnabled, false, 'no PODPING_TOKEN in this test server');
+    assert.equal((await bob.put(`/api/podcasts/${alicePodcast}/podping`, { enabled: true })).status, 404);
+    assert.equal((await alice.put(`/api/podcasts/${alicePodcast}/podping`, { enabled: 'yes' })).status, 400);
+    const on = await alice.put(`/api/podcasts/${alicePodcast}/podping`, { enabled: true });
+    assert.equal(on.json.enabled, true);
+    assert.ok(!(await anon.get(`/${slug}/feed.xml`)).text.includes('podcast:podping'), 'tag needs the server token too');
+    await alice.put(`/api/podcasts/${alicePodcast}/podping`, { enabled: false });
+  });
+
   test('invalid prefix settings are rejected and nothing changes', async () => {
     const r = await alice.put(`/api/podcasts/${alicePodcast}/prefixes`, {
       settings: [{ serviceKey: 'magellan', enabled: true, paramValue: '' }],

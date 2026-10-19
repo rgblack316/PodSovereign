@@ -7,7 +7,7 @@ import type { Db } from '../src/db/db.js';
 import { buildFeed } from '../src/feed/builder.js';
 import { parseFeed } from '../src/feed/parser.js';
 import { claimNextJob, enqueueImport, runImportJob } from '../src/import/importer.js';
-import { announceDueEpisodes, podpingMedium, queuePing, sendDuePings } from '../src/podping/podping.js';
+import { announceDueEpisodes, podpingMedium, queuePing, sendDuePings, setShowPodping } from '../src/podping/podping.js';
 import { createUser, FIXTURE, fixtureOn, setupDb, startOldHost, tempDir, testConfig } from './support/env.js';
 
 let db: Db;
@@ -45,14 +45,21 @@ after(async () => {
 const pending = async () =>
   (await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM podping_queue WHERE status = 'pending'`)).rows[0]!.n;
 
-test('a finished import queues one ping for the new feed URL, which is sent to podping.cloud', async () => {
+test('importing sends no ping: the show starts with Podping off', async () => {
   host.feeds.set('p', fixtureOn(host.base));
   await enqueueImport(db, user, `${host.base}/feeds/p.xml`);
   await runImportJob({ db, config }, (await claimNextJob(db))!);
-  const { rows } = await db.query<{ id: string; slug: string }>(`SELECT id, slug FROM podcasts`);
+  const { rows } = await db.query<{ id: string; slug: string; podping_enabled: boolean }>(`SELECT id, slug, podping_enabled FROM podcasts`);
   podcastId = rows[0]!.id;
   slug = rows[0]!.slug;
+  assert.equal(rows[0]!.podping_enabled, false);
+  assert.equal((await db.query(`SELECT 1 FROM podping_queue`)).rowCount, 0);
+  assert.equal(await queuePing(db, config, podcastId), false, 'changes during the migration window are not announced');
+  assert.equal(await announceDueEpisodes(db, config), 0);
+});
 
+test('turning the show switch on announces the feed once', async () => {
+  await setShowPodping(db, config, podcastId, true);
   const { rows: q } = await db.query<Record<string, string>>(`SELECT feed_url, reason, medium, status FROM podping_queue`);
   assert.deepEqual(q, [{ feed_url: `https://feeds.mine.test/${slug}/feed.xml`, reason: 'update', medium: 'podcast', status: 'pending' }]);
 
@@ -63,7 +70,19 @@ test('a finished import queues one ping for the new feed URL, which is sent to p
   assert.equal(ping.url.searchParams.get('url'), `https://feeds.mine.test/${slug}/feed.xml`);
   assert.equal(ping.url.searchParams.get('reason'), 'update');
   assert.equal(ping.url.searchParams.get('medium'), 'podcast');
+
+  await setShowPodping(db, config, podcastId, true);
+  assert.equal(await pending(), 0, 'already on: no extra ping');
+});
+
+test('turning the switch off cancels anything waiting and stops future pings', async () => {
+  await queuePing(db, config, podcastId);
+  assert.equal(await pending(), 1);
+  await setShowPodping(db, config, podcastId, false);
   assert.equal(await pending(), 0);
+  assert.equal(await queuePing(db, config, podcastId), false);
+  await setShowPodping(db, config, podcastId, true);
+  await sendDuePings(db, config);
 });
 
 test('a burst of changes becomes a single ping', async () => {

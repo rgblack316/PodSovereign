@@ -22,7 +22,7 @@ import { buildFeed } from '../feed/builder.js';
 import { buildPrefixChain, PREFIX_SERVICES, PrefixError, type PrefixSetting } from '../feed/prefixes.js';
 import { isPrivateAddress } from '../import/http.js';
 import { enqueueImport, ImportError, KIND_DIRS } from '../import/importer.js';
-import { latestPings, podpingEnabled, queuePing } from '../podping/podping.js';
+import { latestPings, podpingEnabled, queuePing, setShowPodping } from '../podping/podping.js';
 import { feedPath } from '../urls.js';
 import { HttpError, parseCookies, readJson, Router, sendJson, type Ctx } from './router.js';
 
@@ -265,9 +265,27 @@ export function createApp(deps: AppDeps) {
 
   // ───────────── podping ─────────────
 
+  async function podpingStatus(podcastId: string) {
+    const p = (await getPodcastRow(db, podcastId)) as unknown as { podping_enabled: boolean };
+    return {
+      serverEnabled: podpingEnabled(config),
+      enabled: p.podping_enabled,
+      pings: await latestPings(db, podcastId),
+    };
+  }
+
   router.get('/api/podcasts/:id/podping', async (ctx) => {
     const { podcastId } = await requirePodcast(ctx, 'viewer');
-    sendJson(ctx.res, 200, { enabled: podpingEnabled(config), pings: await latestPings(db, podcastId) });
+    sendJson(ctx.res, 200, await podpingStatus(podcastId));
+  });
+
+  /** The show's Podping switch. Turn it on after media is moved and the old host 301-redirects here. */
+  router.put('/api/podcasts/:id/podping', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    const body = await readJson(ctx.req);
+    if (typeof body.enabled !== 'boolean') throw new HttpError(400, 'enabled must be true or false');
+    await db.tx((q) => setShowPodping(q, config, podcastId, body.enabled as boolean));
+    sendJson(ctx.res, 200, await podpingStatus(podcastId));
   });
 
   // ───────────── imports ─────────────
@@ -333,7 +351,7 @@ export function createApp(deps: AppDeps) {
         selfUrl: feedUrl(p.slug),
         prefixChain: chain,
         prefixAlternateEnclosures: prefixCfg.prefixAlternateEnclosures,
-        usesPodping: podpingEnabled(config),
+        usesPodping: podpingEnabled(config) && (p as unknown as { podping_enabled: boolean }).podping_enabled,
       });
       etag = `"${createHash('sha256').update(xml).digest('base64url').slice(0, 27)}"`;
       // Scheduled episodes appear on time because the cache is only kept until the next one is due.

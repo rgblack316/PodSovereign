@@ -24,15 +24,18 @@ export function podpingMedium(podcastMedium: string | null | undefined): string 
   return MEDIUMS.has(m) ? m : 'podcast';
 }
 
-/** Queue a ping for a podcast (no-op when Podping isn't configured or the show isn't live yet). */
+/**
+ * Queue a ping for a podcast. No-op when Podping isn't configured on the server,
+ * the show's own Podping switch is off, or the show is still importing.
+ */
 export async function queuePing(q: Queryable, config: Config, podcastId: string, reason: PingReason = 'update'): Promise<boolean> {
   if (!podpingEnabled(config)) return false;
-  const p = await maybeOne<{ slug: string; status: string; podcast_medium: string | null }>(
+  const p = await maybeOne<{ slug: string; status: string; podcast_medium: string | null; podping_enabled: boolean }>(
     q,
-    `SELECT slug, status, podcast_medium FROM podcasts WHERE id = $1`,
+    `SELECT slug, status, podcast_medium, podping_enabled FROM podcasts WHERE id = $1`,
     [podcastId],
   );
-  if (!p || p.status !== 'active') return false;
+  if (!p || p.status !== 'active' || !p.podping_enabled) return false;
   const r = await q.query(
     `INSERT INTO podping_queue (podcast_id, feed_url, reason, medium, next_try_at)
      VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5))
@@ -116,6 +119,21 @@ export async function sendDuePings(
     }
   }
   return { sent, failed };
+}
+
+/** Turn a show's Podping switch on or off. Turning it on announces the feed once. */
+export async function setShowPodping(q: Queryable, config: Config, podcastId: string, enabled: boolean): Promise<void> {
+  const r = await maybeOne<{ was: boolean }>(
+    q,
+    `UPDATE podcasts p SET podping_enabled = $2, feed_cache_xml = NULL, feed_cache_etag = NULL
+       FROM (SELECT podping_enabled AS was FROM podcasts WHERE id = $1) old
+      WHERE p.id = $1 RETURNING old.was`,
+    [podcastId, enabled],
+  );
+  if (enabled && r && !r.was) await queuePing(q, config, podcastId, 'update');
+  if (!enabled) {
+    await q.query(`DELETE FROM podping_queue WHERE podcast_id = $1 AND status = 'pending'`, [podcastId]);
+  }
 }
 
 export async function latestPings(q: Queryable, podcastId: string) {

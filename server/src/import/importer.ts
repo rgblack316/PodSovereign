@@ -14,7 +14,6 @@ import {
 import { chapterImageUrls, collectMediaRefs, rewriteChapterImages, type MediaKind } from '../feed/media.js';
 import { parseFeed } from '../feed/parser.js';
 import type { Feed } from '../feed/types.js';
-import { queuePing } from '../podping/podping.js';
 import { mediaPath, mediaPrefix, RESERVED_SLUGS } from '../urls.js';
 import { downloadToFile, FetchError, fetchFeedText, withRetry } from './http.js';
 
@@ -416,8 +415,8 @@ async function copyMedia(
       [podcastId, config.mediaBaseUrl],
     );
   });
-  // Tell apps and Podcast Index about the feed at its new home.
-  await queuePing(db, config, podcastId, 'update');
+  // No Podping here on purpose: the show's Podping switch starts off so nothing is
+  // announced until the podcaster has finished moving and set up the 301 redirect.
   await setProgress(db, jobId, { ...progress, stage: 'done' });
 }
 

@@ -52,9 +52,10 @@ Media:  https://podcasts.johnscreekstudios.com/<show>/media/<type>/<file>
 
 When a feed changes, the server announces it through [Podping](https://podping.org), so apps and Podcast Index refresh it within seconds instead of waiting for their next check.
 
-- **Turn it on** by setting `PODPING_TOKEN`. podping.cloud requires a key from Dave Jones at Podcast Index; ask at podcastindex.org.
-- **When it pings:** when an import finishes (announcing the feed at its new address), when stats prefixes change (every media URL changes), and when a scheduled episode's publish time arrives.
-- **What else it does:** a burst of changes is sent as one ping, and failures are retried with backoff (30s, 1m, 2m, 4m, 8m) before giving up. Feeds include `<podcast:podping usesPodping="true"/>` only while it's on; the old host's tag is dropped on import.
+- **Turn it on for the server** by setting `PODPING_TOKEN`. podping.cloud requires a key from Dave Jones at Podcast Index; ask at podcastindex.org.
+- **Each show has its own switch, off after import.** Nothing is announced while the podcaster moves media and sets up the 301 redirect at the old host. Turning the switch on (`PUT /api/podcasts/:id/podping {"enabled": true}`) announces the feed once. Turning it off cancels any pings still waiting.
+- **When it pings (switch on):** when a scheduled episode's publish time arrives, and when stats prefixes change (every media URL changes). Imports never ping.
+- **What else it does:** a burst of changes is sent as one ping, and failures are retried with backoff (30s, 1m, 2m, 4m, 8m) before giving up. Feeds include `<podcast:podping usesPodping="true"/>` only while it's on for both the server and the show; the old host's tag is dropped on import.
 - **Status:** `GET /api/podcasts/:id/podping` shows recent pings.
 - **To confirm once you have a key:** the key is sent in the `Authorization` header. Check with Podcast Index that this is still what podping.cloud expects.
 
@@ -121,7 +122,7 @@ All `/api` calls use a session cookie. Requests that change something must send 
 | GET | `/api/podcasts` | your own shows, plus ones shared with you |
 | GET | `/api/podcasts/:id` · `/episodes` · `/prefixes` | viewer+ |
 | PUT | `/api/podcasts/:id/prefixes` | editor+ |
-| GET | `/api/podcasts/:id/podping` | viewer+ |
+| GET · PUT | `/api/podcasts/:id/podping` (status · show switch) | viewer+ · editor+ |
 | DELETE | `/api/podcasts/:id` | owner |
 | POST | `/api/imports` `{url, slug?}` · GET `/api/imports` · `/api/imports/:id` | your own imports |
 | GET | `/:slug/feed.xml` · `/:slug/media/:type/:file` | public |
@@ -131,7 +132,7 @@ If you don't have access to a podcast, you get **404**, so the existence of othe
 ## Tests
 
 ```bash
-npm test     # 60 tests: feed engine, import worker, API and isolation
+npm test     # 63 tests: feed engine, import worker, API and isolation
 ```
 
 The import and API tests need a local PostgreSQL that allows trust auth for the `postgres` user over its Unix socket. Set `TEST_PG_SOCKET` if the socket isn't at `/var/run/postgresql/.s.PGSQL.5432`. Each test file creates its own throwaway database.
