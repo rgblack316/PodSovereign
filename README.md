@@ -7,9 +7,11 @@ Self-hosted podcast feed host. It imports an existing podcast RSS feed, replicat
 - [x] Feed parser and builder (lossless round trip of all tags)
 - [x] Stats prefixes (OP3, Podtrac, Podscribe, Magellan AI, Blubrry, custom), with detection on import
 - [x] PostgreSQL schema
-- [ ] Import worker (media download and URL rewrite)
-- [ ] Auth and per-user access
-- [ ] API and dashboard
+- [x] Import worker (media download and URL rewrite, resumable, SSRF-guarded)
+- [x] Accounts, sessions and per-user access (owner, editor and viewer roles)
+- [x] JSON API and public feed endpoint
+- [ ] Web dashboard
+- [ ] Podcast ownership verification on import
 - [ ] Docker and Nginx deployment
 
 See [`server/README.md`](server/README.md) for setup and details.
