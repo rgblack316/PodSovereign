@@ -57,7 +57,7 @@ If you don't have access to a podcast, you get **404**, so the existence of othe
 ## Tests
 
 ```bash
-npm test     # 47 tests: feed engine, import worker, API and isolation
+npm test     # 50 tests: feed engine, import worker, API and isolation
 ```
 
 The import and API tests need a local PostgreSQL that allows trust auth for the `postgres` user over its Unix socket. Set `TEST_PG_SOCKET` if the socket isn't at `/var/run/postgresql/.s.PGSQL.5432`. Each test file creates its own throwaway database.
@@ -76,7 +76,17 @@ The import and API tests need a local PostgreSQL that allows trust auth for the 
 1. Fetch the feed. Redirects are followed, and private and internal addresses are blocked, even through DNS tricks.
 2. Refuse the import if the feed is `<podcast:locked>`, if you have already imported it, or if another account already hosts it.
 3. Save everything. Existing stats prefixes are detected and pre-checked, and a `podcast:guid` is generated if the feed has none.
-4. Copy every file: audio, video, artwork, transcripts, chapters, people images, trailers. Live streams are skipped.
+4. Copy every file: audio, video, alternate versions, artwork, transcripts, chapters, people images and trailers, plus **images embedded in show notes** and **images listed inside chapter files**. Chapter files are rewritten to point at the copies. Live streams, plain links and IPFS/torrent sources are skipped.
 5. Rewrite the URLs to point at this server. Files that fail to copy keep their original URL and are listed as warnings.
+
+### Storage layout
+
+```
+MEDIA_DIR/
+└── <podcast-slug>/          one folder per podcast
+    ├── audio/   video/   images/   transcripts/   chapters/   other/
+```
+
+Files are named `<10-char hash>-<original name>`, for example `3f9a1c22b0-episode-12.mp3`. Deleting a podcast removes its folder. Public URLs mirror the layout: `PUBLIC_BASE_URL/media/<slug>/<type>/<file>`.
 
 If the server restarts mid-import, the job resumes and only downloads the files that hadn't finished.

@@ -21,11 +21,12 @@ import {
 import { buildFeed } from '../feed/builder.js';
 import { buildPrefixChain, PREFIX_SERVICES, PrefixError, type PrefixSetting } from '../feed/prefixes.js';
 import { isPrivateAddress } from '../import/http.js';
-import { enqueueImport, ImportError } from '../import/importer.js';
+import { enqueueImport, ImportError, KIND_DIRS } from '../import/importer.js';
 import { HttpError, parseCookies, readJson, Router, sendJson, type Ctx } from './router.js';
 
 export const SESSION_COOKIE = 'fh_session';
 const MAX_ACTIVE_IMPORTS = 3;
+const KIND_DIR_NAMES = new Set(Object.values(KIND_DIRS));
 
 export interface AppDeps {
   db: Db;
@@ -338,10 +339,12 @@ export function createApp(deps: AppDeps) {
   });
 
   /** Development only — in production Nginx serves /media/ directly from MEDIA_DIR. */
-  router.get('/media/:slug/:file', async (ctx) => {
-    const { slug, file } = ctx.params as { slug: string; file: string };
-    if (!/^[a-z0-9-]+$/.test(slug) || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(file)) throw new HttpError(404, 'Not found');
-    const full = path.join(config.mediaDir, slug, file);
+  router.get('/media/:slug/:kind/:file', async (ctx) => {
+    const { slug, kind, file } = ctx.params as { slug: string; kind: string; file: string };
+    if (!/^[a-z0-9-]+$/.test(slug) || !KIND_DIR_NAMES.has(kind) || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(file)) {
+      throw new HttpError(404, 'Not found');
+    }
+    const full = path.join(config.mediaDir, slug, kind, file);
     const row = await maybeOne<{ mime_type: string | null }>(
       db,
       `SELECT mime_type FROM media_files WHERE storage_path = $1 AND status = 'done'`,

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
 import type { Db } from '../src/db/db.js';
@@ -175,4 +175,82 @@ test('resumes an interrupted import without re-downloading finished files', asyn
   assert.deepEqual(refetched.filter((u) => !u.endsWith('ep2.srt')), [redo], 'only the unfinished file is downloaded again');
   const { rows: pod } = await db.query<{ status: string }>(`SELECT status FROM podcasts WHERE id = $1`, [first.podcast_id]);
   assert.equal(pod[0]!.status, 'active');
+});
+
+test('copies images from show notes and chapter files, and stores files in per-type folders', async () => {
+  const B = host.base;
+  host.files.set('/old/ep2.chapters.json', {
+    type: 'application/json+chapters',
+    body: JSON.stringify({
+      version: '1.2.0',
+      chapters: [
+        { startTime: 0, title: 'Intro', img: `${B}/old/chapters/intro.jpg` },
+        { startTime: 60, title: 'Link only', url: `${B}/old/not-a-file` },
+        { startTime: 120, title: 'Relative', img: 'local.jpg' },
+      ],
+    }),
+  });
+  host.feeds.set(
+    'notes',
+    fixtureOn(B, (x) =>
+      x
+        .replace('917393e3', 'dddddddd')
+        .replace('<title>The Test Show', '<title>Notes Show')
+        .replace(
+          '<p>Show notes with a <a href="https://example.com">link</a>.</p>',
+          `<p>Pic: <img src="${B}/old/notes/pic.jpg?w=600&amp;h=400" alt="x"> <a href="${B}/old/notes/page.html">page</a>` +
+            `<img src="data:image/png;base64,iVBORw0KGgo="></p>`,
+        )
+        .replace(
+          '<p>Longer notes</p>',
+          `<p>Longer notes</p><picture><source srcset="${B}/old/notes/wide.webp 2x, ${B}/old/notes/narrow.webp 1x"><img src='${B}/old/notes/pic.jpg?w=600&amp;h=400'></picture>`,
+        ),
+    ),
+  );
+
+  const job = await importNow(bob, `${B}/feeds/notes.xml`);
+  assert.equal(job.status, 'done', job.error);
+  const { rows: pod } = await db.query<{ slug: string }>(`SELECT slug FROM podcasts WHERE id = $1`, [job.podcast_id]);
+  const slug = pod[0]!.slug;
+  const pub = `https://feeds.mine.test/media/${slug}/images/`;
+
+  // Folder layout
+  const dirs = (await readdir(path.join(mediaDir, slug))).sort();
+  assert.deepEqual(dirs, ['audio', 'chapters', 'images', 'transcripts', 'video']);
+
+  const { rows: media } = await db.query<{ original_url: string; kind: string; status: string; storage_path: string; bytes: number }>(
+    `SELECT original_url, kind, status, storage_path, bytes FROM media_files WHERE podcast_id = $1`,
+    [job.podcast_id],
+  );
+  const byUrl = new Map(media.map((m) => [m.original_url, m]));
+  for (const u of ['/old/chapters/intro.jpg', '/old/notes/pic.jpg?w=600&h=400', '/old/notes/wide.webp', '/old/notes/narrow.webp']) {
+    const m = byUrl.get(B + u);
+    assert.ok(m, `copied ${u}`);
+    assert.equal(m.status, 'done');
+    assert.equal(m.kind, 'image');
+    assert.ok(m.storage_path.includes(`/${slug}/images/`));
+  }
+  assert.ok(!byUrl.has(`${B}/old/notes/page.html`), 'plain links are not downloaded');
+  assert.ok(!byUrl.has(`${B}/old/not-a-file`), 'chapter links are not downloaded');
+
+  // Chapters file on disk now points at our copy; links and relative images untouched.
+  const chapters = byUrl.get(`${B}/old/ep2.chapters.json`)!;
+  const json = JSON.parse(await readFile(chapters.storage_path, 'utf8'));
+  assert.ok(json.chapters[0].img.startsWith(pub), json.chapters[0].img);
+  assert.equal(json.chapters[1].url, `${B}/old/not-a-file`);
+  assert.equal(json.chapters[2].img, 'local.jpg');
+  assert.equal(json.version, '1.2.0');
+  assert.equal(chapters.bytes, (await stat(chapters.storage_path)).size);
+
+  // Show notes rewritten; the same image used twice maps to one copy.
+  const feed = (await loadFeed(db, job.podcast_id))!;
+  const notes = feed.items[0]!.description!;
+  const encoded = feed.items[0]!.extra.find((n) => n.name === 'content:encoded')!.text;
+  const picCopy = notes.match(/<img src="([^"]+)"/)![1]!;
+  assert.ok(picCopy.startsWith(pub));
+  assert.ok(encoded.includes(`<img src="${picCopy}">`));
+  assert.match(encoded, new RegExp(`srcset="${pub}[^"]+wide\\.webp 2x, ${pub}[^"]+narrow\\.webp 1x"`));
+  assert.ok(notes.includes(`<a href="${B}/old/notes/page.html">`), 'links left alone');
+  assert.ok(notes.includes('data:image/png;base64'), 'inline images left alone');
+  assert.ok(notes.includes('alt="x"'));
 });

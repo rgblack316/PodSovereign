@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Config } from '../config.js';
 import { maybeOne, one, type Db } from '../db/db.js';
@@ -10,7 +11,7 @@ import {
   uniqueSlug,
   writeFeedContent,
 } from '../db/podcasts.js';
-import { collectMediaRefs, type MediaKind } from '../feed/media.js';
+import { chapterImageUrls, collectMediaRefs, rewriteChapterImages, type MediaKind } from '../feed/media.js';
 import { parseFeed } from '../feed/parser.js';
 import type { Feed } from '../feed/types.js';
 import { downloadToFile, FetchError, fetchFeedText, withRetry } from './http.js';
@@ -236,6 +237,38 @@ export function mediaFilename(url: string, mimeType?: string | null): string {
   return `${hash}-${base}`;
 }
 
+/** Sub-folder for each kind of file inside a podcast's media folder. */
+export const KIND_DIRS: Record<MediaKind, string> = {
+  audio: 'audio',
+  video: 'video',
+  image: 'images',
+  transcript: 'transcripts',
+  chapters: 'chapters',
+  other: 'other',
+};
+
+interface MediaRow {
+  id: string;
+  kind: MediaKind;
+  original_url: string;
+  status: string;
+  storage_path: string | null;
+  public_path: string | null;
+  bytes: number | null;
+}
+
+interface Copied {
+  publicUrl: string;
+  storagePath: string;
+  bytes: number;
+}
+
+/**
+ * Copies every referenced file into MEDIA_DIR/<slug>/<kind>/, then:
+ *  - copies the images listed inside JSON chapter files and rewrites those files,
+ *  - points every reference in the feed (tags, show-notes <img>, srcsets) at the copies.
+ * Already-finished files (from an interrupted run) are not downloaded again.
+ */
 async function copyMedia(
   deps: ImporterDeps,
   jobId: string,
@@ -247,78 +280,114 @@ async function copyMedia(
   const { db, config } = deps;
   const publicPrefix = `${config.publicBaseUrl}/media/${slug}/`;
   const refs = collectMediaRefs(feed).filter((r) => !r.url.startsWith(publicPrefix));
+  const result = new Map<string, Copied>();
+  const progress: ImportProgress = {
+    stage: 'media',
+    episodes: feed.items.length,
+    mediaTotal: 0,
+    mediaDone: 0,
+    mediaFailed: 0,
+    mediaBytes: 0,
+  };
 
-  const unique = new Map<string, MediaKind>();
-  for (const r of refs) if (!unique.has(r.url)) unique.set(r.url, r.kind);
-
-  if (unique.size) {
+  /** Register URLs, then download whichever aren't done yet. */
+  const copyAll = async (wanted: Map<string, MediaKind>) => {
+    if (!wanted.size) return;
     await db.query(
       `INSERT INTO media_files (podcast_id, kind, original_url)
        SELECT $1, x.kind, x.url FROM jsonb_to_recordset($2::jsonb) AS x(kind text, url text)
        ON CONFLICT (podcast_id, original_url) DO NOTHING`,
-      [podcastId, JSON.stringify([...unique].map(([url, kind]) => ({ url, kind })))],
+      [podcastId, JSON.stringify([...wanted].map(([url, kind]) => ({ url, kind })))],
     );
-  }
-  const { rows: media } = await db.query<{ id: string; original_url: string; status: string; public_path: string | null; bytes: number | null }>(
-    `SELECT id, original_url, status, public_path, bytes FROM media_files
-      WHERE podcast_id = $1 AND original_url IN (SELECT jsonb_array_elements_text($2::jsonb))`,
-    [podcastId, JSON.stringify([...unique.keys()])],
-  );
-
-  const result = new Map<string, { publicUrl: string; bytes: number }>();
-  const todo = media.filter((m) => {
-    if (m.status === 'done' && m.public_path) {
-      result.set(m.original_url, { publicUrl: config.publicBaseUrl + m.public_path, bytes: m.bytes ?? 0 });
-      return false;
-    }
-    return true;
-  });
-
-  const progress: ImportProgress = {
-    stage: 'media',
-    episodes: feed.items.length,
-    mediaTotal: media.length,
-    mediaDone: media.length - todo.length,
-    mediaFailed: 0,
-    mediaBytes: 0,
-  };
-  await setProgress(db, jobId, progress);
-
-  let next = 0;
-  const worker = async () => {
-    while (next < todo.length) {
-      const m = todo[next++]!;
-      const filename = mediaFilename(m.original_url);
-      const storagePath = path.join(config.mediaDir, slug, filename);
-      const publicPath = `/media/${slug}/${filename}`;
-      try {
-        const d = await withRetry(() =>
-          downloadToFile(m.original_url, storagePath, {
-            allowPrivate: config.allowPrivateNetworks,
-            maxBytes: config.maxMediaBytes,
-            timeoutMs: 60_000,
-          }),
-        );
-        await db.query(
-          `UPDATE media_files SET status = 'done', error = NULL, storage_path = $2, public_path = $3,
-                  mime_type = $4, bytes = $5, sha256 = $6 WHERE id = $1`,
-          [m.id, storagePath, publicPath, d.mimeType, d.bytes, d.sha256],
-        );
-        result.set(m.original_url, { publicUrl: config.publicBaseUrl + publicPath, bytes: d.bytes });
+    const { rows } = await db.query<MediaRow>(
+      `SELECT id, kind, original_url, status, storage_path, public_path, bytes FROM media_files
+        WHERE podcast_id = $1 AND original_url IN (SELECT jsonb_array_elements_text($2::jsonb))`,
+      [podcastId, JSON.stringify([...wanted.keys()])],
+    );
+    progress.mediaTotal! += rows.length;
+    const todo = rows.filter((m) => {
+      if (m.status === 'done' && m.public_path && m.storage_path) {
+        result.set(m.original_url, { publicUrl: config.publicBaseUrl + m.public_path, storagePath: m.storage_path, bytes: m.bytes ?? 0 });
         progress.mediaDone!++;
-        progress.mediaBytes! += d.bytes;
-      } catch (e) {
-        const msg = (e as Error).message;
-        await db.query(`UPDATE media_files SET status = 'failed', error = $2 WHERE id = $1`, [m.id, msg]);
-        warnings.push(`Couldn't copy ${m.original_url}: ${msg} (left pointing at the original)`);
-        progress.mediaFailed!++;
+        return false;
       }
-      await setProgress(db, jobId, progress);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.max(1, config.downloadConcurrency) }, worker));
+      return true;
+    });
+    await setProgress(db, jobId, progress);
 
-  // Fill in missing enclosure lengths from the real file size, then point everything at our copies.
+    let next = 0;
+    const worker = async () => {
+      while (next < todo.length) {
+        const m = todo[next++]!;
+        const dir = KIND_DIRS[m.kind] ?? 'other';
+        const filename = mediaFilename(m.original_url);
+        const storagePath = path.join(config.mediaDir, slug, dir, filename);
+        const publicPath = `/media/${slug}/${dir}/${filename}`;
+        try {
+          const d = await withRetry(() =>
+            downloadToFile(m.original_url, storagePath, {
+              allowPrivate: config.allowPrivateNetworks,
+              maxBytes: config.maxMediaBytes,
+              timeoutMs: 60_000,
+            }),
+          );
+          await db.query(
+            `UPDATE media_files SET status = 'done', error = NULL, storage_path = $2, public_path = $3,
+                    mime_type = $4, bytes = $5, sha256 = $6 WHERE id = $1`,
+            [m.id, storagePath, publicPath, d.mimeType, d.bytes, d.sha256],
+          );
+          result.set(m.original_url, { publicUrl: config.publicBaseUrl + publicPath, storagePath, bytes: d.bytes });
+          progress.mediaDone!++;
+          progress.mediaBytes! += d.bytes;
+        } catch (e) {
+          const msg = (e as Error).message;
+          await db.query(`UPDATE media_files SET status = 'failed', error = $2 WHERE id = $1`, [m.id, msg]);
+          warnings.push(`Couldn't copy ${m.original_url}: ${msg} (left pointing at the original)`);
+          progress.mediaFailed!++;
+        }
+        await setProgress(db, jobId, progress);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.max(1, config.downloadConcurrency) }, worker));
+  };
+
+  // 1. Everything the feed references directly.
+  const wanted = new Map<string, MediaKind>();
+  for (const r of refs) if (!wanted.has(r.url)) wanted.set(r.url, r.kind);
+  await copyAll(wanted);
+
+  // 2. Images listed inside the JSON chapter files we just copied.
+  const chapterFiles = [...new Set(refs.filter((r) => r.kind === 'chapters').map((r) => r.url))]
+    .map((url) => ({ url, copy: result.get(url) }))
+    .filter((c): c is { url: string; copy: Copied } => !!c.copy);
+  const parsedChapters = new Map<string, unknown>();
+  const chapterImages = new Map<string, MediaKind>();
+  for (const { url, copy } of chapterFiles) {
+    try {
+      const json = JSON.parse(await readFile(copy.storagePath, 'utf8'));
+      parsedChapters.set(url, json);
+      for (const img of chapterImageUrls(json)) if (!img.startsWith(publicPrefix)) chapterImages.set(img, 'image');
+    } catch {
+      warnings.push(`Chapters file ${url} isn't valid JSON chapters; copied as-is`);
+    }
+  }
+  await copyAll(chapterImages);
+  for (const [url, json] of parsedChapters) {
+    const swapped = rewriteChapterImages(json, (img) => result.get(img)?.publicUrl);
+    if (JSON.stringify(swapped) === JSON.stringify(json)) continue;
+    const copy = result.get(url)!;
+    const body = Buffer.from(JSON.stringify(swapped, null, 2));
+    await writeFile(copy.storagePath, body);
+    copy.bytes = body.length;
+    await db.query(`UPDATE media_files SET bytes = $2, sha256 = $3 WHERE podcast_id = $1 AND original_url = $4`, [
+      podcastId,
+      body.length,
+      createHash('sha256').update(body).digest('hex'),
+      url,
+    ]);
+  }
+
+  // 3. Fill in missing enclosure lengths, then point every reference at our copies.
   for (const it of feed.items) {
     const got = it.enclosureUrl ? result.get(it.enclosureUrl) : undefined;
     if (got && !it.enclosureLength) it.enclosureLength = got.bytes;

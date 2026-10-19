@@ -11,6 +11,7 @@ import {
   parseFeed,
   type XmlNode,
 } from '../src/feed/index.js';
+import { chapterImageUrls, htmlImageUrls, rewriteChapterImages, rewriteHtmlImages } from '../src/feed/media.js';
 import { parseXml } from '../src/feed/xml.js';
 
 const FIXTURE = readFileSync(new URL('./fixtures/full-feed.xml', import.meta.url), 'utf8');
@@ -272,4 +273,31 @@ test('collects downloadable media and can rewrite it', () => {
   const leftovers = xml.split('\n').filter((l) => l.includes('oldhost.example.com'));
   assert.deepEqual(leftovers.map((l) => l.trim()), ['<guid>https://oldhost.example.com/media/ep1.m4a</guid>']);
   assert.ok(xml.includes('srcset="https://mine.example/media/test/ep2-1500.jpg 1500w, https://mine.example/media/test/ep2-600.jpg 600w"'));
+});
+
+test('finds and rewrites show-notes images, decoding entities, and only inside <img>/<source>', () => {
+  const html =
+    '<p><img src="https://a.com/x.jpg?w=1&amp;h=2" alt="A"> <a href="https://a.com/x.jpg?w=1&amp;h=2">link</a>' +
+    "<IMG SRC='https://a.com/y.png'><source srcset=\"https://a.com/s1.webp 1x, https://a.com/s2.webp 2x\"></p>";
+  assert.deepEqual(htmlImageUrls(html), [
+    'https://a.com/x.jpg?w=1&h=2',
+    'https://a.com/y.png',
+    'https://a.com/s1.webp',
+    'https://a.com/s2.webp',
+  ]);
+  const out = rewriteHtmlImages(html, (u) => (u.startsWith('https://a.com/') ? u.replace('https://a.com/', 'https://me/') : undefined));
+  assert.ok(out.includes('<img src="https://me/x.jpg?w=1&amp;h=2" alt="A">'));
+  assert.ok(out.includes('<a href="https://a.com/x.jpg?w=1&amp;h=2">'), 'links untouched');
+  assert.ok(out.includes('SRC="https://me/y.png"'));
+  assert.ok(out.includes('srcset="https://me/s1.webp 1x, https://me/s2.webp 2x"'));
+  assert.equal(rewriteHtmlImages(html, () => undefined), html, 'no-op leaves HTML byte-identical');
+});
+
+test('chapter image helpers', () => {
+  const doc = { version: '1.2.0', chapters: [{ startTime: 0, img: 'https://a.com/1.jpg' }, { startTime: 5 }, { img: 'rel.jpg' }] };
+  assert.deepEqual(chapterImageUrls(doc), ['https://a.com/1.jpg']);
+  const out = rewriteChapterImages(doc, () => 'https://me/1.jpg') as typeof doc;
+  assert.equal(out.chapters[0]!.img, 'https://me/1.jpg');
+  assert.equal(doc.chapters[0]!.img, 'https://a.com/1.jpg', 'original not mutated');
+  assert.deepEqual(chapterImageUrls({ nope: true }), []);
 });

@@ -52,8 +52,11 @@ export async function startOldHost(): Promise<{
   hits: Map<string, number>;
   feeds: Map<string, string>;
   missing: Set<string>;
+  /** Custom bodies for specific /old/ paths. */
+  files: Map<string, { type: string; body: string }>;
   close: () => Promise<void>;
 }> {
+  const files = new Map<string, { type: string; body: string }>();
   const hits = new Map<string, number>();
   const feeds = new Map<string, string>();
   const missing = new Set<string>();
@@ -69,6 +72,11 @@ export async function startOldHost(): Promise<{
       res.writeHead(200, { 'Content-Type': 'application/rss+xml; charset=utf-8' }).end(feeds.get(feed[1]!));
       return;
     }
+    const custom = files.get(url.split('?')[0]!);
+    if (custom) {
+      res.writeHead(200, { 'Content-Type': custom.type }).end(custom.body);
+      return;
+    }
     if (url.startsWith('/old/') && !missing.has(url)) {
       const ext = url.split('.').pop() ?? '';
       res.writeHead(200, { 'Content-Type': MIME[ext] ?? 'application/octet-stream' }).end(`content of ${url}`);
@@ -78,7 +86,7 @@ export async function startOldHost(): Promise<{
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return { base, hits, feeds, missing, close: () => new Promise((r) => server.close(() => r())) };
+  return { base, hits, feeds, missing, files, close: () => new Promise((r) => server.close(() => r())) };
 }
 
 /** The fixture feed, re-pointed at the fake old host. */
