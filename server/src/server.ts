@@ -5,6 +5,7 @@
 import http from 'node:http';
 import { loadConfig } from './config.js';
 import { migrate } from './db/migrate.js';
+import { loadSiteSettings } from './site/settings.js';
 import { createPgDb } from './db/pg.js';
 import { createApp } from './http/app.js';
 import { startImportWorker } from './import/importer.js';
@@ -16,6 +17,8 @@ async function main() {
   const config = loadConfig();
   const db = createPgDb(config.databaseUrl);
   await migrate(db, log);
+  // Admin-panel site settings override the environment.
+  await loadSiteSettings(db, config);
 
   const worker = process.env.DISABLE_WORKER === '1' ? null : startImportWorker({ db, config, log });
   const podping = startPodpingWorker({ db, config, log });

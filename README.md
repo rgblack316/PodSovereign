@@ -2,6 +2,8 @@
 
 Self-hosted podcast feed host. It imports an existing podcast RSS feed, replicates it with full iTunes and Podcasting 2.0 tag support, and serves it from your own server (Ubuntu Server). Each podcaster has their own login and can only see their own shows.
 
+Clone it and run your own: the site's name, logo, favicon and web address are all set from the admin panel.
+
 ## Status
 
 - [x] Feed parser and builder (lossless round trip of all tags)
@@ -12,6 +14,7 @@ Self-hosted podcast feed host. It imports an existing podcast RSS feed, replicat
 - [x] JSON API and public feed endpoint
 - [x] Podping (per-show switch, off after import): scheduled episodes going live and stats prefix changes
 - [x] Live show (`podcast:liveItem`) management: pending → live → ended, with live and liveEnd Podpings
+- [x] Admin Site settings: name, logo, favicon, web and media address (stored links rewritten, old hostname redirected), sign-ups, Podping key
 - [x] Web dashboard: shows, move checklist with 301 check, import progress, stats prefixes, Podping, live shows, people
 - [ ] Podcast ownership verification on import
 - [ ] Docker and Nginx deployment

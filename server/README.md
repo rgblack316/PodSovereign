@@ -18,9 +18,24 @@ PUBLIC_BASE_URL=https://podcasts.johnscreekstudios.com \
 npm start
 ```
 
-Then open `https://podcasts.johnscreekstudios.com/` (or `http://127.0.0.1:8080/` on the server) and create the first account.
+Then open the site (for example `http://127.0.0.1:8080/` on the server) and create the first account. As the admin, open **Site settings** to set the site's name, logo, favicon and web address. No code changes are needed to run your own copy.
 
 To make it public, see [Cloudflare Tunnel](#cloudflare-tunnel) below.
+
+## Site settings (admin panel)
+
+Admins can change these from the dashboard. Saved values override the environment variables; a blank value falls back to them.
+
+| Setting | Notes |
+|---|---|
+| Site name | Shown on the sign-in page, in the sidebar and in browser tabs (default "FeedHost") |
+| Logo · Favicon | PNG, JPEG, WebP or SVG (favicon: PNG, SVG or ICO), up to 1 MB. Stored in `SITE_DIR`. Uploaded SVGs are served sandboxed |
+| Web address | The public address, e.g. `https://podcasts.johnscreekstudios.com`. Must be a bare address (no path) |
+| Media address | Optional. Episode files are served from here instead (for a CDN later) |
+| Sign-ups | Whether anyone can create an account |
+| Podping key | Kept on the server and never shown again after saving |
+
+**Changing the web or media address after shows exist** rewrites every stored link to this server's media: episodes, artwork, transcripts, chapters (including chapter files on disk), people images and show notes. GUIDs are never changed. The old hostname is remembered: any request that still reaches this server on it is permanently redirected to the new address. So keep the old hostname pointed at this server, through DNS or your tunnel, and subscribers follow along.
 
 ## Dashboard
 
@@ -43,7 +58,7 @@ Migrations run automatically on startup. The **first account registered becomes 
 | Variable | Default | Purpose |
 |---|---|---|
 | `DATABASE_URL` | `postgres://feedhost@localhost/feedhost` | PostgreSQL connection |
-| `PUBLIC_BASE_URL` | `http://localhost:8080` | Public address of the site and feeds |
+| `PUBLIC_BASE_URL` | `http://localhost:8080` | Public address of the site and feeds (Site settings overrides it) |
 | `MEDIA_BASE_URL` | same as `PUBLIC_BASE_URL` | Address used in media URLs. Set a CDN address here later (see [ROADMAP](../ROADMAP.md)) |
 | `MEDIA_DIR` | `/var/lib/feedhost/media` | Where copied media is stored |
 | `HOST` / `PORT` | `127.0.0.1` / `8080` | Listen address. Local-only by default, so it's reachable only through the tunnel |
@@ -52,6 +67,8 @@ Migrations run automatically on startup. The **first account registered becomes 
 | `MAX_MEDIA_BYTES` | 4 GB | Per-file download limit |
 | `DOWNLOAD_CONCURRENCY` | 3 | Parallel media downloads per import |
 | `ALLOW_PRIVATE_NETWORKS` | off | Allow imports from local or private addresses (dev only) |
+| `SITE_NAME` | `FeedHost` | Starting site name (Site settings overrides it) |
+| `SITE_DIR` | `/var/lib/feedhost/site` | Where the uploaded logo and favicon are stored |
 | `PODPING_TOKEN` | not set (off) | podping.cloud authorization key from Podcast Index. Setting it turns Podping on |
 | `PODPING_DELAY_SEC` | `30` | Wait before sending, so a burst of edits becomes one ping |
 
@@ -160,6 +177,8 @@ All `/api` calls use a session cookie. Requests that change something must send 
 | GET | `/api/setup` (first-run status) | anyone |
 | GET | `/api/me` · POST `/api/me/password` | signed in |
 | GET · POST | `/api/admin/users` | admin |
+| GET · PUT | `/api/admin/site` · POST/DELETE `/api/admin/site/logo` and `/favicon` | admin |
+| GET | `/site/logo` · `/site/favicon` | public |
 | GET | `/api/podcasts` | your own shows, plus ones shared with you |
 | GET | `/api/podcasts/:id` · `/episodes` · `/prefixes` | viewer+ |
 | POST | `/api/podcasts/:id/redirect-check` (is the old feed 301-redirecting here?) | editor+ |
@@ -177,7 +196,7 @@ If you don't have access to a podcast, you get **404**, so the existence of othe
 ## Tests
 
 ```bash
-npm test     # 79 tests: feed engine, import worker, API and isolation
+npm test     # 93 tests: feed engine, import worker, API and isolation
 ```
 
 `npm run demo` starts a throwaway demo (two imported shows, one on air) at `http://127.0.0.1:8099`, signed in as `randy@johnscreekstudios.com` with the password `demo password 123`. It uses the same local test database as the tests below.
@@ -194,6 +213,7 @@ The import and API tests need a local PostgreSQL that allows trust auth for the 
 | Accounts | `src/auth/`: scrypt passwords, hashed session tokens, login rate limiting |
 | HTTP | `src/http/`: routes, CSRF checks, public feed with ETag caching, 301 check, dashboard files |
 | Dashboard | `web/`: index.html, app.js, styles.css |
+| Site settings | `src/site/`: branding, web and media address (with link rewrite and old-host redirects), sign-ups, Podping key |
 | Podping | `src/podping/`: change queue, podping.cloud sender, scheduled-episode announcer |
 | Live | `src/live/`: `podcast:liveItem` create, edit, status changes (with live and liveEnd pings) |
 

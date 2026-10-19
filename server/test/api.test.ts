@@ -286,7 +286,10 @@ describe('stats prefixes and the public feed', () => {
 describe('dashboard support', () => {
   test('setup status is public; the dashboard and its files are served with a strict CSP', async () => {
     const s = await anon.get('/api/setup');
-    assert.deepEqual(s.json, { needsFirstAccount: false, registrationOpen: false, publicBaseUrl: 'http://feeds.mine.test' });
+    assert.equal(s.json.needsFirstAccount, false);
+    assert.equal(s.json.registrationOpen, false);
+    assert.equal(s.json.publicBaseUrl, 'http://feeds.mine.test');
+    assert.equal(s.json.siteName, 'FeedHost');
     const page = await anon.get('/');
     assert.equal(page.status, 200);
     assert.match(page.headers.get('content-type')!, /text\/html/);

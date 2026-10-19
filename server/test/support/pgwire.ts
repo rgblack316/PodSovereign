@@ -172,11 +172,39 @@ function convert(s: string, type: number): unknown {
     case 20: case 21: case 23: case 700: case 701: return Number(s);
     case 114: case 3802: return JSON.parse(s);
     case 1114: case 1184: return new Date(s.replace(' ', 'T').replace(/([+-]\d\d)$/, '$1:00'));
+    case 1009: return parseTextArray(s); // text[] — the real pg driver returns arrays too
     default: return s;
   }
 }
 
 /** Local Postgres with trust auth for the postgres user; override with TEST_PG_SOCKET. */
+/** Parse a one-dimensional Postgres text[] literal, e.g. {a,"b c","d\\"e"}. */
+function parseTextArray(s: string): string[] {
+  const body = s.slice(1, -1);
+  if (!body) return [];
+  const out: string[] = [];
+  let cur = '';
+  let quoted = false;
+  let wasQuoted = false;
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i]!;
+    if (quoted) {
+      if (ch === '\\') cur += body[++i] ?? '';
+      else if (ch === '"') quoted = false;
+      else cur += ch;
+    } else if (ch === '"') {
+      quoted = true;
+      wasQuoted = true;
+    } else if (ch === ',') {
+      out.push(cur);
+      cur = '';
+      wasQuoted = false;
+    } else cur += ch;
+  }
+  out.push(!wasQuoted && cur === 'NULL' ? (null as unknown as string) : cur);
+  return out;
+}
+
 export const TEST_SOCKET = process.env.TEST_PG_SOCKET ?? '/var/run/postgresql/.s.PGSQL.5432';
 
 export async function connectTestDb(database: string): Promise<Db> {

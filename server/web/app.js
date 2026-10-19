@@ -140,6 +140,17 @@ function field(labelText, input, hint) {
   return h('div', { class: 'field' }, h('label', { for: id }, labelText), input, hint ? h('p', { class: 'hint' }, hint) : null);
 }
 
+// ───────────── branding ─────────────
+
+const siteName = () => state.setup?.siteName || 'FeedHost';
+const brandMark = () => h('img', { class: 'logo', src: `/site/logo?v=${state.setup?.siteVersion ?? 0}`, alt: '' });
+
+function applyBranding() {
+  let link = document.querySelector('link[rel=icon]');
+  if (!link) document.head.append((link = h('link', { rel: 'icon' })));
+  link.href = `/site/favicon?v=${state.setup?.siteVersion ?? 0}`;
+}
+
 // ───────────── signal lights ─────────────
 
 /** The lights shown on a show's channel strip, from the podcast detail. */
@@ -201,6 +212,7 @@ async function refreshPodcasts() {
 
 async function boot() {
   state.setup = await api('GET', '/api/setup');
+  applyBranding();
   try {
     state.me = (await api('GET', '/api/me')).user;
     await refreshPodcasts();
@@ -233,6 +245,7 @@ async function render() {
     else if (section === 'show' && a) view = await viewShow(a, b ?? 'overview');
     else if (section === 'account') view = await viewAccount();
     else if (section === 'people' && state.me.isAdmin) view = await viewPeople();
+    else if (section === 'site' && state.me.isAdmin) view = await viewSite();
     else view = await viewHome();
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) {
@@ -246,13 +259,13 @@ async function render() {
   $app.replaceChildren(frame(view));
   if (navigated) window.scrollTo(0, 0);
   const h1 = $app.querySelector('main h1');
-  if (h1) document.title = `${h1.textContent} · FeedHost`;
+  document.title = h1 ? `${h1.textContent} · ${siteName()}` : siteName();
 }
 
 // ───────────── sign in ─────────────
 
 function renderAuth(mode) {
-  document.title = 'Sign in · FeedHost';
+  document.title = `Sign in · ${siteName()}`;
   const first = state.setup.needsFirstAccount;
   mode = first ? 'first' : mode ?? 'signin';
   const err = formError();
@@ -284,13 +297,13 @@ function renderAuth(mode) {
   err,
   h('button', { class: 'primary', type: 'submit' }, mode === 'signin' ? 'Sign in' : 'Create account'));
 
-  const heading = mode === 'first' ? 'Set up FeedHost' : mode === 'register' ? 'Create an account' : 'Sign in';
+  const heading = mode === 'first' ? 'Set up your podcast host' : mode === 'register' ? 'Create an account' : 'Sign in';
   const lead = mode === 'first'
-    ? 'Create the first account. It becomes the administrator, who can add accounts for other podcasters.'
+    ? 'Create the first account. It becomes the administrator: you can then name the site, add your logo and set its web address under Site settings.'
     : mode === 'register' ? 'Host your podcast feed and media on this server.' : 'Manage your shows, stats prefixes and live broadcasts.';
 
   $app.replaceChildren(h('div', { class: 'auth' }, h('div', { class: 'auth-box' },
-    h('div', { class: 'brand' }, h('img', { src: '/app/icon.svg', alt: '' }), 'FeedHost'),
+    h('div', { class: 'brand' }, brandMark(), siteName()),
     h('h1', null, heading),
     h('p', { class: 'muted' }, lead),
     form,
@@ -308,7 +321,7 @@ function frame(view) {
   const [section, a] = route();
   const current = section === 'show' ? a : null;
   const rail = h('aside', { class: 'rail' },
-    h('a', { class: 'brand', href: '#/' }, h('img', { src: '/app/icon.svg', alt: '' }), 'FeedHost'),
+    h('a', { class: 'brand', href: '#/' }, brandMark(), siteName()),
     h('nav', { 'aria-label': 'Shows' },
       h('h2', null, 'Shows'),
       state.podcasts.length
@@ -323,6 +336,7 @@ function frame(view) {
       h('div', { class: 'who' }, state.me.displayName || state.me.email),
       h('a', { href: '#/account' }, 'Account'),
       state.me.isAdmin ? h('a', { href: '#/people' }, 'People') : null,
+      state.me.isAdmin ? h('a', { href: '#/site' }, 'Site settings') : null,
       h('button', {
         type: 'button',
         onclick: async () => {
@@ -342,7 +356,7 @@ async function viewHome() {
   if (!state.podcasts.length) {
     return h('div', { class: 'page' }, h('div', { class: 'empty' },
       h('h1', { style: 'font-size:var(--t-xl);margin-bottom:12px' }, 'Bring your first show over'),
-      h('p', { class: 'muted' }, 'Paste the RSS feed address from your current host. FeedHost copies every episode, image, transcript and chapter file to this server and gives the show a new feed address.'),
+      h('p', { class: 'muted' }, 'Paste the RSS feed address from your current host. Every episode, image, transcript and chapter file is copied to this server, and the show gets a new feed address.'),
       h('a', { class: 'btn primary', href: '#/import' }, 'Import a show')));
   }
   if (state.podcasts.length === 1) {
@@ -877,7 +891,7 @@ async function tabLive(p, canEdit, reload) {
       },
     },
     h('h2', null, li ? `Edit “${li.title}”` : 'Schedule a live show'),
-    h('p', { class: 'muted' }, 'This adds the broadcast to your feed so apps can show it as coming up. FeedHost doesn’t stream: use the address of your own stream (Icecast, YouTube and so on).'),
+    h('p', { class: 'muted' }, 'This adds the broadcast to your feed so apps can show it as coming up. This site doesn’t stream: use the address of your own stream (Icecast, YouTube and so on).'),
     field('Title', title),
     h('div', { class: 'row' }, field('Starts', start), field('Ends (optional)', end)),
     h('div', { class: 'row' }, field('Stream address', stream), field('Stream type', type)),
@@ -1017,7 +1031,220 @@ async function viewPeople() {
     form);
 }
 
+// ───────────── site settings (admin) ─────────────
+
+const readAsDataUrl = (file) => new Promise((resolve, reject) => {
+  const r = new FileReader();
+  r.onload = () => resolve(r.result);
+  r.onerror = () => reject(new Error('That file could not be read'));
+  r.readAsDataURL(file);
+});
+
+async function refreshSetup() {
+  state.setup = await api('GET', '/api/setup');
+  applyBranding();
+}
+
+async function viewSite() {
+  const { settings: s } = await api('GET', '/api/admin/site');
+
+  // Branding: name + logo + favicon
+  const nameErr = formError();
+  const name = h('input', { type: 'text', value: s.siteName, maxlength: 60, required: true });
+
+  const assetBlock = (kind, label, hint, accept, has) => {
+    const err = formError();
+    const preview = h('img', { class: `asset-preview ${kind}`, src: `/site/${kind}?v=${state.setup.siteVersion}`, alt: `Current ${label.toLowerCase()}` });
+    const file = h('input', {
+      type: 'file',
+      accept,
+      class: 'sr-only',
+      onchange: async () => {
+        err.hidden = true;
+        const f = file.files[0];
+        if (!f) return;
+        try {
+          await api('POST', `/api/admin/site/${kind}`, { dataUrl: await readAsDataUrl(f) });
+          await refreshSetup();
+          toast(`${label} updated`);
+          render();
+        } catch (e) {
+          showError(err, e);
+        }
+      },
+    });
+    const id = `upload-${kind}`;
+    file.id = id;
+    return h('div', { class: 'asset' },
+      preview,
+      h('div', null,
+        h('h3', null, label),
+        h('p', { class: 'hint' }, hint),
+        err,
+        h('div', { class: 'actions', style: 'margin-top:8px' },
+          file,
+          h('label', { for: id, class: 'btn', tabindex: 0, role: 'button', onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); file.click(); } } },
+            has ? `Replace ${label.toLowerCase()}` : `Upload ${label.toLowerCase()}`),
+          has ? h('button', {
+            type: 'button',
+            class: 'quiet',
+            onclick: async () => {
+              await api('DELETE', `/api/admin/site/${kind}`);
+              await refreshSetup();
+              toast(`${label} removed`);
+              render();
+            },
+          }, 'Use the default') : null)));
+  };
+
+  const brandForm = h('form', {
+    class: 'panel',
+    onsubmit: (ev) => {
+      ev.preventDefault();
+      nameErr.hidden = true;
+      busy(brandForm, async () => {
+        try {
+          await api('PUT', '/api/admin/site', { siteName: name.value });
+          await refreshSetup();
+          toast('Site name saved');
+          render();
+        } catch (e) {
+          showError(nameErr, e);
+        }
+      });
+    },
+  },
+  h('h2', null, 'Name and logo'),
+  h('p', { class: 'muted' }, 'Shown on the sign-in page, in the sidebar and in browser tabs.'),
+  field('Site name', name),
+  nameErr,
+  h('div', { class: 'actions', style: 'margin:0 0 24px' }, h('button', { class: 'primary', type: 'submit' }, 'Save site name')),
+  assetBlock('logo', 'Logo', 'PNG, JPEG, WebP or SVG, up to 1 MB. A square mark works best; it’s shown small next to the site name.', 'image/png,image/jpeg,image/webp,image/svg+xml', s.hasLogo),
+  assetBlock('favicon', 'Favicon', 'The browser-tab icon. PNG, SVG or ICO, up to 1 MB; 64×64 or larger.', 'image/png,image/svg+xml,image/x-icon,.ico', s.hasFavicon));
+
+  // Address
+  const addrErr = formError();
+  const base = h('input', { type: 'url', value: s.publicBaseUrl, required: true, placeholder: 'https://podcasts.example.com' });
+  const media = h('input', { type: 'url', value: s.mediaBaseUrl, placeholder: 'Same as the site address' });
+  const here = location.origin;
+  const useHere = here !== s.publicBaseUrl
+    ? h('p', { class: 'hint' }, `You’re viewing this page at ${here}. `,
+      h('a', { href: '#', onclick: (e) => { e.preventDefault(); base.value = here; } }, 'Use this address'))
+    : null;
+  const addrForm = h('form', {
+    class: 'panel',
+    onsubmit: (ev) => {
+      ev.preventDefault();
+      addrErr.hidden = true;
+      const newBase = base.value.trim().replace(/\/+$/, '');
+      try {
+        const u = new URL(newBase);
+        if (u.pathname !== '/' && u.pathname !== '') return showError(addrErr, `The site address can’t include a path. Use just the address, like ${u.origin}`);
+      } catch {
+        return showError(addrErr, 'Enter the full address, like https://podcasts.example.com');
+      }
+      const changing = newBase !== s.publicBaseUrl || media.value.trim().replace(/\/+$/, '') !== s.mediaBaseUrl;
+      if (!changing) return toast('No changes to save');
+      if (s.showCount && !confirm(
+        `Change the address for ${s.showCount} show${s.showCount === 1 ? '' : 's'}?\n\n` +
+        'Every feed and media link moves to the new address. Apps already subscribed keep using the old address, ' +
+        'so keep the old address pointed at this server: requests that arrive there are redirected to the new one.')) return;
+      busy(addrForm, async () => {
+        try {
+          const { result } = await api('PUT', '/api/admin/site', { publicBaseUrl: newBase, mediaBaseUrl: media.value.trim() || null });
+          await refreshSetup();
+          toast(result.addressChanged ? `Address saved. ${result.rewrittenShows} show${result.rewrittenShows === 1 ? '' : 's'} updated.` : 'Saved');
+          if (new URL(state.setup.publicBaseUrl).origin !== location.origin) {
+            alert(`Saved. This site’s address is now ${state.setup.publicBaseUrl}.\n\nMake sure that address reaches this server (DNS or your Cloudflare Tunnel) before sharing feeds.`);
+          }
+          render();
+        } catch (e) {
+          showError(addrErr, e);
+        }
+      });
+    },
+  },
+  h('h2', null, 'Web address'),
+  h('p', { class: 'muted' }, 'The address listeners and podcast apps use. Every show’s feed lives at this address followed by /show-name/feed.xml.'),
+  field('Site address', base, 'Just the address, without a path, for example https://podcasts.example.com.'),
+  useHere,
+  field('Media address (optional)', media, 'Leave blank to serve episode files from the site address. Set it if you move media to a CDN.'),
+  s.previousHosts.length ? h('p', { class: 'hint' }, `Requests that reach this server at ${s.previousHosts.join(', ')} are redirected to the current address.`) : null,
+  s.showCount ? h('p', { class: 'warn-note' }, 'Changing this after shows are live moves every feed. Subscribers only follow along if the old address still reaches this server.') : null,
+  addrErr,
+  h('div', { class: 'actions' }, h('button', { class: 'primary', type: 'submit' }, 'Save web address')));
+
+  // Sign-ups
+  const reg = h('input', {
+    type: 'checkbox',
+    role: 'switch',
+    checked: s.allowRegistration,
+    onchange: async () => {
+      reg.disabled = true;
+      try {
+        await api('PUT', '/api/admin/site', { allowRegistration: reg.checked });
+        await refreshSetup();
+        toast(reg.checked ? 'Anyone can now create an account' : 'Only admins can add accounts now');
+      } catch (e) {
+        toast(e.message);
+        reg.checked = !reg.checked;
+      }
+      reg.disabled = false;
+    },
+  });
+
+  // Podping key
+  const keyErr = formError();
+  const key = h('input', { type: 'password', autocomplete: 'off', placeholder: s.podpingKeySet ? 'A key is saved. Enter a new one to replace it.' : 'Paste your podping.cloud key' });
+  const keyForm = h('form', {
+    class: 'panel',
+    onsubmit: (ev) => {
+      ev.preventDefault();
+      keyErr.hidden = true;
+      if (!key.value.trim()) return showError(keyErr, 'Paste the key first.');
+      busy(keyForm, async () => {
+        try {
+          await api('PUT', '/api/admin/site', { podpingKey: key.value });
+          toast('Podping key saved');
+          render();
+        } catch (e) {
+          showError(keyErr, e);
+        }
+      });
+    },
+  },
+  h('h2', null, 'Podping key'),
+  h('p', { class: 'muted' }, 'Podping needs a key for podping.cloud from Podcast Index (podcastindex.org). Each show then has its own Podping switch.'),
+  h('p', null, h('span', { class: `light ${s.podpingKeySet ? 'on' : ''}` },
+    s.podpingKeySet ? (s.podpingKeyFromEnv ? 'Key set on the server (PODPING_TOKEN)' : 'Key saved') : 'No key yet')),
+  field('Key', key),
+  keyErr,
+  h('div', { class: 'actions' },
+    h('button', { class: 'primary', type: 'submit' }, 'Save Podping key'),
+    s.podpingKeySet && !s.podpingKeyFromEnv ? h('button', {
+      type: 'button',
+      class: 'quiet',
+      onclick: async () => {
+        if (!confirm('Remove the Podping key? Pings stop for every show.')) return;
+        await api('PUT', '/api/admin/site', { podpingKey: null });
+        toast('Podping key removed');
+        render();
+      },
+    }, 'Remove key') : null));
+
+  return h('div', { class: 'page' },
+    h('div', { class: 'page-head' }, h('h1', null, 'Site settings'),
+      h('p', { class: 'muted' }, 'These apply to the whole site and every podcaster on it.')),
+    brandForm,
+    addrForm,
+    h('section', { class: 'panel' },
+      h('h2', null, 'Sign-ups'),
+      h('label', { class: 'switch', style: 'margin-top:12px' }, reg, 'Anyone can create an account'),
+      h('p', { class: 'hint', style: 'margin-top:8px' }, 'When off, only admins can add podcasters (under People).')),
+    keyForm);
+}
+
 boot().catch((e) => {
   $app.replaceChildren(h('div', { class: 'auth' }, h('div', { class: 'auth-box' },
-    h('h1', null, 'FeedHost can’t start'), h('p', { class: 'muted' }, e.message))));
+    h('h1', null, 'The dashboard can’t start'), h('p', { class: 'muted' }, e.message))));
 });

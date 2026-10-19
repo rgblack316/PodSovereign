@@ -30,6 +30,7 @@ const db = await setupDb('feedhost_demo');
 const host = await startOldHost();
 const config = testConfig({
   mediaDir: await tempDir('demo-media'),
+  siteDir: await tempDir('demo-site'),
   publicBaseUrl: `http://127.0.0.1:${port}`,
   mediaBaseUrl: `http://127.0.0.1:${port}`,
   allowRegistration: false,

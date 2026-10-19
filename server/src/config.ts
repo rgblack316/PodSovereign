@@ -27,6 +27,25 @@ export interface Config {
   podpingUrl: string;
   /** Wait this long before sending, so a burst of edits becomes one ping. */
   podpingDelaySec: number;
+  /** Name shown in the dashboard (Site settings). */
+  siteName: string;
+  /** Where the uploaded logo and favicon are stored. */
+  siteDir: string;
+  /** Bumped when branding changes, for cache-busting logo/favicon URLs. */
+  siteVersion: number;
+  /** Hostnames this site used before a base-URL change; requests for them are 301-redirected. */
+  previousHosts: string[];
+  /**
+   * Values from the environment. Site settings saved in the admin panel
+   * override them; a blank setting falls back to these.
+   */
+  envDefaults: {
+    publicBaseUrl: string;
+    mediaBaseUrl: string | null;
+    allowRegistration: boolean;
+    podpingToken: string | null;
+    cookieSecure: boolean | null;
+  };
 }
 
 const bool = (v: string | undefined, d: boolean) => (v === undefined ? d : /^(1|true|yes)$/i.test(v));
@@ -34,6 +53,8 @@ const num = (v: string | undefined, d: number) => (v && !Number.isNaN(Number(v))
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const publicBaseUrl = (env.PUBLIC_BASE_URL ?? 'http://localhost:8080').replace(/\/+$/, '');
+  const mediaBaseUrl = env.MEDIA_BASE_URL ? env.MEDIA_BASE_URL.replace(/\/+$/, '') : null;
+  const cookieSecure = env.COOKIE_SECURE === undefined ? null : bool(env.COOKIE_SECURE, false);
   return {
     port: num(env.PORT, 8080),
     host: env.HOST ?? '127.0.0.1',
@@ -51,5 +72,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     podpingToken: env.PODPING_TOKEN?.trim() || null,
     podpingUrl: env.PODPING_URL ?? 'https://podping.cloud/',
     podpingDelaySec: num(env.PODPING_DELAY_SEC, 30),
+    siteName: env.SITE_NAME?.trim() || 'FeedHost',
+    siteDir: env.SITE_DIR ?? '/var/lib/feedhost/site',
+    siteVersion: 0,
+    previousHosts: [],
+    envDefaults: {
+      publicBaseUrl,
+      mediaBaseUrl,
+      allowRegistration: bool(env.ALLOW_REGISTRATION, false),
+      podpingToken: env.PODPING_TOKEN?.trim() || null,
+      cookieSecure,
+    },
   };
 }

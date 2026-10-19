@@ -153,7 +153,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--focus); outline:
 /* ───────── App frame ───────── */
 
 .brand { display: flex; align-items: center; gap: var(--s2); font-weight: 750; font-variation-settings: "wdth" 112; font-size: var(--t-md); color: var(--ink); text-decoration: none; }
-.brand img { width: 28px; height: 28px; }
+.brand .logo { height: 28px; width: auto; max-width: 96px; object-fit: contain; border-radius: var(--r-sm); }
 .brand small { font-weight: 500; font-size: var(--t-sm); color: var(--ink-3); font-variation-settings: "wdth" 100; }
 
 .frame { display: grid; grid-template-columns: 272px minmax(0, 1fr); min-height: 100vh; }
@@ -353,6 +353,14 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 details summary { cursor: pointer; font-weight: 600; font-size: var(--t-sm); }
 
 .empty { text-align: left; padding: var(--s6) 0; }
+
+/* Site settings */
+.asset { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: var(--s4); align-items: start; padding: var(--s4) 0; border-top: 1px solid var(--rule); }
+.asset-preview { width: 88px; height: 88px; object-fit: contain; background: var(--console); border-radius: var(--r-md); padding: 10px; }
+.asset-preview.favicon { width: 56px; height: 56px; padding: 8px; margin: 16px; }
+.asset label.btn { font-size: var(--t-sm); margin: 0; }
+.asset label.btn:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.warn-note { border-left: 3px solid var(--amber); padding: var(--s2) var(--s3); background: #fbf3dc; border-radius: var(--r-sm); font-size: var(--t-sm); }
 .empty h2 { margin-bottom: var(--s2); }
 
 #toast {

@@ -25,7 +25,8 @@ export async function tempDir(name: string): Promise<string> {
 }
 
 export function testConfig(over: Partial<Config> = {}): Config {
-  return {
+  const cfg: Config = {
+    envDefaults: undefined as unknown as Config['envDefaults'],
     port: 0,
     host: '127.0.0.1',
     databaseUrl: '',
@@ -42,8 +43,21 @@ export function testConfig(over: Partial<Config> = {}): Config {
     podpingToken: null,
     podpingUrl: 'http://127.0.0.1:1/',
     podpingDelaySec: 0,
+    siteName: 'FeedHost',
+    siteDir: '',
+    siteVersion: 0,
+    previousHosts: [],
     ...over,
   };
+  // Environment defaults mirror whatever the test configured, like loadConfig does.
+  cfg.envDefaults = over.envDefaults ?? {
+    publicBaseUrl: cfg.publicBaseUrl,
+    mediaBaseUrl: over.mediaBaseUrl ?? null,
+    allowRegistration: cfg.allowRegistration,
+    podpingToken: cfg.podpingToken,
+    cookieSecure: cfg.cookieSecure,
+  };
+  return cfg;
 }
 
 const MIME: Record<string, string> = {

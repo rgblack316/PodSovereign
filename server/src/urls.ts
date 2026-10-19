@@ -21,5 +21,5 @@ export const mediaPrefix = (slug: string) => `/${slug}/media/`;
  */
 export const RESERVED_SLUGS = new Set([
   'api', 'feed', 'feeds', 'media', 'healthz', 'admin', 'app', 'assets', 'static', 'login', 'logout',
-  'register', 'signup', 'settings', 'dashboard', 'account', 'help', 'docs', 'about', 'www', 'robots-txt',
+  'register', 'signup', 'settings', 'site', 'dashboard', 'account', 'help', 'docs', 'about', 'www', 'robots-txt',
 ]);

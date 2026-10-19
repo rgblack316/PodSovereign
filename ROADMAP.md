@@ -14,13 +14,13 @@
 - **Backblaze B2** in front of a CDN.
 
 **Already prepared**
-- `MEDIA_BASE_URL` sets the address used in media URLs, separately from the site.
+- **Media address** in Site settings (or `MEDIA_BASE_URL`) sets the address used in media links, separately from the site.
+- Changing it rewrites every stored media link, including chapter files, automatically.
 - Media is already laid out as `<slug>/media/<type>/<file>`, so it can be copied to a bucket as-is.
 
 **Still needed**
 - Upload new media to the CDN or bucket during import, and sync existing files.
-- A migration script that rewrites the stored media URLs from `PUBLIC_BASE_URL` to `MEDIA_BASE_URL`. URLs are stored as full URLs in episodes, tag attributes and chapter files.
-- Keep the old `/<slug>/media/...` URLs working, for example with 301 redirects to the CDN, for apps that cached older feed copies.
+- Keep the old `/<slug>/media/...` URLs on this server working, for example with 301 redirects to the CDN, for apps that cached older feed copies. Today, redirects only happen when the *hostname* changes.
 - Re-check the stats prefixes (OP3, Podtrac and so on) against the new media host.
 
 ## Live shows (`podcast:liveItem`)

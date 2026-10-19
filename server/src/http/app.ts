@@ -27,6 +27,14 @@ import { latestPings, podpingEnabled, queuePing, setShowPodping } from '../podpi
 import { feedPath } from '../urls.js';
 import { checkRedirect, saveRedirectResult } from './redirect-check.js';
 import { serveStatic } from './static.js';
+import {
+  readSiteAsset,
+  removeSiteAsset,
+  saveSiteAsset,
+  saveSiteSettings,
+  SettingsError,
+  siteSettingsView,
+} from '../site/settings.js';
 import { HttpError, parseCookies, readJson, Router, sendJson, type Ctx } from './router.js';
 
 export const SESSION_COOKIE = 'fh_session';
@@ -45,7 +53,6 @@ export function createApp(deps: AppDeps) {
   const { db, config } = deps;
   const loginLimiter = new RateLimiter(10, 15 * 60_000);
   const router = new Router();
-  const publicOrigin = new URL(config.publicBaseUrl).origin;
 
   // ───────────── helpers ─────────────
 
@@ -156,8 +163,7 @@ export function createApp(deps: AppDeps) {
   });
 
   router.get('/api/admin/users', async (ctx) => {
-    const user = await requireUser(ctx);
-    if (!user.is_admin) throw new HttpError(403, 'Admins only');
+    await requireAdmin(ctx);
     const { rows } = await db.query<User & { podcasts: number }>(
       `SELECT u.id, u.email, u.display_name, u.is_admin, u.created_at,
               (SELECT count(*)::int FROM podcasts p WHERE p.owner_id = u.id) AS podcasts
@@ -173,6 +179,8 @@ export function createApp(deps: AppDeps) {
       needsFirstAccount: (r?.n ?? 0) === 0,
       registrationOpen: config.allowRegistration,
       publicBaseUrl: config.publicBaseUrl,
+      siteName: config.siteName,
+      siteVersion: config.siteVersion,
     });
   });
 
@@ -496,6 +504,53 @@ export function createApp(deps: AppDeps) {
     sendFile(ctx.req, ctx.res, full, st.size, row.mime_type ?? 'application/octet-stream');
   });
 
+  // ───────────── site settings (admin) ─────────────
+
+  async function requireAdmin(ctx: Ctx) {
+    const user = await requireUser(ctx);
+    if (!user.is_admin) throw new HttpError(403, 'Admins only');
+    return user;
+  }
+
+  router.get('/api/admin/site', async (ctx) => {
+    await requireAdmin(ctx);
+    sendJson(ctx.res, 200, { settings: await siteSettingsView(db, config) });
+  });
+
+  router.put('/api/admin/site', async (ctx) => {
+    await requireAdmin(ctx);
+    const body = await readJson(ctx.req);
+    const result = await saveSiteSettings(db, config, body);
+    sendJson(ctx.res, 200, { result, settings: await siteSettingsView(db, config) });
+  });
+
+  for (const kind of ['logo', 'favicon'] as const) {
+    router.post(`/api/admin/site/${kind}`, async (ctx) => {
+      await requireAdmin(ctx);
+      const body = await readJson(ctx.req, 2 * 1024 * 1024);
+      await saveSiteAsset(db, config, kind, body.dataUrl);
+      sendJson(ctx.res, 200, { settings: await siteSettingsView(db, config), siteVersion: config.siteVersion });
+    });
+    router.delete(`/api/admin/site/${kind}`, async (ctx) => {
+      await requireAdmin(ctx);
+      await removeSiteAsset(db, config, kind);
+      sendJson(ctx.res, 200, { settings: await siteSettingsView(db, config), siteVersion: config.siteVersion });
+    });
+    /** Public: the uploaded image, or the built-in icon. */
+    router.get(`/site/${kind}`, async (ctx) => {
+      const asset = await readSiteAsset(db, config, kind);
+      if (!asset) return serveStatic(ctx, 'icon.svg');
+      ctx.res.writeHead(200, {
+        'Content-Type': asset.type,
+        'Cache-Control': 'public, max-age=300',
+        // An uploaded SVG opened directly can't run scripts or load anything.
+        'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+        'X-Content-Type-Options': 'nosniff',
+      });
+      ctx.res.end(ctx.req.method === 'HEAD' ? undefined : asset.body);
+    });
+  }
+
   // ───────────── dashboard (static) ─────────────
 
   router.get('/', async (ctx) => serveStatic(ctx, 'index.html'));
@@ -514,9 +569,17 @@ export function createApp(deps: AppDeps) {
     const url = new URL(req.url ?? '/', 'http://local');
     try {
       const method = req.method ?? 'GET';
+      // After a site-address change, anything still arriving on an old hostname (feeds, media,
+      // the dashboard) is permanently redirected, so apps that reach us there follow along.
+      const reqHost = (req.headers.host ?? '').toLowerCase();
+      if (reqHost && config.previousHosts.includes(reqHost) && (method === 'GET' || method === 'HEAD')) {
+        res.writeHead(301, { Location: config.publicBaseUrl + url.pathname + url.search, 'Cache-Control': 'public, max-age=3600' });
+        res.end();
+        return;
+      }
       if (url.pathname.startsWith('/api/')) {
         res.setHeader('X-Frame-Options', 'DENY');
-        if (!['GET', 'HEAD'].includes(method)) checkCsrf(req, publicOrigin);
+        if (!['GET', 'HEAD'].includes(method)) checkCsrf(req, new URL(config.publicBaseUrl).origin);
       }
       const m = router.match(method, url.pathname);
       if (m === null) throw new HttpError(404, 'Not found');
@@ -529,7 +592,9 @@ export function createApp(deps: AppDeps) {
       }
       if (e instanceof HttpError) return sendJson(res, e.status, { error: e.message }, e.headers);
       if (e instanceof AuthError || e instanceof LiveError) return sendJson(res, e.status, { error: e.message });
-      if (e instanceof ImportError || e instanceof PrefixError) return sendJson(res, 400, { error: e.message });
+      if (e instanceof ImportError || e instanceof PrefixError || e instanceof SettingsError) {
+        return sendJson(res, 400, { error: e.message });
+      }
       deps.log?.(`500 ${req.method} ${url.pathname}: ${(e as Error).stack ?? e}`);
       sendJson(res, 500, { error: 'Something went wrong' });
     }
