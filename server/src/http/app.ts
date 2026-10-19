@@ -22,6 +22,7 @@ import { buildFeed } from '../feed/builder.js';
 import { buildPrefixChain, PREFIX_SERVICES, PrefixError, type PrefixSetting } from '../feed/prefixes.js';
 import { isPrivateAddress } from '../import/http.js';
 import { enqueueImport, ImportError, KIND_DIRS } from '../import/importer.js';
+import { createLiveItem, deleteLiveItem, listLiveItems, LiveError, setLiveStatus, updateLiveItem } from '../live/live.js';
 import { latestPings, podpingEnabled, queuePing, setShowPodping } from '../podping/podping.js';
 import { feedPath } from '../urls.js';
 import { HttpError, parseCookies, readJson, Router, sendJson, type Ctx } from './router.js';
@@ -288,6 +289,41 @@ export function createApp(deps: AppDeps) {
     sendJson(ctx.res, 200, await podpingStatus(podcastId));
   });
 
+  // ───────────── live items (<podcast:liveItem>) ─────────────
+
+  router.get('/api/podcasts/:id/live', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'viewer');
+    sendJson(ctx.res, 200, { liveItems: await listLiveItems(db, podcastId) });
+  });
+
+  router.post('/api/podcasts/:id/live', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    const body = await readJson(ctx.req);
+    const item = await db.tx((q) => createLiveItem(q, podcastId, body));
+    sendJson(ctx.res, 201, { liveItem: item });
+  });
+
+  router.patch('/api/podcasts/:id/live/:liveId', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    const body = await readJson(ctx.req);
+    const item = await db.tx((q) => updateLiveItem(q, podcastId, ctx.params.liveId!, body));
+    sendJson(ctx.res, 200, { liveItem: item });
+  });
+
+  /** Body: {"status": "pending" | "live" | "ended"} */
+  router.post('/api/podcasts/:id/live/:liveId/status', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    const body = await readJson(ctx.req);
+    const item = await db.tx((q) => setLiveStatus(q, config, podcastId, ctx.params.liveId!, body.status));
+    sendJson(ctx.res, 200, { liveItem: item });
+  });
+
+  router.delete('/api/podcasts/:id/live/:liveId', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    await db.tx((q) => deleteLiveItem(q, config, podcastId, ctx.params.liveId!));
+    sendJson(ctx.res, 204, undefined);
+  });
+
   // ───────────── imports ─────────────
 
   router.post('/api/imports', async (ctx) => {
@@ -423,7 +459,7 @@ export function createApp(deps: AppDeps) {
         return;
       }
       if (e instanceof HttpError) return sendJson(res, e.status, { error: e.message }, e.headers);
-      if (e instanceof AuthError) return sendJson(res, e.status, { error: e.message });
+      if (e instanceof AuthError || e instanceof LiveError) return sendJson(res, e.status, { error: e.message });
       if (e instanceof ImportError || e instanceof PrefixError) return sendJson(res, 400, { error: e.message });
       deps.log?.(`500 ${req.method} ${url.pathname}: ${(e as Error).stack ?? e}`);
       sendJson(res, 500, { error: 'Something went wrong' });

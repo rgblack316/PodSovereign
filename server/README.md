@@ -59,6 +59,30 @@ When a feed changes, the server announces it through [Podping](https://podping.o
 - **Status:** `GET /api/podcasts/:id/podping` shows recent pings.
 - **To confirm once you have a key:** the key is sent in the `Authorization` header. Check with Podcast Index that this is still what podping.cloud expects.
 
+## Live shows (`podcast:liveItem`)
+
+Each show can announce live broadcasts in its feed. Apps that support Podcasting 2.0 live items show them as upcoming, live now, or ended.
+
+- **Create** a live item with a title, start time (and optionally an end time), the stream URL, and optional description, image and links ("Watch on YouTube", for example). It starts as **pending**.
+- **Change status:** pending → **live** → **ended**.
+  - Going live sends a Podping `live`. If you go live before the scheduled start, the start time moves to now.
+  - Ending sends a Podping `liveEnd` and records the real end time.
+  - Removing a live item that's still live also sends `liveEnd`.
+  - Pings follow the show's Podping switch.
+- **Imported live items** can be edited the same way. Tags inside them that FeedHost doesn't manage, such as `podcast:chat` or `podcast:value`, are kept as they are. The live item's GUID never changes.
+- **FeedHost doesn't stream.** The stream URL points at your own streaming service, such as Icecast or a YouTube or Twitch live page. A built-in streaming server is on the [roadmap](../ROADMAP.md) as a possible future upgrade.
+
+Example:
+```bash
+POST /api/podcasts/<id>/live
+{"title": "Election Night Live", "start": "2026-11-03T20:00:00-05:00",
+ "streamUrl": "https://icecast.example/live.mp3",
+ "contentLinks": [{"href": "https://youtube.com/live/xyz", "text": "Watch on YouTube"}]}
+
+POST /api/podcasts/<id>/live/<liveId>/status   {"status": "live"}
+POST /api/podcasts/<id>/live/<liveId>/status   {"status": "ended"}
+```
+
 ## Cloudflare Tunnel
 
 The app runs on your machine and Cloudflare forwards `https://podcasts.johnscreekstudios.com` to it, so there are no open ports and no certificates to manage.
@@ -123,6 +147,9 @@ All `/api` calls use a session cookie. Requests that change something must send 
 | GET | `/api/podcasts/:id` · `/episodes` · `/prefixes` | viewer+ |
 | PUT | `/api/podcasts/:id/prefixes` | editor+ |
 | GET · PUT | `/api/podcasts/:id/podping` (status · show switch) | viewer+ · editor+ |
+| GET · POST | `/api/podcasts/:id/live` (list · create) | viewer+ · editor+ |
+| PATCH · DELETE | `/api/podcasts/:id/live/:liveId` | editor+ |
+| POST | `/api/podcasts/:id/live/:liveId/status` `{status}` | editor+ |
 | DELETE | `/api/podcasts/:id` | owner |
 | POST | `/api/imports` `{url, slug?}` · GET `/api/imports` · `/api/imports/:id` | your own imports |
 | GET | `/:slug/feed.xml` · `/:slug/media/:type/:file` | public |
@@ -132,7 +159,7 @@ If you don't have access to a podcast, you get **404**, so the existence of othe
 ## Tests
 
 ```bash
-npm test     # 63 tests: feed engine, import worker, API and isolation
+npm test     # 75 tests: feed engine, import worker, API and isolation
 ```
 
 The import and API tests need a local PostgreSQL that allows trust auth for the `postgres` user over its Unix socket. Set `TEST_PG_SOCKET` if the socket isn't at `/var/run/postgresql/.s.PGSQL.5432`. Each test file creates its own throwaway database.
@@ -147,6 +174,7 @@ The import and API tests need a local PostgreSQL that allows trust auth for the 
 | Accounts | `src/auth/`: scrypt passwords, hashed session tokens, login rate limiting |
 | HTTP | `src/http/`: routes, CSRF checks, public feed with ETag caching |
 | Podping | `src/podping/`: change queue, podping.cloud sender, scheduled-episode announcer |
+| Live | `src/live/`: `podcast:liveItem` create, edit, status changes (with live and liveEnd pings) |
 
 ### Import, step by step
 1. Fetch the feed. Redirects are followed, and private and internal addresses are blocked, even through DNS tricks.

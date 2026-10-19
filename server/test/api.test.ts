@@ -283,6 +283,42 @@ describe('stats prefixes and the public feed', () => {
   });
 });
 
+describe('live items over the API', () => {
+  test('owner manages live items; other users get 404', async () => {
+    const created = await alice.post(`/api/podcasts/${alicePodcast}/live`, {
+      title: 'Live Studio Session',
+      start: '2026-11-10T19:00:00-05:00',
+      streamUrl: 'https://icecast.example/studio.mp3',
+    });
+    assert.equal(created.status, 201, created.text);
+    const id = created.json.liveItem.id;
+
+    const bad = await alice.post(`/api/podcasts/${alicePodcast}/live`, { title: 'x' });
+    assert.equal(bad.status, 400);
+    assert.match(bad.json.error, /Start time is required/);
+
+    for (const r of await Promise.all([
+      bob.get(`/api/podcasts/${alicePodcast}/live`),
+      bob.post(`/api/podcasts/${alicePodcast}/live`, { title: 'x', start: '2026-11-10T19:00:00Z', streamUrl: 'https://s/x' }),
+      bob.req('PATCH', `/api/podcasts/${alicePodcast}/live/${id}`, { title: 'hijacked' }),
+      bob.post(`/api/podcasts/${alicePodcast}/live/${id}/status`, { status: 'live' }),
+      bob.del(`/api/podcasts/${alicePodcast}/live/${id}`),
+    ])) assert.equal(r.status, 404, r.text);
+
+    const live = await alice.post(`/api/podcasts/${alicePodcast}/live/${id}/status`, { status: 'live' });
+    assert.equal(live.status, 200, live.text);
+    assert.equal(live.json.liveItem.status, 'live');
+    assert.ok((await anon.get(`/${slug}/feed.xml`)).text.includes('<podcast:liveItem status="live"'));
+
+    const edited = await alice.req('PATCH', `/api/podcasts/${alicePodcast}/live/${id}`, { title: 'Live Studio Session (extended)' });
+    assert.equal(edited.json.liveItem.title, 'Live Studio Session (extended)');
+    assert.equal((await alice.get(`/api/podcasts/${alicePodcast}/live`)).json.liveItems.filter((l: any) => l.id === id).length, 1);
+    assert.equal((await alice.post(`/api/podcasts/${alicePodcast}/live/${id}/status`, { status: 'paused' })).status, 400);
+    assert.equal((await alice.del(`/api/podcasts/${alicePodcast}/live/${id}`)).status, 204);
+    assert.equal((await alice.post(`/api/podcasts/${alicePodcast}/live/${id}/status`, { status: 'live' })).status, 404);
+  });
+});
+
 describe('sessions', () => {
   test('changing password signs out other sessions', async () => {
     const laptop = new Client();

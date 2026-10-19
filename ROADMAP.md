@@ -25,10 +25,23 @@
 
 ## Live shows (`podcast:liveItem`)
 
-Imported feeds already keep `<podcast:liveItem>` blocks intact, including status, start and end times, the stream enclosure and content links, and write them back out. Still to build:
-- [ ] Create and edit live items: title, start and end time, stream URL, chat and content links
-- [ ] Status changes (pending → live → ended), with a Podping `live` ping at go-live and `liveEnd` when it ends (the queue already supports both)
-- [ ] Optionally turn an ended live item into a regular episode once the recording is uploaded
+Done:
+- [x] Create, edit and delete live items: title, times, stream URL, image, content links
+- [x] Status changes pending → live → ended, with Podping `live` and `liveEnd`
+
+Possible next steps:
+- [ ] Go live and end automatically at the scheduled times (optional, per live item)
+- [ ] Turn an ended live item into a regular episode once the recording is uploaded
+- [ ] Manage `podcast:chat` from the dashboard (imported chat tags are already kept)
+
+## Potential future upgrade: built-in live streaming server
+
+FeedHost doesn't stream today. Live items point at an outside stream (Icecast, YouTube, Twitch and so on). A built-in option could include:
+- An audio streaming server (Icecast, or MediaMTX for audio and video), with stream keys per show
+- Starting the stream from an encoder (OBS, Audio Hijack, Butt) that sets the live item to **live** automatically, and back to **ended** when it stops
+- Recording the stream, then publishing the recording as an episode
+
+**Hosting caveat:** Cloudflare's terms prohibit streaming video through its CDN and Tunnel hostnames on Free, Pro and Business plans, and restrict large-file traffic. A streaming server would need a different path, such as a separate DNS-only subdomain, Cloudflare Stream, or another provider. Weigh this together with the media CDN item above.
 
 ## Other open items
 - [ ] Web dashboard: login, podcast list, import with live progress, and stats prefix checkboxes
