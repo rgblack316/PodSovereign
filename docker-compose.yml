@@ -1,0 +1,63 @@
+# FeedHost: PostgreSQL + the app, and optionally a Cloudflare Tunnel.
+# Settings come from .env (created by install.sh; see .env.example).
+#
+#   docker compose up -d          start
+#   docker compose logs -f app    follow the app's log
+#   docker compose down           stop (data is kept)
+
+name: feedhost
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: feedhost
+      POSTGRES_USER: feedhost
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U feedhost -d feedhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  app:
+    build:
+      context: ./server
+      args:
+        FEEDHOST_VERSION: ${FEEDHOST_VERSION:-dev}
+    image: feedhost-app:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://feedhost:${POSTGRES_PASSWORD}@db:5432/feedhost
+      # Starting values; Site settings in the dashboard override them.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
+      SITE_NAME: ${SITE_NAME:-FeedHost}
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
+      PODPING_TOKEN: ${PODPING_TOKEN:-}
+    volumes:
+      # Copied media and the uploaded logo/favicon (on the host, easy to back up).
+      - ${FEEDHOST_DATA_DIR:-./data}:/data
+    ports:
+      # Only reachable from this machine; the Cloudflare Tunnel (or a local proxy) connects here.
+      - "127.0.0.1:${FEEDHOST_PORT:-8080}:8080"
+
+  # Optional: runs when COMPOSE_PROFILES=tunnel and CLOUDFLARE_TUNNEL_TOKEN are set in .env.
+  # In the Cloudflare dashboard, point the tunnel's public hostname at http://app:8080
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - app
+
+volumes:
+  db-data:

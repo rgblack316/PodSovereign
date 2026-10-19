@@ -4,6 +4,8 @@ The app that imports a podcast feed, stores it in PostgreSQL, copies its media, 
 
 ## Run it (Ubuntu Server)
 
+The easy way is Docker: see **Install** in the [main README](../README.md) for the one-line installer and `update.sh`. The rest of this section is for running it directly with Node, for development or without Docker.
+
 ```bash
 # Node 22+ and PostgreSQL
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
@@ -161,6 +163,17 @@ POST /api/podcasts/<id>/live/<liveId>/status   {"status": "ended"}
 ## Cloudflare Tunnel
 
 The app runs on your machine and Cloudflare forwards `https://podcasts.johnscreekstudios.com` to it, so there are no open ports and no certificates to manage.
+
+**With Docker (simplest).** In Cloudflare Zero Trust → Networks → Tunnels, create a tunnel and copy its token. Give it to the installer, or add it to `/opt/feedhost/.env` later:
+
+```
+CLOUDFLARE_TUNNEL_TOKEN=eyJ...
+COMPOSE_PROFILES=tunnel
+```
+
+then run `sudo docker compose up -d`. In the tunnel's **Public Hostname** tab, point `podcasts.johnscreekstudios.com` at the service `http://app:8080`. Steps 1–3 below are then unnecessary; step 4 still applies.
+
+**Without Docker, or with cloudflared installed on the machine:**
 
 **1. Install cloudflared and create the tunnel**
 

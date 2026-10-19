@@ -18,8 +18,56 @@ Clone it and run your own: the site's name, logo, favicon and web address are al
 - [x] Admin Site settings: name, logo, favicon, web and media address (stored links rewritten, old hostname redirected), sign-ups, Podping key
 - [x] Web dashboard: shows, move checklist with 301 check, import progress, stats prefixes, Podping, live shows, people
 - [x] Ownership verification on import: podcast:txt tag or a code emailed to the feed's owner (via Resend or SMTP), admin skip
-- [ ] Docker and Nginx deployment
+- [x] Docker Compose deployment with one-line install and update scripts (optional Cloudflare Tunnel container)
 
-Planned public URLs: `https://podcasts.johnscreekstudios.com/<show>/feed.xml`, with media under `/<show>/media/`, served through a Cloudflare Tunnel.
+## Install
+
+On a fresh Ubuntu Server (22.04 or newer) or Debian machine, paste this into the terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rgblack316/podcast-feed-import-and-host/main/install.sh | sudo bash
+```
+
+It installs Docker if needed, downloads FeedHost to `/opt/feedhost`, asks for your web address, port and (optionally) a Cloudflare Tunnel token, generates a database password and starts everything. Then open the site and create the first account; it becomes the admin.
+
+For an unattended install, give the answers up front:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rgblack316/podcast-feed-import-and-host/main/install.sh \
+  | sudo FEEDHOST_NONINTERACTIVE=1 FEEDHOST_URL=https://podcasts.example.com FEEDHOST_TUNNEL_TOKEN=eyJ... bash
+```
+
+## Update
+
+```bash
+cd /opt/feedhost && sudo ./update.sh
+```
+
+It shows what's new, backs up the database to `backups/` (the last 10 are kept), downloads the new version, rebuilds and restarts. Database changes apply automatically on start. `upgrade.sh` does the same thing. Options: `--check` (only show what's new), `--yes` (don't ask), `--no-backup`, `--force` (rebuild even if nothing changed). If the app doesn't come back, the script prints the exact commands to return to the previous version.
+
+## Backups and restore
+
+- **Media and logos:** `/opt/feedhost/data` (when stored on this server).
+- **Database:** `update.sh` makes a backup each time. To make one by hand:
+  `cd /opt/feedhost && sudo docker compose exec -T db pg_dump -U feedhost -d feedhost --clean --if-exists | gzip > backups/manual.sql.gz`
+- **Restore:** `gunzip -c backups/<file>.sql.gz | sudo docker compose exec -T db psql -U feedhost -d feedhost`
+- Keep a copy of `/opt/feedhost/.env` too; it holds the database password.
+
+## Day to day (in `/opt/feedhost`)
+
+| | |
+|---|---|
+| Follow the log | `sudo docker compose logs -f app` |
+| Restart | `sudo docker compose restart app` |
+| Stop / start | `sudo docker compose down` / `sudo docker compose up -d` |
+| Status | `sudo docker compose ps` |
+
+The app listens only on `127.0.0.1` (port 8080 by default). A Cloudflare Tunnel (run by Docker when you give a token, or installed separately) or any reverse proxy on the same machine makes it public.
+
+## URLs
+
+Public URLs: `https://podcasts.johnscreekstudios.com/<show>/feed.xml`, with media under `/<show>/media/`, served through a Cloudflare Tunnel.
+
+The first install builds the app image on your server; it downloads Node and npm packages at that point.
 
 See [`server/README.md`](server/README.md) for setup, including the Cloudflare Tunnel guide, and [`ROADMAP.md`](ROADMAP.md) for what's next, including the CDN revisit.

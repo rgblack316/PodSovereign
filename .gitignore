@@ -4,3 +4,5 @@ dist/
 .env
 rebuilt.xml
 .scratch/
+backups/
+data/

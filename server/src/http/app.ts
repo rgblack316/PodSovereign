@@ -721,7 +721,7 @@ export function createApp(deps: AppDeps) {
 
   router.get('/healthz', async (ctx) => {
     await db.query('SELECT 1');
-    sendJson(ctx.res, 200, { ok: true });
+    sendJson(ctx.res, 200, { ok: true, version: process.env.FEEDHOST_VERSION ?? 'dev' });
   });
 
   // ───────────── request handling ─────────────
@@ -776,7 +776,21 @@ function checkCsrf(req: IncomingMessage, publicOrigin: string) {
   const site = req.headers['sec-fetch-site'];
   if (site && site !== 'same-origin' && site !== 'none') throw new HttpError(403, 'Cross-site request blocked');
   const origin = req.headers.origin;
-  if (origin && origin !== publicOrigin) throw new HttpError(403, 'Cross-site request blocked');
+  if (origin && origin !== publicOrigin && !isLocalOrigin(origin)) throw new HttpError(403, 'Cross-site request blocked');
+}
+
+/**
+ * The dashboard opened on this machine (or through an SSH port-forward) before
+ * the public address works. Only this machine can serve a localhost page, so
+ * trusting it doesn't open the door to other sites.
+ */
+function isLocalOrigin(origin: string): boolean {
+  try {
+    const u = new URL(origin);
+    return (u.protocol === 'http:' || u.protocol === 'https:') && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+  } catch {
+    return false;
+  }
 }
 
 function sendFile(req: IncomingMessage, res: ServerResponse, file: string, size: number, type: string) {

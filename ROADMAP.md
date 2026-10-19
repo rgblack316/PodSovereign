@@ -34,3 +34,5 @@ FeedHost doesn't stream today. Live items point at an outside stream (Icecast, Y
 - [ ] Encrypt saved provider secrets and the Podping key at rest (today they're stored in the database as-is)
 - [ ] Storage quotas per account or per podcast, with a usage display
 - [ ] Episode editing and new uploads (beyond import)
+- [ ] Commit a `package-lock.json` so Docker builds use pinned dependency versions
+- [ ] Prebuilt app image on GitHub Container Registry, so installs and updates skip the local build

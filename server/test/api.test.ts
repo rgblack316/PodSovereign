@@ -153,6 +153,12 @@ describe('accounts', () => {
     assert.equal(evil.status, 403);
     const crossSite = await alice.post('/api/imports', { url: 'https://x.com/feed' }, { 'Sec-Fetch-Site': 'cross-site' });
     assert.equal(crossSite.status, 403);
+    // The dashboard opened at http://localhost:8080 (e.g. an SSH port-forward) before the public address works.
+    const local = await alice.post('/api/me/password', { currentPassword: 'x', newPassword: 'y' }, { Origin: 'http://localhost:8080' });
+    assert.notEqual(local.status, 415);
+    assert.notEqual(local.json.error, 'Cross-site request blocked');
+    const lookalike = await alice.post('/api/imports', { url: 'https://x.com/feed' }, { Origin: 'http://localhost.evil.example' });
+    assert.equal(lookalike.status, 403);
   });
 });
 
