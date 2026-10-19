@@ -1019,6 +1019,93 @@ function peopleSummary(people) {
     h('li', null, artImg(p.img, p.name, 'avatar'), h('span', null, h('b', null, p.name), h('small', null, p.role ?? 'host')))));
 }
 
+// ───────────── locations (<podcast:location>) ─────────────
+
+const REL_TEXT = { subject: 'What it’s about', creator: 'Where it was made' };
+
+/**
+ * Locations list with an OpenStreetMap lookup that fills in coordinates, the OSM ID and country.
+ * `list` is changed in place.
+ */
+function locationsEditor({ list, onChange, defaultRel }) {
+  const changed = () => onChange?.();
+  const rows = h('div', { class: 'locations-list' });
+  const q = h('input', { type: 'search', placeholder: 'Search for a place, e.g. Johns Creek, GA', 'aria-label': 'Search for a place' });
+  const find = h('button', { type: 'button' }, 'Look up');
+  const results = h('ul', { class: 'place-results', hidden: true });
+  const err = formError();
+
+  async function search() {
+    if (!q.value.trim()) return q.focus();
+    err.hidden = true;
+    find.disabled = true;
+    find.textContent = 'Looking…';
+    try {
+      const { places } = await api('GET', `/api/places?q=${encodeURIComponent(q.value)}`);
+      results.replaceChildren(...(places.length ? places.map((pl) => h('li', null, h('button', {
+        type: 'button',
+        class: 'quiet',
+        onclick: () => {
+          list.push({ name: pl.name, rel: defaultRel, geo: pl.geo, osm: pl.osm, country: pl.country });
+          results.hidden = true;
+          q.value = '';
+          changed();
+          draw();
+        },
+      }, h('b', null, pl.name), h('span', { class: 'hint' }, pl.label)))) : [h('li', { class: 'hint' }, 'Nothing found. Try adding the city or country.')]));
+      results.hidden = false;
+    } catch (e) {
+      showError(err, e);
+    } finally {
+      find.disabled = false;
+      find.textContent = 'Look up';
+    }
+  }
+  find.addEventListener('click', search);
+  q.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault(); // don't submit the whole form
+      search();
+    }
+  });
+
+  function draw() {
+    rows.replaceChildren(...list.map((loc, i) => {
+      const input = (key, attrs) => {
+        const el = h('input', { type: 'text', value: loc[key] ?? '', ...attrs });
+        el.addEventListener('input', () => { loc[key] = el.value.trim() || null; if (key === 'name') loc.name = el.value; changed(); });
+        return el;
+      };
+      const rel = h('select', { 'aria-label': 'Type' }, Object.entries(REL_TEXT).map(([v, t]) => h('option', { value: v }, t)));
+      rel.value = loc.rel ?? 'subject';
+      rel.addEventListener('change', () => { loc.rel = rel.value; changed(); });
+      const [lat, lon] = /^geo:(-?[\d.]+),(-?[\d.]+)/i.exec(loc.geo ?? '')?.slice(1) ?? [];
+      return h('div', { class: 'location' },
+        h('div', { class: 'location-main' },
+          input('name', { placeholder: 'Place name, as listeners should see it', 'aria-label': 'Place name', maxlength: 128 }),
+          rel,
+          h('button', { type: 'button', class: 'quiet danger', onclick: () => { list.splice(i, 1); changed(); draw(); } }, 'Remove')),
+        h('div', { class: 'location-codes' },
+          h('label', null, 'Coordinates', input('geo', { placeholder: 'geo:34.0289,-84.1986' })),
+          h('label', null, 'OpenStreetMap ID', input('osm', { placeholder: 'R119557' })),
+          h('label', null, 'Country', input('country', { placeholder: 'US', maxlength: 2 })),
+          lat ? h('a', { href: `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=13/${lat}/${lon}`, target: '_blank', rel: 'noopener' }, 'View map') : null));
+    }));
+    if (!list.length) rows.append(h('p', { class: 'hint' }, 'No locations.'));
+  }
+  draw();
+  const add = h('button', { type: 'button', class: 'quiet', onclick: () => { list.push({ name: '', rel: defaultRel, geo: null, osm: null, country: null }); changed(); draw(); rows.querySelector('.location:last-child input')?.focus(); } }, 'Add one by hand');
+  return h('div', { class: 'locations' },
+    h('div', { class: 'place-search' }, q, find),
+    err, results, rows,
+    h('div', { class: 'actions', style: 'margin-top:4px' }, add));
+}
+
+const locationsPayload = (list) => {
+  if (list.some((l) => !l.name?.trim())) throw new Error('Every location needs a name.');
+  return list.map((l) => ({ name: l.name, rel: l.rel, geo: l.geo, osm: l.osm, country: l.country }));
+};
+
 // ───────────── episode editor ─────────────
 
 const TRANSCRIPT_TYPES = [
@@ -1278,6 +1365,11 @@ async function viewEpisode(p, canEdit, episodeId) {
   }
   drawPeople();
 
+  // ── Locations ──
+  const locations = (ep.locations ?? []).map((l) => ({ ...l }));
+  let locationsChanged = false;
+  const locEditor = locationsEditor({ list: locations, defaultRel: 'subject', onChange: () => { locationsChanged = true; markDirty(); } });
+
   // ── Advanced ──
   const other = h('textarea', { class: 'code', rows: Math.min(16, Math.max(4, (ep.otherTags.match(/\n/g)?.length ?? 0) + 2)), spellcheck: 'false' }, ep.otherTags);
   const block = h('input', { type: 'checkbox', checked: ep.block });
@@ -1335,6 +1427,7 @@ async function viewEpisode(p, canEdit, episodeId) {
       if (ownPeople && people.some((x) => !x.name.trim())) throw new Error('Every person needs a name.');
       b.people = ownPeople ? peoplePayload(people) : [];
     }
+    if (locationsChanged) b.locations = locationsPayload(locations);
     if (transcriptsChanged) b.transcripts = transcripts.map((t) => ({ ...t.ref, type: t.type, language: t.language || null, rel: t.rel }));
     if (chaptersChanged) b.chapters = chapters ? chapters.ref : null;
     if (mode.value === 'draft') b.status = 'draft';
@@ -1388,6 +1481,9 @@ async function viewEpisode(p, canEdit, episodeId) {
         h('div', { class: 'field' }, h('label', null, 'Episode art'), artSlot),
         field('Episode web page', link, 'Optional. A page about this episode on your website.')),
       h('section', { class: 'panel' }, h('h2', null, 'People'), peopleSlot),
+      h('section', { class: 'panel' }, h('h2', null, 'Locations'),
+        h('p', { class: 'muted' }, 'Places this episode is about, or where it was recorded. Apps can show them on a map.'),
+        locEditor),
       h('section', { class: 'panel' }, h('h2', null, 'Transcripts and chapters'),
         h('h3', { class: 'sub' }, 'Transcripts'), tList, tUp.el, h('div', { class: 'actions', style: 'margin-top:8px' }, tUp.button),
         h('h3', { class: 'sub' }, 'Chapters'), cSlot, cUp.el, h('div', { class: 'actions', style: 'margin-top:8px' }, cUp.button)),
@@ -1528,6 +1624,9 @@ async function tabDetails(p, canEdit, reload) {
   const people = editablePeople(s.people);
   let peopleChanged = false;
   const pEditor = peopleEditor({ podcastId: p.id, taxonomy: d.roles, list: people, onChange: () => (peopleChanged = true) });
+  const locations = s.locations.map((l) => ({ ...l }));
+  let locationsChanged = false;
+  const locEditor = locationsEditor({ list: locations, defaultRel: 'creator', onChange: () => (locationsChanged = true) });
   const other = h('textarea', { class: 'code', id: 'show-other-tags', rows: Math.min(16, Math.max(4, (s.otherTags.match(/\n/g)?.length ?? 0) + 2)), spellcheck: 'false' }, s.otherTags);
 
   const form = h('form', {
@@ -1553,6 +1652,7 @@ async function tabDetails(p, canEdit, reload) {
             if (people.some((x) => !x.name.trim())) throw new Error('Every person needs a name.');
             body.people = peoplePayload(people);
           }
+          if (locationsChanged) body.locations = locationsPayload(locations);
           await api('PUT', `/api/podcasts/${p.id}/details`, body);
           toast('Show details saved');
           await refreshPodcasts();
@@ -1579,6 +1679,10 @@ async function tabDetails(p, canEdit, reload) {
       h('h2', null, 'People'),
       h('p', { class: 'muted' }, 'Hosts and regular crew. Podcasting 2.0 apps show them with every episode, unless an episode lists its own people.'),
       pEditor.el),
+    h('section', { class: 'panel' },
+      h('h2', null, 'Locations'),
+      h('p', { class: 'muted' }, 'Where the show is made, or the places it covers. Episodes can list their own.'),
+      locEditor),
     h('section', { class: 'panel' }, h('details', { open: s.otherTags ? true : null },
       h('summary', null, 'More tags and options'),
       h('div', { style: 'margin-top:16px' },

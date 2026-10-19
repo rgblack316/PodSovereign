@@ -19,6 +19,7 @@ import { parseDuration } from '../feed/parser.js';
 import type { XmlNode } from '../feed/types.js';
 import { ownMediaPaths } from '../media/prune.js';
 import { peopleFromTags, peopleToTags, type Person } from './people.js';
+import { locationsFromTags, locationsToTags, type Place } from './location.js';
 import { queuePing } from '../podping/podping.js';
 import {
   addNamespaces,
@@ -46,9 +47,9 @@ const MANAGED = new Map<string, string>([
   ['pubDate', 'Publishing'], ['enclosure', 'Audio'], ['itunes:title', 'Title for Apple'], ['itunes:image', 'Episode art'],
   ['itunes:duration', 'Length'], ['itunes:episode', 'Episode number'], ['itunes:season', 'Season'],
   ['itunes:episodeType', 'Type'], ['itunes:explicit', 'Explicit'], ['itunes:block', 'Hide from Apple Podcasts'],
-  ['podcast:transcript', 'Transcripts'], ['podcast:chapters', 'Chapters'], ['podcast:person', 'People'],
+  ['podcast:transcript', 'Transcripts'], ['podcast:chapters', 'Chapters'], ['podcast:person', 'People'], ['podcast:location', 'Locations'],
 ]);
-const OWN_FIELD = new Set(['podcast:transcript', 'podcast:chapters', 'podcast:person']);
+const OWN_FIELD = new Set(['podcast:transcript', 'podcast:chapters', 'podcast:person', 'podcast:location']);
 
 export interface Transcript {
   url: string;
@@ -79,6 +80,7 @@ export interface EpisodeView {
   chapters: { url: string } | null;
   /** This episode's own people. Empty = the show's people apply. */
   people: Person[];
+  locations: Place[];
   otherTags: string;
   updatedAt: string;
 }
@@ -174,6 +176,7 @@ function view(r: Row, tags: XmlNode[], mediaName: string | null): EpisodeView {
       .map((t) => ({ url: t.attrs.url!, type: t.attrs.type ?? 'text/plain', language: t.attrs.language ?? null, rel: t.attrs.rel ?? null })),
     chapters: chapters?.attrs.url ? { url: chapters.attrs.url } : null,
     people: peopleFromTags(tags),
+    locations: locationsFromTags(tags),
     otherTags: tagsToXml(tags.filter((t) => !MANAGED.has(t.name))),
     updatedAt: new Date(r.updated_at).toISOString(),
   };
@@ -207,6 +210,7 @@ export interface EpisodeInput {
   transcripts?: unknown;
   chapters?: unknown;
   people?: unknown;
+  locations?: unknown;
   otherTags?: unknown;
 }
 
@@ -277,7 +281,7 @@ async function applyInput(
   now: Date,
 ): Promise<{ draft: Draft; namespaces: Record<string, string> }> {
   const next: Draft = { ...d };
-  if ([input.transcripts, input.chapters, input.people, input.otherTags].some((v) => v !== undefined)) next.storedTags = null;
+  if ([input.transcripts, input.chapters, input.people, input.locations, input.otherTags].some((v) => v !== undefined)) next.storedTags = null;
   let newNs: Record<string, string> = {};
 
   if (input.title !== undefined || creating) next.title = text(input.title, 'Title', { required: true, max: 1000 })!;
@@ -326,12 +330,14 @@ async function applyInput(
     next.imageUrl = (await fileRef(q, config, podcastId, input.image, 'Episode art', ['image']))?.url ?? null;
   }
 
-  if (input.transcripts !== undefined || input.chapters !== undefined || input.people !== undefined) {
+  if ([input.transcripts, input.chapters, input.people, input.locations].some((v) => v !== undefined)) {
     const old = next.managedTags;
     let transcripts = old.filter((t) => t.name === 'podcast:transcript');
     let chapters = old.filter((t) => t.name === 'podcast:chapters');
     let people = old.filter((t) => t.name === 'podcast:person');
+    let locations = old.filter((t) => t.name === 'podcast:location');
     if (input.people !== undefined) people = await peopleToTags(q, config, podcastId, input.people);
+    if (input.locations !== undefined) locations = locationsToTags(input.locations);
     if (input.transcripts !== undefined) {
       const list = input.transcripts === null ? [] : input.transcripts;
       if (!Array.isArray(list)) throw new PublishError('Transcripts must be a list');
@@ -357,7 +363,7 @@ async function applyInput(
       const ref = await fileRef(q, config, podcastId, input.chapters, 'Chapters', ['chapters', 'transcript']);
       chapters = ref ? [node('podcast:chapters', { url: ref.url, type: 'application/json+chapters' })] : [];
     }
-    next.managedTags = [...transcripts, ...chapters, ...people];
+    next.managedTags = [...transcripts, ...chapters, ...people, ...locations];
   }
 
   if (input.otherTags !== undefined) {

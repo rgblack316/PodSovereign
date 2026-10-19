@@ -35,6 +35,7 @@ import { createEpisode, deleteEpisode, getEpisode, listEpisodes, updateEpisode }
 import { PublishError } from '../publish/fields.js';
 import { createShow, getShow, updateShow } from '../publish/show.js';
 import { APPLE_CATEGORIES, MEDIUMS } from '../publish/categories.js';
+import { lookupPlace } from '../publish/location.js';
 import { changeStorage, latestMove, MoveError } from '../storage/move.js';
 import { PROVIDERS, StorageConfigError, validateSettings, type StorageSettings } from '../storage/providers.js';
 import { localPath, storeFor, testConnection, type StorageState } from '../storage/store.js';
@@ -325,6 +326,12 @@ export function createApp(deps: AppDeps) {
   router.get('/api/categories', async (ctx) => {
     await requireUser(ctx);
     sendJson(ctx.res, 200, { categories: APPLE_CATEGORIES, mediums: MEDIUMS });
+  });
+
+  /** Look up a place on OpenStreetMap for the Location fields. */
+  router.get('/api/places', async (ctx) => {
+    await requireUser(ctx);
+    sendJson(ctx.res, 200, { places: await lookupPlace(config, ctx.url.searchParams.get('q')) });
   });
 
   router.get('/api/podcasts/:id/details', async (ctx) => {

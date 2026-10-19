@@ -53,6 +53,7 @@ export function testConfig(over: Partial<Config> = {}): Config {
     requireVerification: false,
     mail: null,
     resendApiUrl: 'http://127.0.0.1:1',
+    nominatimUrl: 'http://127.0.0.1:1/',
     previousHosts: [],
     ...over,
   };

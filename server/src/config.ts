@@ -43,6 +43,8 @@ export interface Config {
   mail: import('./mail/mailer.js').MailSettings | null;
   /** Resend API base URL (overridable for tests). */
   resendApiUrl: string;
+  /** OpenStreetMap place search used by the Location lookup. */
+  nominatimUrl: string;
   /** Hostnames this site used before a base-URL change; requests for them are 301-redirected. */
   previousHosts: string[];
   /**
@@ -90,6 +92,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     requireVerification: true,
     mail: null,
     resendApiUrl: env.RESEND_API_URL ?? 'https://api.resend.com',
+    nominatimUrl: env.NOMINATIM_URL ?? 'https://nominatim.openstreetmap.org/',
     previousHosts: [],
     envDefaults: {
       publicBaseUrl,

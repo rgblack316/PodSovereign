@@ -306,12 +306,12 @@ describe('episodes', () => {
   });
 
   test('other tags: any Podcasting 2.0 tag as XML, validated', async () => {
-    const tags = '<podcast:location geo="geo:33.9,-84.2">Johns Creek, GA</podcast:location>\n<podcast:soundbite startTime="73.0" duration="60.0">Best bit</podcast:soundbite>';
+    const tags = '<podcast:license url="https://creativecommons.org/licenses/by/4.0/">cc-by-4.0</podcast:license>\n<podcast:soundbite startTime="73.0" duration="60.0">Best bit</podcast:soundbite>';
     let r = await alice.patch(`/api/podcasts/${show}/episodes/${episode}`, { otherTags: tags });
     assert.equal(r.status, 200, r.text);
     assert.equal(r.json.episode.otherTags, tags);
     let xml = await feed();
-    assert.match(xml, /<podcast:location geo="geo:33.9,-84.2">Johns Creek, GA<\/podcast:location>/);
+    assert.match(xml, /<podcast:license url="https:\/\/creativecommons.org\/licenses\/by\/4.0\/">cc-by-4.0<\/podcast:license>/);
     assert.match(xml, /<podcast:soundbite startTime="73.0" duration="60.0">Best bit<\/podcast:soundbite>/);
     // Transcripts are untouched by editing other tags.
     assert.match(xml, /podcast:transcript/);
@@ -380,6 +380,63 @@ describe('episodes', () => {
     assert.doesNotMatch((await feed()).slice((await feed()).indexOf('<item>')), /podcast:person/);
     // The photo is still used by the show, so it's kept.
     assert.ok(existsSync(diskPath(photo.url)));
+  });
+
+  test('locations: several per show and episode, with what they mean', async () => {
+    let r = await alice.put(`/api/podcasts/${show}/details`, {
+      locations: [{ name: 'Johns Creek, GA', rel: 'creator', geo: 'geo:34.0289,-84.1986', osm: 'r119557', country: 'us' }],
+    });
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual(r.json.show.locations, [{ name: 'Johns Creek, GA', rel: 'creator', geo: 'geo:34.0289,-84.1986', osm: 'R119557', country: 'US' }]);
+    r = await alice.patch(`/api/podcasts/${show}/episodes/${episode}`, {
+      locations: [
+        { name: 'Atlanta Botanical Garden', rel: 'subject', geo: 'geo:33.7899,-84.3733', country: 'US' },
+        { name: 'Marlow', rel: 'creator' },
+      ],
+    });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.json.episode.locations.length, 2);
+    const xml = await feed();
+    const channel = xml.slice(0, xml.indexOf('<item>'));
+    assert.match(channel, /<podcast:location rel="creator" geo="geo:34.0289,-84.1986" osm="R119557" country="US">Johns Creek, GA<\/podcast:location>/);
+    assert.match(xml, /<podcast:location rel="subject" geo="geo:33.7899,-84.3733" country="US">Atlanta Botanical Garden<\/podcast:location>/);
+    assert.match(xml, /<podcast:location rel="creator">Marlow<\/podcast:location>/);
+    // People and other tags are untouched.
+    assert.match(xml, /Dr. Ann Lee|podcast:soundbite/);
+
+    for (const bad of [{ rel: 'subject' }, { name: 'X', geo: '33.7,-84.3' }, { name: 'X', geo: 'geo:133.7,-84.3' }, { name: 'X', osm: '119557' }, { name: 'X', country: 'USA' }, { name: 'X', rel: 'about' }]) {
+      r = await alice.patch(`/api/podcasts/${show}/episodes/${episode}`, { locations: [bad] });
+      assert.equal(r.status, 400, JSON.stringify(bad));
+    }
+    r = await alice.patch(`/api/podcasts/${show}/episodes/${episode}`, { otherTags: '<podcast:location>X</podcast:location>' });
+    assert.match(r.json.error, /own field \(Locations\)/);
+  });
+
+  test('place lookup fills in coordinates, OpenStreetMap ID and country', async () => {
+    const seen: string[] = [];
+    const osm = http.createServer((req, res) => {
+      seen.push(`${req.url} ${req.headers['user-agent']}`);
+      res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify([
+        { lat: '30.2711286', lon: '-97.7436995', osm_type: 'relation', osm_id: 113314, name: 'Austin', display_name: 'Austin, Travis County, Texas, United States', address: { country_code: 'us' } },
+        { lat: 'x', lon: '1' },
+      ]));
+    });
+    await new Promise<void>((done) => osm.listen(0, '127.0.0.1', done));
+    config.nominatimUrl = `http://127.0.0.1:${(osm.address() as AddressInfo).port}/`;
+    try {
+      const r = await alice.get('/api/places?q=Austin%2C%20TX');
+      assert.equal(r.status, 200, r.text);
+      assert.deepEqual(r.json.places, [{ name: 'Austin', label: 'Austin, Travis County, Texas, United States', geo: 'geo:30.2711286,-97.7436995', osm: 'R113314', country: 'US' }]);
+      assert.match(seen[0]!, /^\/search\?q=Austin%2C\+TX&format=jsonv2/);
+      assert.match(seen[0]!, /FeedHost\/0.1/);
+      assert.equal((await alice.get('/api/places?q=')).status, 400);
+    } finally {
+      osm.close();
+      config.nominatimUrl = 'http://127.0.0.1:1/';
+    }
+    const down = await alice.get('/api/places?q=Austin');
+    assert.equal(down.status, 502);
+    assert.match(down.json.error, /type the details in/);
   });
 
   test('replacing the audio deletes the old file', async () => {

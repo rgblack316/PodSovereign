@@ -479,6 +479,7 @@ table.episodes .pill { margin-left: 2px; vertical-align: 1px; }
   .art-pick.big .art { width: 96px; height: 96px; }
   .person-fields { grid-template-columns: 1fr; }
   .choices.two { grid-template-columns: 1fr; }
+  .location-main { grid-template-columns: 1fr; }
 }
 
 /* People */
@@ -496,6 +497,24 @@ table.episodes .pill { margin-left: 2px; vertical-align: 1px; }
 .people-chips span { display: grid; line-height: 1.2; }
 .people-chips small { color: var(--ink-3); text-transform: capitalize; }
 .choices.two { grid-template-columns: 1fr 1fr; }
+
+/* Locations */
+.place-search { display: flex; gap: var(--s2); }
+.place-search input { flex: 1; width: auto; font: 400 var(--t-base)/1.4 var(--font); color: var(--ink); background: var(--panel); border: 1px solid var(--rule); border-radius: var(--r-sm); padding: 9px 11px; }
+.place-results { list-style: none; margin: var(--s2) 0 0; padding: var(--s1); border: 1px solid var(--rule); border-radius: var(--r-md); display: grid; }
+.place-results button { width: 100%; justify-content: flex-start; flex-wrap: wrap; text-align: left; gap: 2px var(--s2); min-height: 0; padding: 8px 10px; }
+.place-results li.hint { padding: 8px 10px; }
+.place-results[hidden] { display: none; }
+.locations-list { margin-top: var(--s4); }
+.location { padding: var(--s3) 0; border-top: 1px solid var(--rule); }
+.location:first-child { border-top: 0; padding-top: 0; }
+.location-main { display: grid; grid-template-columns: minmax(0, 1fr) 190px auto; gap: var(--s2); align-items: center; }
+.location-codes { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s3); align-items: flex-end; margin-top: var(--s2); }
+.location-codes label { font-size: 0.75rem; font-weight: 600; color: var(--ink-3); margin: 0; }
+.location-codes input { display: block; width: 190px; margin-top: 2px; padding: 6px 8px; font-size: var(--t-sm); }
+.location-codes label:nth-child(2) input { width: 130px; }
+.location-codes label:nth-child(3) input { width: 64px; text-transform: uppercase; }
+.location-codes a { font-size: var(--t-sm); padding-bottom: 7px; }
 
 /* ───────── Small screens ───────── */
 

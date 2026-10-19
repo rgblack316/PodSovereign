@@ -106,7 +106,8 @@ Migrations run automatically on startup. The **first account registered becomes 
 - **Uploads** (audio, video, artwork, transcripts, chapters) are sent in 8 MB chunks, because Cloudflare Tunnel refuses any request over 100 MB. A dropped connection resumes where it stopped. Files are stored with the rest of the show's media (`<show>/media/audio/…`), on this server or the storage provider.
 - **Length and image size are read from the file:** MP3 (including VBR), M4A/MP4, WAV and Opus for `itunes:duration`; PNG, JPEG and WebP for the artwork check. You can type the length over it.
 - **People** (`podcast:person`) have their own form on both Show details and each episode: name, role (from the Podcast Taxonomy, which also sets the group), photo and link, in the order you set. Per the Podcast Namespace, an episode's people *replace* the show's for that episode, so an episode is either "Same as the show" or has its own list (with a button to copy in the show's people, and a warning if no host is listed).
-- **Transcripts and chapters** have their own fields. **Every other tag** (soundbites, location, value, alternate enclosures, anything an import brought along) is editable as XML under *More tags and options*, checked before it's saved. Editing one field never changes the others.
+- **Locations** (`podcast:location`) have their own form on Show details and each episode, several per show or episode: the place name, what it means (*what it's about* or *where it was made*), coordinates, OpenStreetMap ID and country. **Look up** searches OpenStreetMap and fills those in; you can also type them. The lookup uses the public Nominatim service (one search a second, only when you press Look up); set `NOMINATIM_URL` to use your own.
+- **Transcripts and chapters** have their own fields. **Every other tag** (soundbites, value, alternate enclosures, anything an import brought along) is editable as XML under *More tags and options*, checked before it's saved. Editing one field never changes the others.
 - **Podping:** a newly published or scheduled episode is announced when it appears in the feed; editing or unpublishing a public episode announces the change. The show's Podping switch still applies.
 - **Files are cleaned up:** replacing the audio or artwork, or deleting an episode, removes files nothing else uses. Uploads never saved into an episode are removed after two days.
 
@@ -250,7 +251,7 @@ All `/api` calls use a session cookie. Requests that change something must send 
 | GET · PUT | `/api/admin/storage` · POST `/api/admin/storage/test` | admin |
 | GET | `/api/podcasts` | your own shows, plus ones shared with you |
 | POST | `/api/podcasts` `{title, slug?, …show details}` (start a new show) | signed in |
-| GET | `/api/categories` (Apple categories, podcast:medium values) | signed in |
+| GET | `/api/categories` (Apple categories, podcast:medium values) · `/api/places?q=` (OpenStreetMap place lookup) | signed in |
 | GET | `/api/podcasts/:id` · `/episodes` · `/episodes/:episodeId` · `/details` · `/prefixes` | viewer+ |
 | PUT | `/api/podcasts/:id/details` (show details) | editor+ |
 | POST · PATCH · DELETE | `/api/podcasts/:id/episodes` · `/episodes/:episodeId` (PATCH changes only the fields sent) | editor+ |
