@@ -18,6 +18,7 @@ import { invalidateFeedCache, isUuid } from '../db/podcasts.js';
 import { parseDuration } from '../feed/parser.js';
 import type { XmlNode } from '../feed/types.js';
 import { ownMediaPaths } from '../media/prune.js';
+import { peopleFromTags, peopleToTags, type Person } from './people.js';
 import { queuePing } from '../podping/podping.js';
 import {
   addNamespaces,
@@ -45,8 +46,9 @@ const MANAGED = new Map<string, string>([
   ['pubDate', 'Publishing'], ['enclosure', 'Audio'], ['itunes:title', 'Title for Apple'], ['itunes:image', 'Episode art'],
   ['itunes:duration', 'Length'], ['itunes:episode', 'Episode number'], ['itunes:season', 'Season'],
   ['itunes:episodeType', 'Type'], ['itunes:explicit', 'Explicit'], ['itunes:block', 'Hide from Apple Podcasts'],
-  ['podcast:transcript', 'Transcripts'], ['podcast:chapters', 'Chapters'],
+  ['podcast:transcript', 'Transcripts'], ['podcast:chapters', 'Chapters'], ['podcast:person', 'People'],
 ]);
+const OWN_FIELD = new Set(['podcast:transcript', 'podcast:chapters', 'podcast:person']);
 
 export interface Transcript {
   url: string;
@@ -75,6 +77,8 @@ export interface EpisodeView {
   block: boolean;
   transcripts: Transcript[];
   chapters: { url: string } | null;
+  /** This episode's own people. Empty = the show's people apply. */
+  people: Person[];
   otherTags: string;
   updatedAt: string;
 }
@@ -169,6 +173,7 @@ function view(r: Row, tags: XmlNode[], mediaName: string | null): EpisodeView {
       .filter((t) => t.name === 'podcast:transcript' && t.attrs.url)
       .map((t) => ({ url: t.attrs.url!, type: t.attrs.type ?? 'text/plain', language: t.attrs.language ?? null, rel: t.attrs.rel ?? null })),
     chapters: chapters?.attrs.url ? { url: chapters.attrs.url } : null,
+    people: peopleFromTags(tags),
     otherTags: tagsToXml(tags.filter((t) => !MANAGED.has(t.name))),
     updatedAt: new Date(r.updated_at).toISOString(),
   };
@@ -201,6 +206,7 @@ export interface EpisodeInput {
   block?: unknown;
   transcripts?: unknown;
   chapters?: unknown;
+  people?: unknown;
   otherTags?: unknown;
 }
 
@@ -222,8 +228,10 @@ interface Draft {
   explicit: boolean | null;
   imageUrl: string | null;
   block: boolean;
-  managedTags: XmlNode[]; // transcripts, then chapters
+  managedTags: XmlNode[]; // transcripts, chapters, people
   otherTags: XmlNode[];
+  /** Tags in their stored order, kept as-is until a tag field changes. */
+  storedTags: XmlNode[] | null;
 }
 
 function fromRow(r: Row, tags: XmlNode[]): Draft {
@@ -245,8 +253,9 @@ function fromRow(r: Row, tags: XmlNode[]): Draft {
     explicit: r.itunes_explicit,
     imageUrl: r.itunes_image_url,
     block: r.itunes_block,
-    managedTags: tags.filter((t) => t.name === 'podcast:transcript' || t.name === 'podcast:chapters'),
+    managedTags: tags.filter((t) => OWN_FIELD.has(t.name)),
     otherTags: tags.filter((t) => !MANAGED.has(t.name)),
+    storedTags: tags,
   };
 }
 
@@ -268,6 +277,7 @@ async function applyInput(
   now: Date,
 ): Promise<{ draft: Draft; namespaces: Record<string, string> }> {
   const next: Draft = { ...d };
+  if ([input.transcripts, input.chapters, input.people, input.otherTags].some((v) => v !== undefined)) next.storedTags = null;
   let newNs: Record<string, string> = {};
 
   if (input.title !== undefined || creating) next.title = text(input.title, 'Title', { required: true, max: 1000 })!;
@@ -316,10 +326,12 @@ async function applyInput(
     next.imageUrl = (await fileRef(q, config, podcastId, input.image, 'Episode art', ['image']))?.url ?? null;
   }
 
-  if (input.transcripts !== undefined || input.chapters !== undefined) {
+  if (input.transcripts !== undefined || input.chapters !== undefined || input.people !== undefined) {
     const old = next.managedTags;
     let transcripts = old.filter((t) => t.name === 'podcast:transcript');
     let chapters = old.filter((t) => t.name === 'podcast:chapters');
+    let people = old.filter((t) => t.name === 'podcast:person');
+    if (input.people !== undefined) people = await peopleToTags(q, config, podcastId, input.people);
     if (input.transcripts !== undefined) {
       const list = input.transcripts === null ? [] : input.transcripts;
       if (!Array.isArray(list)) throw new PublishError('Transcripts must be a list');
@@ -345,7 +357,7 @@ async function applyInput(
       const ref = await fileRef(q, config, podcastId, input.chapters, 'Chapters', ['chapters', 'transcript']);
       chapters = ref ? [node('podcast:chapters', { url: ref.url, type: 'application/json+chapters' })] : [];
     }
-    next.managedTags = [...transcripts, ...chapters];
+    next.managedTags = [...transcripts, ...chapters, ...people];
   }
 
   if (input.otherTags !== undefined) {
@@ -418,7 +430,7 @@ export async function createEpisode(
     status: 'draft', pubDate: null, title: '', description: null, link: null,
     enclosureMediaId: null, enclosureUrl: null, enclosureLength: null, enclosureType: null,
     itunesTitle: null, duration: null, season: null, episode: null, episodeType: null, explicit: null,
-    imageUrl: null, block: false, managedTags: [], otherTags: [],
+    imageUrl: null, block: false, managedTags: [], otherTags: [], storedTags: null,
   };
   const { draft, namespaces } = await applyInput(q, config, podcastId, ctx.namespaces, blank, input, true, now);
   const { id } = await one<{ id: string }>(
@@ -428,7 +440,7 @@ export async function createEpisode(
   );
   // announced_at stays empty: the Podping worker announces the episode when it's due.
   await write(q, podcastId, id, draft, null);
-  await insertTags(q, podcastId, id, [...draft.managedTags, ...draft.otherTags], { ...ctx.namespaces, ...namespaces });
+  await insertTags(q, podcastId, id, draft.storedTags ?? [...draft.managedTags, ...draft.otherTags], { ...ctx.namespaces, ...namespaces });
   await addNamespaces(q, podcastId, namespaces);
   await invalidateFeedCache(q, podcastId);
   return id;
@@ -452,7 +464,7 @@ export async function updateEpisode(
   const nowPublic = isPublic(draft.status, draft.pubDate, now.getTime());
   // Not in the feed (draft or future date): announce again when it appears.
   await write(q, podcastId, row.id, draft, nowPublic ? 'keep' : null);
-  await insertTags(q, podcastId, row.id, [...draft.managedTags, ...draft.otherTags], { ...ctx.namespaces, ...namespaces });
+  await insertTags(q, podcastId, row.id, draft.storedTags ?? [...draft.managedTags, ...draft.otherTags], { ...ctx.namespaces, ...namespaces });
   await addNamespaces(q, podcastId, namespaces);
   await invalidateFeedCache(q, podcastId);
   // A public episode changed or left the feed. (One that just appeared is announced by the worker.)

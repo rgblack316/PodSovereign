@@ -13,6 +13,7 @@ import { ownMediaPaths } from '../media/prune.js';
 import { queuePing } from '../podping/podping.js';
 import { feedPath, RESERVED_SLUGS } from '../urls.js';
 import { APPLE_CATEGORIES, MEDIUMS } from './categories.js';
+import { PERSON_TAXONOMY, peopleFromTags, peopleToTags } from './people.js';
 import {
   addNamespaces,
   bool,
@@ -37,7 +38,7 @@ const MANAGED = new Map<string, string>([
   ['itunes:owner', 'Owner'], ['itunes:category', 'Categories'], ['itunes:type', 'Show type'],
   ['itunes:explicit', 'Explicit'], ['itunes:block', 'Hide from Apple Podcasts'], ['itunes:complete', 'Finished'],
   ['itunes:new-feed-url', 'New feed address'], ['podcast:guid', 'set automatically'], ['podcast:locked', 'Locked'],
-  ['podcast:medium', 'Medium'], ['podcast:podping', 'set by the server'], ['podcast:liveItem', 'the Live tab'],
+  ['podcast:medium', 'Medium'], ['podcast:person', 'People'], ['podcast:podping', 'set by the server'], ['podcast:liveItem', 'the Live tab'],
   ['item', 'the Episodes tab'], ['lastBuildDate', 'set automatically'], ['generator', 'set automatically'],
   ['pubDate', 'set automatically'],
 ]);
@@ -85,6 +86,7 @@ async function channelTags(q: Queryable, podcastId: string): Promise<XmlNode[]> 
 
 export async function getShow(q: Queryable, podcastId: string) {
   const r = (await maybeOne<Row>(q, `SELECT * FROM podcasts WHERE id = $1`, [podcastId]))!;
+  const tags = await channelTags(q, podcastId);
   const art = r.image_url ? await artSize(q, podcastId, r.slug, r.image_url) : null;
   const { n: episodes } = (await maybeOne<{ n: number }>(q, `SELECT count(*)::int AS n FROM episodes WHERE podcast_id = $1 AND status <> 'draft'`, [podcastId]))!;
   const show = {
@@ -108,9 +110,10 @@ export async function getShow(q: Queryable, podcastId: string) {
     lockedOwner: r.podcast_locked_owner,
     medium: r.podcast_medium,
     podcastGuid: r.podcast_guid,
-    otherTags: tagsToXml(await channelTags(q, podcastId)),
+    people: peopleFromTags(tags),
+    otherTags: tagsToXml(tags.filter((t) => t.name !== 'podcast:person')),
   };
-  return { show, checklist: checklist(show, episodes), categories: APPLE_CATEGORIES, mediums: MEDIUMS };
+  return { show, checklist: checklist(show, episodes), categories: APPLE_CATEGORIES, mediums: MEDIUMS, roles: PERSON_TAXONOMY };
 }
 
 async function artSize(q: Queryable, podcastId: string, slug: string, url: string) {
@@ -164,6 +167,7 @@ export interface ShowInput {
   locked?: unknown;
   lockedOwner?: unknown;
   medium?: unknown;
+  people?: unknown;
   otherTags?: unknown;
 }
 
@@ -227,14 +231,23 @@ export async function updateShow(q: Queryable, config: Config, podcastId: string
   );
 
   const oldTags = await channelTags(q, podcastId);
-  if (has('otherTags')) {
-    const parsed = parseTagsXml(input.otherTags, r.extra_namespaces ?? {}, MANAGED);
+  if (has('otherTags') || has('people')) {
+    // Keep the stored order unless that part changed.
+    let others = oldTags.filter((t) => t.name !== 'podcast:person');
+    let people = oldTags.filter((t) => t.name === 'podcast:person');
+    let ns: Record<string, string> = {};
+    if (has('otherTags')) {
+      const parsed = parseTagsXml(input.otherTags, r.extra_namespaces ?? {}, MANAGED);
+      others = parsed.nodes;
+      ns = parsed.namespaces;
+    }
+    if (has('people')) people = await peopleToTags(q, config, podcastId, input.people);
     await q.query(
       `DELETE FROM tag_elements WHERE podcast_id = $1 AND episode_id IS NULL AND NOT (ns_prefix = 'podcast' AND name = 'liveItem')`,
       [podcastId],
     );
-    await insertTags(q, podcastId, null, parsed.nodes, { ...(r.extra_namespaces ?? {}), ...parsed.namespaces });
-    await addNamespaces(q, podcastId, parsed.namespaces);
+    await insertTags(q, podcastId, null, [...people, ...others], { ...(r.extra_namespaces ?? {}), ...ns });
+    await addNamespaces(q, podcastId, ns);
   }
   await invalidateFeedCache(q, podcastId);
   await queuePing(q, config, podcastId, 'update');
@@ -248,7 +261,7 @@ export async function updateShow(q: Queryable, config: Config, podcastId: string
     tags.forEach(walk);
     return ownMediaPaths(r.slug, urls);
   };
-  const keep = new Set(urlsOf(n, has('otherTags') ? await channelTags(q, podcastId) : oldTags));
+  const keep = new Set(urlsOf(n, has('otherTags') || has('people') ? await channelTags(q, podcastId) : oldTags));
   return { dropped: urlsOf(r, oldTags).filter((p) => !keep.has(p)) };
 }
 

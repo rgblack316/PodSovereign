@@ -917,6 +917,108 @@ async function tabEpisodes(p, canEdit) {
       h('td', { class: 'num nowrap' }, e.enclosure_length ? fmtBytes(Number(e.enclosure_length)) : '—'))))))));
 }
 
+// ───────────── people (<podcast:person>) ─────────────
+
+const roleKey = (group, role) => `${group.toLowerCase()}|${role.toLowerCase()}`;
+
+/** Role picker grouped by the Podcast Taxonomy. Picking a role sets its group too. */
+function roleSelect(taxonomy, person) {
+  const sel = h('select', { 'aria-label': 'Role' });
+  for (const [group, roles] of Object.entries(taxonomy)) {
+    sel.append(h('optgroup', { label: group }, roles.map((r) => h('option', { value: roleKey(group, r) }, r))));
+  }
+  // A missing role means host; a missing group means cast (or wherever the role lives).
+  const role = (person.role ?? 'host').toLowerCase();
+  let group = person.group?.toLowerCase();
+  if (!group) group = Object.entries(taxonomy).find(([, rs]) => rs.some((r) => r.toLowerCase() === role))?.[0].toLowerCase() ?? 'cast';
+  const key = `${group}|${role}`;
+  if (![...sel.options].some((o) => o.value === key)) {
+    sel.prepend(h('option', { value: key }, `${person.role ?? 'host'} (${person.group ?? 'cast'})`));
+  }
+  sel.value = key;
+  return sel;
+}
+
+/**
+ * Editable list of people: name, role, photo, link; reorder and remove.
+ * `list` is changed in place; onChange is called after every edit.
+ */
+function peopleEditor({ podcastId, taxonomy, list, onChange, onUpload }) {
+  const wrap = h('div', { class: 'people' });
+  const rows = h('div', { class: 'people-list' });
+  const changed = () => onChange?.();
+
+  function draw() {
+    rows.replaceChildren(...list.map((person, i) => {
+      const name = h('input', { type: 'text', value: person.name, placeholder: 'Name', 'aria-label': 'Name', maxlength: 128, required: true });
+      name.addEventListener('input', () => { person.name = name.value; changed(); });
+      const role = roleSelect(taxonomy, person);
+      role.addEventListener('change', () => {
+        const [g, r] = role.value.split('|');
+        person.group = g;
+        person.role = r;
+        changed();
+      });
+      const href = h('input', { type: 'url', value: person.href ?? '', placeholder: 'Link (website or profile)', 'aria-label': 'Link' });
+      href.addEventListener('input', () => { person.href = href.value || null; changed(); });
+
+      const photo = uploader({
+        podcastId,
+        kind: 'image',
+        accept: '.jpg,.jpeg,.png,.webp,image/*',
+        label: person.img ? 'Change photo' : 'Add photo',
+        onDone: (m) => {
+          person.img = m.url;
+          person.imgRef = { mediaId: m.id };
+          onUpload?.(m);
+          changed();
+          draw();
+        },
+      });
+      const move = (d) => {
+        list.splice(i + d, 0, list.splice(i, 1)[0]);
+        changed();
+        draw();
+      };
+      return h('div', { class: 'person' },
+        artImg(person.img, person.name || '?', 'avatar'),
+        h('div', { class: 'person-fields' }, name, role, href),
+        h('div', { class: 'person-actions' },
+          photo.button,
+          person.img ? h('button', { type: 'button', class: 'quiet', onclick: () => { person.img = null; person.imgRef = null; changed(); draw(); } }, 'Remove photo') : null,
+          h('button', { type: 'button', class: 'quiet', 'aria-label': `Move ${person.name || 'person'} up`, disabled: i === 0, onclick: () => move(-1) }, '↑'),
+          h('button', { type: 'button', class: 'quiet', 'aria-label': `Move ${person.name || 'person'} down`, disabled: i === list.length - 1, onclick: () => move(1) }, '↓'),
+          h('button', { type: 'button', class: 'quiet danger', onclick: () => { list.splice(i, 1); changed(); draw(); } }, 'Remove')),
+        photo.el);
+    }));
+    if (!list.length) rows.append(h('p', { class: 'hint' }, 'No one listed yet.'));
+  }
+  draw();
+  const add = h('button', {
+    type: 'button',
+    onclick: () => {
+      list.push({ name: '', role: 'host', group: 'cast', img: null, imgRef: null, href: null });
+      changed();
+      draw();
+      rows.querySelector('.person:last-child input')?.focus();
+    },
+  }, 'Add person');
+  wrap.append(rows, h('div', { class: 'actions', style: 'margin-top:8px' }, add));
+  return { el: wrap, redraw: draw };
+}
+
+/** People as the editor holds them → what the API takes. Existing photos are sent by address. */
+const peoplePayload = (list) => list.map((p) => ({
+  name: p.name, role: p.role, group: p.group, href: p.href || null, img: p.imgRef ?? (p.img ? { url: p.img } : null),
+}));
+const editablePeople = (people) => people.map((p) => ({ ...p, imgRef: null }));
+
+function peopleSummary(people) {
+  if (!people.length) return h('p', { class: 'hint' }, 'The show has no people listed. Add them on the Show details tab.');
+  return h('ul', { class: 'people-chips' }, people.map((p) =>
+    h('li', null, artImg(p.img, p.name, 'avatar'), h('span', null, h('b', null, p.name), h('small', null, p.role ?? 'host')))));
+}
+
 // ───────────── episode editor ─────────────
 
 const TRANSCRIPT_TYPES = [
@@ -928,8 +1030,9 @@ async function viewEpisode(p, canEdit, episodeId) {
   const isNew = episodeId === 'new';
   const ep = isNew
     ? { status: 'draft', inFeed: false, title: '', description: '', link: null, enclosure: null, duration: null, season: null, episode: null,
-        episodeType: 'full', explicit: null, imageUrl: null, block: false, transcripts: [], chapters: null, otherTags: '', itunesTitle: null }
+        episodeType: 'full', explicit: null, imageUrl: null, block: false, transcripts: [], chapters: null, people: [], otherTags: '', itunesTitle: null }
     : (await api('GET', `/api/podcasts/${p.id}/episodes/${episodeId}`)).episode;
+  const showInfo = await api('GET', `/api/podcasts/${p.id}/details`);
 
   const unsaved = new Set(); // uploads not yet saved into the episode
   let dirty = false;
@@ -1124,6 +1227,57 @@ async function viewEpisode(p, canEdit, episodeId) {
   }
   drawChapters();
 
+  // ── People ──
+  const people = editablePeople(ep.people ?? []);
+  let peopleChanged = false;
+  let ownPeople = people.length > 0;
+  const peopleSlot = h('div');
+  const noHost = h('p', { class: 'warn-note', hidden: true }, 'No host in this list, so apps won’t show your hosts on this episode. Use “Copy in the show’s people” to add them.');
+  const checkHost = () => {
+    noHost.hidden = !ownPeople || !people.length || people.some((x) => /^(co-|guest )?host$/i.test(x.role ?? 'host'));
+  };
+  const pEditor = peopleEditor({
+    podcastId: p.id,
+    taxonomy: showInfo.roles,
+    list: people,
+    onChange: () => { peopleChanged = true; markDirty(); checkHost(); },
+    onUpload: (m) => unsaved.add(m.id),
+  });
+  const copyShow = () => {
+    const have = new Set(people.map((x) => x.name.trim().toLowerCase()));
+    for (const sp of showInfo.show.people) if (!have.has(sp.name.trim().toLowerCase())) people.push({ ...sp, imgRef: null });
+    peopleChanged = true;
+    markDirty();
+    pEditor.redraw();
+    checkHost();
+  };
+  const peopleRadio = (own, labelText, small) => {
+    const r = h('input', { type: 'radio', name: 'people-mode', checked: ownPeople === own });
+    r.addEventListener('change', () => {
+      ownPeople = own;
+      peopleChanged = true;
+      markDirty();
+      if (own && !people.length) copyShow();
+      drawPeople();
+    });
+    return h('label', { class: 'choice' }, r, h('span', null, labelText, h('small', null, small)));
+  };
+  function drawPeople() {
+    peopleSlot.replaceChildren(
+      h('div', { class: 'choices two' },
+        peopleRadio(false, 'Same as the show', 'Apps show the show’s people for this episode'),
+        peopleRadio(true, 'People for this episode', 'Add guests and anyone else on this episode')),
+      ownPeople
+        ? h('div', { style: 'margin-top:16px' },
+          h('p', { class: 'hint' }, 'Apps show this list instead of the show’s people for this episode, so keep your hosts in it.'),
+          noHost,
+          pEditor.el,
+          showInfo.show.people.length ? h('button', { type: 'button', class: 'quiet', style: 'margin-top:4px', onclick: copyShow }, 'Copy in the show’s people') : null)
+        : h('div', { style: 'margin-top:16px' }, peopleSummary(showInfo.show.people)));
+    checkHost();
+  }
+  drawPeople();
+
   // ── Advanced ──
   const other = h('textarea', { class: 'code', rows: Math.min(16, Math.max(4, (ep.otherTags.match(/\n/g)?.length ?? 0) + 2)), spellcheck: 'false' }, ep.otherTags);
   const block = h('input', { type: 'checkbox', checked: ep.block });
@@ -1177,6 +1331,10 @@ async function viewEpisode(p, canEdit, episodeId) {
     };
     if (enclosureChanged) b.enclosure = enclosure;
     if (image !== undefined) b.image = image;
+    if (peopleChanged) {
+      if (ownPeople && people.some((x) => !x.name.trim())) throw new Error('Every person needs a name.');
+      b.people = ownPeople ? peoplePayload(people) : [];
+    }
     if (transcriptsChanged) b.transcripts = transcripts.map((t) => ({ ...t.ref, type: t.type, language: t.language || null, rel: t.rel }));
     if (chaptersChanged) b.chapters = chapters ? chapters.ref : null;
     if (mode.value === 'draft') b.status = 'draft';
@@ -1229,6 +1387,7 @@ async function viewEpisode(p, canEdit, episodeId) {
         h('div', { class: 'row' }, field('Season', season), field('Episode number', number), field('Type', etype), field('Content', explicit)),
         h('div', { class: 'field' }, h('label', null, 'Episode art'), artSlot),
         field('Episode web page', link, 'Optional. A page about this episode on your website.')),
+      h('section', { class: 'panel' }, h('h2', null, 'People'), peopleSlot),
       h('section', { class: 'panel' }, h('h2', null, 'Transcripts and chapters'),
         h('h3', { class: 'sub' }, 'Transcripts'), tList, tUp.el, h('div', { class: 'actions', style: 'margin-top:8px' }, tUp.button),
         h('h3', { class: 'sub' }, 'Chapters'), cSlot, cUp.el, h('div', { class: 'actions', style: 'margin-top:8px' }, cUp.button)),
@@ -1366,6 +1525,9 @@ async function tabDetails(p, canEdit, reload) {
   const complete = h('input', { type: 'checkbox', checked: s.complete });
   const block = h('input', { type: 'checkbox', checked: s.block });
   const newFeed = h('input', { type: 'url', value: s.newFeedUrl ?? '', placeholder: 'Only when moving this show to another host' });
+  const people = editablePeople(s.people);
+  let peopleChanged = false;
+  const pEditor = peopleEditor({ podcastId: p.id, taxonomy: d.roles, list: people, onChange: () => (peopleChanged = true) });
   const other = h('textarea', { class: 'code', id: 'show-other-tags', rows: Math.min(16, Math.max(4, (s.otherTags.match(/\n/g)?.length ?? 0) + 2)), spellcheck: 'false' }, s.otherTags);
 
   const form = h('form', {
@@ -1387,6 +1549,10 @@ async function tabDetails(p, canEdit, reload) {
             complete: complete.checked, block: block.checked, newFeedUrl: newFeed.value || null, otherTags: other.value,
           };
           if (image !== undefined) body.image = image;
+          if (peopleChanged) {
+            if (people.some((x) => !x.name.trim())) throw new Error('Every person needs a name.');
+            body.people = peoplePayload(people);
+          }
           await api('PUT', `/api/podcasts/${p.id}/details`, body);
           toast('Show details saved');
           await refreshPodcasts();
@@ -1409,6 +1575,10 @@ async function tabDetails(p, canEdit, reload) {
       h('div', { class: 'row' }, field('Owner name', ownerName), field('Owner email', ownerEmail)),
       h('div', { class: 'row' }, field('Website', link), field('Copyright', copyright)),
       h('div', { class: 'row' }, field('Show type', type), h('div', { class: 'field' }, h('label', { class: 'check' }, explicit, 'Explicit content')))),
+    h('section', { class: 'panel' },
+      h('h2', null, 'People'),
+      h('p', { class: 'muted' }, 'Hosts and regular crew. Podcasting 2.0 apps show them with every episode, unless an episode lists its own people.'),
+      pEditor.el),
     h('section', { class: 'panel' }, h('details', { open: s.otherTags ? true : null },
       h('summary', null, 'More tags and options'),
       h('div', { style: 'margin-top:16px' },

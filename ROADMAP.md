@@ -33,7 +33,7 @@ FeedHost doesn't stream today. Live items point at an outside stream (Icecast, Y
 - [ ] Self-host the dashboard font instead of loading it from Google Fonts
 - [ ] Encrypt saved provider secrets and the Podping key at rest (today they're stored in the database as-is)
 - [ ] Storage quotas per account or per podcast, with a usage display
-- [ ] Structured editors for common Podcasting 2.0 tags (people, soundbites, value splits, funding) on top of the XML box
+- [ ] Structured editors for more Podcasting 2.0 tags (soundbites, value splits, funding) on top of the XML box
 - [ ] Waveform or chapter editor in the dashboard (today chapters are uploaded as a JSON file)
 - [ ] Commit a `package-lock.json` so Docker builds use pinned dependency versions
 - [ ] Prebuilt app image on GitHub Container Registry, so installs and updates skip the local build

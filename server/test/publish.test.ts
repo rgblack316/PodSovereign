@@ -306,12 +306,12 @@ describe('episodes', () => {
   });
 
   test('other tags: any Podcasting 2.0 tag as XML, validated', async () => {
-    const tags = '<podcast:person role="host" img="https://example.com/a.jpg">Alice Green</podcast:person>\n<podcast:soundbite startTime="73.0" duration="60.0">Best bit</podcast:soundbite>';
+    const tags = '<podcast:location geo="geo:33.9,-84.2">Johns Creek, GA</podcast:location>\n<podcast:soundbite startTime="73.0" duration="60.0">Best bit</podcast:soundbite>';
     let r = await alice.patch(`/api/podcasts/${show}/episodes/${episode}`, { otherTags: tags });
     assert.equal(r.status, 200, r.text);
     assert.equal(r.json.episode.otherTags, tags);
     let xml = await feed();
-    assert.match(xml, /<podcast:person role="host" img="https:\/\/example.com\/a.jpg">Alice Green<\/podcast:person>/);
+    assert.match(xml, /<podcast:location geo="geo:33.9,-84.2">Johns Creek, GA<\/podcast:location>/);
     assert.match(xml, /<podcast:soundbite startTime="73.0" duration="60.0">Best bit<\/podcast:soundbite>/);
     // Transcripts are untouched by editing other tags.
     assert.match(xml, /podcast:transcript/);
@@ -333,6 +333,53 @@ describe('episodes', () => {
     xml = await feed();
     assert.match(xml, /xmlns:garden="https:\/\/garden.example\/ns"/);
     assert.match(xml, /<garden:zone>7b<\/garden:zone>/);
+  });
+
+  test('people: show-level hosts, episode-level people replace them for that episode', async () => {
+    const photo = await alice.upload(show, 'alice.png', png(800, 800));
+    let r = await alice.put(`/api/podcasts/${show}/details`, {
+      people: [
+        { name: 'Alice Green', role: 'host', group: 'cast', img: { mediaId: photo.id }, href: 'https://example.com/alice' },
+        { name: 'Sam Reed', role: 'producer', group: 'creative direction' },
+      ],
+    });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.json.show.people.length, 2);
+    assert.equal(r.json.show.people[0].img, photo.url);
+    assert.doesNotMatch(r.json.show.otherTags, /podcast:person/);
+    assert.ok(r.json.roles.Cast.includes('Guest'));
+
+    // Episode: hosts plus a guest.
+    r = await alice.patch(`/api/podcasts/${show}/episodes/${episode}`, {
+      people: [{ name: 'Alice Green', role: 'host', group: 'cast' }, { name: 'Dr. Ann Lee', role: 'guest', group: 'cast', href: 'https://example.com/ann' }],
+    });
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual(r.json.episode.people.map((p: any) => [p.name, p.role]), [['Alice Green', 'host'], ['Dr. Ann Lee', 'guest']]);
+    const xml = await feed();
+    const channel = xml.slice(0, xml.indexOf('<item>'));
+    const item = xml.slice(xml.indexOf('<item>'));
+    assert.match(channel, new RegExp(`<podcast:person role="host" group="cast" img="${photo.url}" href="https://example.com/alice">Alice Green</podcast:person>`));
+    assert.match(channel, /<podcast:person role="producer" group="creative direction">Sam Reed<\/podcast:person>/);
+    assert.match(item, /<podcast:person role="guest" group="cast" href="https:\/\/example.com\/ann">Dr. Ann Lee<\/podcast:person>/);
+    // Other fields and tags are untouched.
+    assert.match(item, /podcast:soundbite/);
+    assert.match(item, /podcast:transcript/);
+
+    // People can't also be typed into Other tags, and names are required.
+    r = await alice.patch(`/api/podcasts/${show}/episodes/${episode}`, { otherTags: '<podcast:person>X</podcast:person>' });
+    assert.equal(r.status, 400);
+    assert.match(r.json.error, /own field \(People\)/);
+    r = await alice.patch(`/api/podcasts/${show}/episodes/${episode}`, { people: [{ role: 'guest' }] });
+    assert.equal(r.status, 400);
+    r = await alice.patch(`/api/podcasts/${show}/episodes/${episode}`, { people: [{ name: 'X', href: 'javascript:alert(1)' }] });
+    assert.equal(r.status, 400);
+
+    // Back to the show's people: the episode lists none.
+    r = await alice.patch(`/api/podcasts/${show}/episodes/${episode}`, { people: [] });
+    assert.deepEqual(r.json.episode.people, []);
+    assert.doesNotMatch((await feed()).slice((await feed()).indexOf('<item>')), /podcast:person/);
+    // The photo is still used by the show, so it's kept.
+    assert.ok(existsSync(diskPath(photo.url)));
   });
 
   test('replacing the audio deletes the old file', async () => {

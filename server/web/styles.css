@@ -477,7 +477,25 @@ table.episodes .pill { margin-left: 2px; vertical-align: 1px; }
   .file-opts { grid-column: 2; justify-content: flex-start; }
   .art-pick.big { grid-template-columns: 96px minmax(0, 1fr); }
   .art-pick.big .art { width: 96px; height: 96px; }
+  .person-fields { grid-template-columns: 1fr; }
+  .choices.two { grid-template-columns: 1fr; }
 }
+
+/* People */
+.people-list { display: grid; gap: 0; }
+.person { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: var(--s2) var(--s3); padding: var(--s3) 0; border-top: 1px solid var(--rule); }
+.person:first-child { border-top: 0; padding-top: 0; }
+.person .avatar, .people-chips .avatar { width: 52px; height: 52px; border-radius: 50%; font-size: var(--t-sm); }
+.person-fields { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.2fr); gap: var(--s2); }
+.person-actions { grid-column: 2; display: flex; gap: var(--s1); flex-wrap: wrap; align-items: center; }
+.person-actions button { min-height: 32px; padding-block: 6px; }
+.person .uploader { grid-column: 2; }
+.people-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--s3); }
+.people-chips li { display: flex; align-items: center; gap: var(--s2); }
+.people-chips .avatar { width: 36px; height: 36px; }
+.people-chips span { display: grid; line-height: 1.2; }
+.people-chips small { color: var(--ink-3); text-transform: capitalize; }
+.choices.two { grid-template-columns: 1fr 1fr; }
 
 /* ───────── Small screens ───────── */
 
