@@ -14,4 +14,6 @@ Self-hosted podcast feed host. It imports an existing podcast RSS feed, replicat
 - [ ] Podcast ownership verification on import
 - [ ] Docker and Nginx deployment
 
-See [`server/README.md`](server/README.md) for setup and details.
+Planned public URLs: `https://podcasts.johnscreekstudios.com/feed/<show>/feed.xml`, with media under `/<show>/media/`, served through a Cloudflare Tunnel.
+
+See [`server/README.md`](server/README.md) for setup, including the Cloudflare Tunnel guide, and [`ROADMAP.md`](ROADMAP.md) for what's next, including the CDN revisit.

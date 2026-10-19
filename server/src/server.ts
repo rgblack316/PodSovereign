@@ -19,7 +19,9 @@ async function main() {
   const worker = process.env.DISABLE_WORKER === '1' ? null : startImportWorker({ db, config, log });
   const server = http.createServer(createApp({ db, config, log }));
   server.requestTimeout = 120_000;
-  server.listen(config.port, () => log(`FeedHost listening on :${config.port} (public URL ${config.publicBaseUrl})`));
+  server.listen(config.port, config.host, () =>
+    log(`FeedHost listening on ${config.host}:${config.port} (public URL ${config.publicBaseUrl})`),
+  );
 
   const shutdown = async (sig: string) => {
     log(`${sig} received, shutting down`);

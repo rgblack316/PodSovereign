@@ -1,6 +1,7 @@
 import { CANONICAL_NS } from '../feed/namespaces.js';
 import { buildPrefixChain, type PrefixSetting } from '../feed/prefixes.js';
 import type { Channel, EpisodeStatus, EpisodeType, Feed, Item, XmlNode } from '../feed/types.js';
+import { RESERVED_SLUGS } from '../urls.js';
 import { maybeOne, one, type Queryable } from './db.js';
 
 export type Role = 'owner' | 'editor' | 'viewer';
@@ -70,7 +71,7 @@ export async function uniqueSlug(q: Queryable, base: string): Promise<string> {
     `SELECT slug FROM podcasts WHERE slug = $1 OR slug LIKE $1 || '-%'`,
     [base],
   );
-  const taken = new Set(rows.map((r) => r.slug));
+  const taken = new Set([...rows.map((r) => r.slug), ...RESERVED_SLUGS]);
   if (!taken.has(base)) return base;
   for (let i = 2; ; i++) if (!taken.has(`${base}-${i}`)) return `${base}-${i}`;
 }

@@ -22,6 +22,7 @@ import { buildFeed } from '../feed/builder.js';
 import { buildPrefixChain, PREFIX_SERVICES, PrefixError, type PrefixSetting } from '../feed/prefixes.js';
 import { isPrivateAddress } from '../import/http.js';
 import { enqueueImport, ImportError, KIND_DIRS } from '../import/importer.js';
+import { feedPath } from '../urls.js';
 import { HttpError, parseCookies, readJson, Router, sendJson, type Ctx } from './router.js';
 
 export const SESSION_COOKIE = 'fh_session';
@@ -82,15 +83,24 @@ export function createApp(deps: AppDeps) {
       .join('; ');
   }
 
-  /** X-Real-IP is only trusted from a local/private hop (our own Nginx), so clients can't spoof it. */
+  /**
+   * The visitor's real address. Behind Cloudflare Tunnel every request arrives
+   * from cloudflared on this machine, so CF-Connecting-IP (or X-Real-IP from
+   * Nginx) is used — but only when the hop is local/private, so a client
+   * connecting directly can't spoof it.
+   */
   const clientIp = (req: IncomingMessage) => {
     const peer = req.socket.remoteAddress ?? 'unknown';
-    const forwarded = req.headers['x-real-ip'];
-    return typeof forwarded === 'string' && isPrivateAddress(peer) ? forwarded : peer;
+    if (!isPrivateAddress(peer)) return peer;
+    for (const h of ['cf-connecting-ip', 'x-real-ip']) {
+      const v = req.headers[h];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+    }
+    return peer;
   };
 
   const userJson = (u: User) => ({ id: u.id, email: u.email, displayName: u.display_name, isAdmin: u.is_admin });
-  const feedUrl = (slug: string) => `${config.publicBaseUrl}/feeds/${slug}.xml`;
+  const feedUrl = (slug: string) => config.publicBaseUrl + feedPath(slug);
 
   // ───────────── auth ─────────────
 
@@ -292,7 +302,7 @@ export function createApp(deps: AppDeps) {
 
   // ───────────── public feed + media ─────────────
 
-  router.get('/feeds/:slug.xml', async (ctx) => {
+  router.get('/feed/:slug/feed.xml', async (ctx) => {
     const p = await getPodcastBySlug(db, ctx.params.slug!);
     if (!p || p.status !== 'active') throw new HttpError(404, 'Feed not found');
 
@@ -338,8 +348,8 @@ export function createApp(deps: AppDeps) {
     ctx.res.end(ctx.req.method === 'HEAD' ? undefined : xml);
   });
 
-  /** Development only — in production Nginx serves /media/ directly from MEDIA_DIR. */
-  router.get('/media/:slug/:kind/:file', async (ctx) => {
+  /** Serves copied media (byte ranges supported). A CDN can sit in front later via MEDIA_BASE_URL. */
+  router.get('/:slug/media/:kind/:file', async (ctx) => {
     const { slug, kind, file } = ctx.params as { slug: string; kind: string; file: string };
     if (!/^[a-z0-9-]+$/.test(slug) || !KIND_DIR_NAMES.has(kind) || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(file)) {
       throw new HttpError(404, 'Not found');

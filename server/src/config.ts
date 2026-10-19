@@ -1,9 +1,16 @@
 export interface Config {
   port: number;
+  /** Interface to listen on. 127.0.0.1 = reachable only through the tunnel / local proxy. */
+  host: string;
   databaseUrl: string;
   /** Public origin of this server, e.g. https://feeds.example.com (no trailing slash). */
   publicBaseUrl: string;
-  /** Where copied media is stored on disk; Nginx serves it at /media/. */
+  /**
+   * Origin used in media URLs. Defaults to PUBLIC_BASE_URL; set it to a CDN
+   * origin later to serve media from there instead of through the tunnel.
+   */
+  mediaBaseUrl: string;
+  /** Where copied media is stored on disk (MEDIA_DIR/<slug>/<type>/<file>). */
   mediaDir: string;
   /** Set Secure on session cookies (true behind HTTPS). */
   cookieSecure: boolean;
@@ -24,8 +31,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const publicBaseUrl = (env.PUBLIC_BASE_URL ?? 'http://localhost:8080').replace(/\/+$/, '');
   return {
     port: num(env.PORT, 8080),
+    host: env.HOST ?? '127.0.0.1',
     databaseUrl: env.DATABASE_URL ?? 'postgres://feedhost@localhost/feedhost',
     publicBaseUrl,
+    mediaBaseUrl: (env.MEDIA_BASE_URL ?? publicBaseUrl).replace(/\/+$/, ''),
     mediaDir: env.MEDIA_DIR ?? '/var/lib/feedhost/media',
     cookieSecure: bool(env.COOKIE_SECURE, publicBaseUrl.startsWith('https://')),
     allowRegistration: bool(env.ALLOW_REGISTRATION, false),

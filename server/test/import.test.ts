@@ -3,7 +3,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
 import type { Db } from '../src/db/db.js';
-import { loadFeed } from '../src/db/podcasts.js';
+import { loadFeed, uniqueSlug } from '../src/db/podcasts.js';
 import { buildFeed } from '../src/feed/builder.js';
 import { claimNextJob, enqueueImport, mediaFilename, podcastGuidFor, runImportJob } from '../src/import/importer.js';
 import { createUser, fixtureOn, setupDb, startOldHost, tempDir, testConfig } from './support/env.js';
@@ -83,13 +83,13 @@ test('imports a feed end to end: saves everything, copies media, rewrites URLs',
 
   // Rebuilt feed points at our server, except the file that failed
   const feed = (await loadFeed(db, job.podcast_id))!;
-  const xml = buildFeed(feed, { selfUrl: `https://feeds.mine.test/feeds/${pod.slug}.xml` });
+  const xml = buildFeed(feed, { selfUrl: `https://feeds.mine.test/feed/${pod.slug}/feed.xml` });
   const leftovers = xml.split('\n').filter((l) => l.includes(`${host.base}/old/`)).map((l) => l.trim());
   assert.deepEqual(leftovers, [
     `<podcast:transcript url="${host.base}/old/ep2.srt" type="application/x-subrip" rel="captions"/>`, // copy failed
     `<guid>${host.base}/old/media/ep1.m4a</guid>`, // fallback GUID — must never change
   ]);
-  assert.ok(xml.includes(`url="https://feeds.mine.test/media/${pod.slug}/`));
+  assert.ok(xml.includes(`url="https://feeds.mine.test/${pod.slug}/media/audio/`));
   assert.equal(feed.items.length, 2);
   assert.equal(feed.items[1]!.enclosureLength, `content of /old/media/ep1.m4a`.length, 'missing length filled in');
   assert.ok(feed.channel.extra.some((n) => n.name === 'podcast:value' && n.children.length === 2));
@@ -212,7 +212,7 @@ test('copies images from show notes and chapter files, and stores files in per-t
   assert.equal(job.status, 'done', job.error);
   const { rows: pod } = await db.query<{ slug: string }>(`SELECT slug FROM podcasts WHERE id = $1`, [job.podcast_id]);
   const slug = pod[0]!.slug;
-  const pub = `https://feeds.mine.test/media/${slug}/images/`;
+  const pub = `https://feeds.mine.test/${slug}/media/images/`;
 
   // Folder layout
   const dirs = (await readdir(path.join(mediaDir, slug))).sort();
@@ -253,4 +253,11 @@ test('copies images from show notes and chapter files, and stores files in per-t
   assert.ok(notes.includes(`<a href="${B}/old/notes/page.html">`), 'links left alone');
   assert.ok(notes.includes('data:image/png;base64'), 'inline images left alone');
   assert.ok(notes.includes('alt="x"'));
+});
+
+test('show addresses that would collide with app routes are reserved', async () => {
+  await assert.rejects(enqueueImport(db, bob, 'https://x.com/feed', { slug: 'feed' }), /reserved/);
+  await assert.rejects(enqueueImport(db, bob, 'https://x.com/feed', { slug: 'api' }), /reserved/);
+  assert.equal(await uniqueSlug(db, 'api'), 'api-2', 'a show titled "API" gets api-2');
+  assert.equal(await uniqueSlug(db, 'my-show'), 'my-show');
 });

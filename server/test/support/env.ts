@@ -27,8 +27,10 @@ export async function tempDir(name: string): Promise<string> {
 export function testConfig(over: Partial<Config> = {}): Config {
   return {
     port: 0,
+    host: '127.0.0.1',
     databaseUrl: '',
     publicBaseUrl: 'https://feeds.mine.test',
+    mediaBaseUrl: 'https://feeds.mine.test',
     mediaDir: '',
     cookieSecure: false,
     allowRegistration: true,

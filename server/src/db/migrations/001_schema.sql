@@ -28,7 +28,7 @@ CREATE TABLE sessions (
 CREATE TABLE podcasts (
   id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   owner_id         uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-  slug             text UNIQUE NOT NULL,          -- /feeds/{slug}.xml
+  slug             text UNIQUE NOT NULL,          -- /feed/{slug}/feed.xml and /{slug}/media/...
   source_feed_url  text,                          -- original feed imported from
   imported_at      timestamptz,
 
@@ -135,8 +135,8 @@ CREATE TABLE media_files (
   podcast_id   uuid NOT NULL REFERENCES podcasts(id) ON DELETE CASCADE,
   kind         text NOT NULL CHECK (kind IN ('audio','video','image','transcript','chapters','other')),
   original_url text,              -- where it came from on import
-  storage_path text NOT NULL,     -- /var/lib/feedhost/media/{podcast}/{file}
-  public_path  text NOT NULL,     -- /media/{podcast_slug}/{file}
+  storage_path text NOT NULL,     -- /var/lib/feedhost/media/{slug}/{type}/{file}
+  public_path  text NOT NULL,     -- /{slug}/media/{type}/{file}
   mime_type    text,
   bytes        bigint,
   sha256       text,

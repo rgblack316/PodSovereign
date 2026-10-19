@@ -14,6 +14,7 @@ import {
 import { chapterImageUrls, collectMediaRefs, rewriteChapterImages, type MediaKind } from '../feed/media.js';
 import { parseFeed } from '../feed/parser.js';
 import type { Feed } from '../feed/types.js';
+import { mediaPath, mediaPrefix, RESERVED_SLUGS } from '../urls.js';
 import { downloadToFile, FetchError, fetchFeedText, withRetry } from './http.js';
 
 export interface ImportJob {
@@ -58,6 +59,9 @@ export async function enqueueImport(db: Db, userId: string, sourceUrl: string, o
   if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new ImportError('Feed URL must start with http:// or https://');
   if (options.slug !== undefined && !SLUG_RE.test(options.slug)) {
     throw new ImportError('Feed address may only use lowercase letters, numbers and dashes');
+  }
+  if (options.slug !== undefined && RESERVED_SLUGS.has(options.slug)) {
+    throw new ImportError(`"${options.slug}" is reserved; choose a different feed address`);
   }
   return one<{ id: string }>(
     db,
@@ -278,7 +282,7 @@ async function copyMedia(
   warnings: string[],
 ) {
   const { db, config } = deps;
-  const publicPrefix = `${config.publicBaseUrl}/media/${slug}/`;
+  const publicPrefix = config.mediaBaseUrl + mediaPrefix(slug);
   const refs = collectMediaRefs(feed).filter((r) => !r.url.startsWith(publicPrefix));
   const result = new Map<string, Copied>();
   const progress: ImportProgress = {
@@ -307,7 +311,7 @@ async function copyMedia(
     progress.mediaTotal! += rows.length;
     const todo = rows.filter((m) => {
       if (m.status === 'done' && m.public_path && m.storage_path) {
-        result.set(m.original_url, { publicUrl: config.publicBaseUrl + m.public_path, storagePath: m.storage_path, bytes: m.bytes ?? 0 });
+        result.set(m.original_url, { publicUrl: config.mediaBaseUrl + m.public_path, storagePath: m.storage_path, bytes: m.bytes ?? 0 });
         progress.mediaDone!++;
         return false;
       }
@@ -322,7 +326,7 @@ async function copyMedia(
         const dir = KIND_DIRS[m.kind] ?? 'other';
         const filename = mediaFilename(m.original_url);
         const storagePath = path.join(config.mediaDir, slug, dir, filename);
-        const publicPath = `/media/${slug}/${dir}/${filename}`;
+        const publicPath = mediaPath(slug, dir, filename);
         try {
           const d = await withRetry(() =>
             downloadToFile(m.original_url, storagePath, {
@@ -336,7 +340,7 @@ async function copyMedia(
                     mime_type = $4, bytes = $5, sha256 = $6 WHERE id = $1`,
             [m.id, storagePath, publicPath, d.mimeType, d.bytes, d.sha256],
           );
-          result.set(m.original_url, { publicUrl: config.publicBaseUrl + publicPath, storagePath, bytes: d.bytes });
+          result.set(m.original_url, { publicUrl: config.mediaBaseUrl + publicPath, storagePath, bytes: d.bytes });
           progress.mediaDone!++;
           progress.mediaBytes! += d.bytes;
         } catch (e) {
@@ -406,7 +410,7 @@ async function copyMedia(
          FROM media_files m
         WHERE e.podcast_id = $1 AND m.podcast_id = $1 AND m.status = 'done'
           AND e.enclosure_url = $2 || m.public_path`,
-      [podcastId, config.publicBaseUrl],
+      [podcastId, config.mediaBaseUrl],
     );
   });
   await setProgress(db, jobId, { ...progress, stage: 'done' });
