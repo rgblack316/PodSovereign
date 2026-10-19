@@ -39,6 +39,9 @@ export function testConfig(over: Partial<Config> = {}): Config {
     maxMediaBytes: 50 * 1024 * 1024,
     downloadConcurrency: 3,
     sessionDays: 30,
+    podpingToken: null,
+    podpingUrl: 'http://127.0.0.1:1/',
+    podpingDelaySec: 0,
     ...over,
   };
 }

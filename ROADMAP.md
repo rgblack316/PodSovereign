@@ -23,6 +23,13 @@
 - Keep the old `/<slug>/media/...` URLs working, for example with 301 redirects to the CDN, for apps that cached older feed copies.
 - Re-check the stats prefixes (OP3, Podtrac and so on) against the new media host.
 
+## Live shows (`podcast:liveItem`)
+
+Imported feeds already keep `<podcast:liveItem>` blocks intact, including status, start and end times, the stream enclosure and content links, and write them back out. Still to build:
+- [ ] Create and edit live items: title, start and end time, stream URL, chat and content links
+- [ ] Status changes (pending → live → ended), with a Podping `live` ping at go-live and `liveEnd` when it ends (the queue already supports both)
+- [ ] Optionally turn an ended live item into a regular episode once the recording is uploaded
+
 ## Other open items
 - [ ] Web dashboard: login, podcast list, import with live progress, and stats prefix checkboxes
 - [ ] Podcast ownership verification on import (email code to the itunes:owner address, or a `podcast:txt` token)

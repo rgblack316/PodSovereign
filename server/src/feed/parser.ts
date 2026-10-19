@@ -13,8 +13,11 @@ export interface ParseResult {
 
 export class FeedParseError extends Error {}
 
-/** Tags the builder regenerates itself, so they're dropped on import. */
-const CHANNEL_REGENERATED = new Set(['lastBuildDate', 'generator', 'pubDate']);
+/**
+ * Tags the builder regenerates itself, so they're dropped on import.
+ * podcast:podping describes the *host's* behaviour, so it reflects this server's setting, not the old host's.
+ */
+const CHANNEL_REGENERATED = new Set(['lastBuildDate', 'generator', 'pubDate', 'podcast:podping']);
 
 const text = (n: XmlNode | undefined): string | null => (n && n.text !== '' ? n.text : null);
 const child = (n: XmlNode, name: string) => n.children.find((c) => c.name === name);

@@ -13,6 +13,8 @@ export interface BuildOptions {
   /** Also prefix podcast:alternateEnclosure http(s) sources. Default false. */
   prefixAlternateEnclosures?: boolean;
   generator?: string;
+  /** Add <podcast:podping usesPodping="true"/> — this server announces changes via Podping. */
+  usesPodping?: boolean;
   /** Hide drafts and episodes scheduled in the future. Default true. */
   publishedOnly?: boolean;
   now?: Date;
@@ -75,6 +77,7 @@ export function buildFeed(feed: Feed, opts: BuildOptions = {}): string {
     push(I2, el('podcast:locked', c.podcastLocked ? 'yes' : 'no', { owner: c.podcastLockedOwner }));
   }
   push(I2, el('podcast:medium', c.podcastMedium));
+  if (opts.usesPodping) push(I2, `<podcast:podping usesPodping="true"/>`);
   for (const n of c.extra) lines.push(serializeNode(n, I2));
 
   // Items

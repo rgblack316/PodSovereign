@@ -36,6 +36,8 @@ Migrations run automatically on startup. The **first account registered becomes 
 | `MAX_MEDIA_BYTES` | 4 GB | Per-file download limit |
 | `DOWNLOAD_CONCURRENCY` | 3 | Parallel media downloads per import |
 | `ALLOW_PRIVATE_NETWORKS` | off | Allow imports from local or private addresses (dev only) |
+| `PODPING_TOKEN` | not set (off) | podping.cloud authorization key from Podcast Index. Setting it turns Podping on |
+| `PODPING_DELAY_SEC` | `30` | Wait before sending, so a burst of edits becomes one ping |
 
 ### Public URLs
 
@@ -45,6 +47,16 @@ Media:  https://podcasts.johnscreekstudios.com/<show>/media/<type>/<file>
 ```
 
 `<show>` is the podcast's address (slug), chosen on import. Names that would collide with app routes, such as `api`, `feed` or `admin`, are reserved. **Don't change this layout once real shows are live:** subscribers' apps hold these URLs.
+
+## Podping
+
+When a feed changes, the server announces it through [Podping](https://podping.org), so apps and Podcast Index refresh it within seconds instead of waiting for their next check.
+
+- **Turn it on** by setting `PODPING_TOKEN`. podping.cloud requires a key from Dave Jones at Podcast Index; ask at podcastindex.org.
+- **When it pings:** when an import finishes (announcing the feed at its new address), when stats prefixes change (every media URL changes), and when a scheduled episode's publish time arrives.
+- **What else it does:** a burst of changes is sent as one ping, and failures are retried with backoff (30s, 1m, 2m, 4m, 8m) before giving up. Feeds include `<podcast:podping usesPodping="true"/>` only while it's on; the old host's tag is dropped on import.
+- **Status:** `GET /api/podcasts/:id/podping` shows recent pings.
+- **To confirm once you have a key:** the key is sent in the `Authorization` header. Check with Podcast Index that this is still what podping.cloud expects.
 
 ## Cloudflare Tunnel
 
@@ -109,6 +121,7 @@ All `/api` calls use a session cookie. Requests that change something must send 
 | GET | `/api/podcasts` | your own shows, plus ones shared with you |
 | GET | `/api/podcasts/:id` · `/episodes` · `/prefixes` | viewer+ |
 | PUT | `/api/podcasts/:id/prefixes` | editor+ |
+| GET | `/api/podcasts/:id/podping` | viewer+ |
 | DELETE | `/api/podcasts/:id` | owner |
 | POST | `/api/imports` `{url, slug?}` · GET `/api/imports` · `/api/imports/:id` | your own imports |
 | GET | `/:slug/feed.xml` · `/:slug/media/:type/:file` | public |
@@ -118,7 +131,7 @@ If you don't have access to a podcast, you get **404**, so the existence of othe
 ## Tests
 
 ```bash
-npm test     # 52 tests: feed engine, import worker, API and isolation
+npm test     # 60 tests: feed engine, import worker, API and isolation
 ```
 
 The import and API tests need a local PostgreSQL that allows trust auth for the `postgres` user over its Unix socket. Set `TEST_PG_SOCKET` if the socket isn't at `/var/run/postgresql/.s.PGSQL.5432`. Each test file creates its own throwaway database.
@@ -132,6 +145,7 @@ The import and API tests need a local PostgreSQL that allows trust auth for the 
 | Import | `src/import/`: SSRF-guarded HTTP, job queue, resumable media copy |
 | Accounts | `src/auth/`: scrypt passwords, hashed session tokens, login rate limiting |
 | HTTP | `src/http/`: routes, CSRF checks, public feed with ETag caching |
+| Podping | `src/podping/`: change queue, podping.cloud sender, scheduled-episode announcer |
 
 ### Import, step by step
 1. Fetch the feed. Redirects are followed, and private and internal addresses are blocked, even through DNS tricks.

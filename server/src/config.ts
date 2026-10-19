@@ -22,6 +22,11 @@ export interface Config {
   maxMediaBytes: number;
   downloadConcurrency: number;
   sessionDays: number;
+  /** podping.cloud authorization token from Podcast Index. Unset = Podping off. */
+  podpingToken: string | null;
+  podpingUrl: string;
+  /** Wait this long before sending, so a burst of edits becomes one ping. */
+  podpingDelaySec: number;
 }
 
 const bool = (v: string | undefined, d: boolean) => (v === undefined ? d : /^(1|true|yes)$/i.test(v));
@@ -43,5 +48,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     maxMediaBytes: num(env.MAX_MEDIA_BYTES, 4 * 1024 * 1024 * 1024),
     downloadConcurrency: num(env.DOWNLOAD_CONCURRENCY, 3),
     sessionDays: num(env.SESSION_DAYS, 30),
+    podpingToken: env.PODPING_TOKEN?.trim() || null,
+    podpingUrl: env.PODPING_URL ?? 'https://podping.cloud/',
+    podpingDelaySec: num(env.PODPING_DELAY_SEC, 30),
   };
 }

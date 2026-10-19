@@ -14,6 +14,7 @@ import {
 import { chapterImageUrls, collectMediaRefs, rewriteChapterImages, type MediaKind } from '../feed/media.js';
 import { parseFeed } from '../feed/parser.js';
 import type { Feed } from '../feed/types.js';
+import { queuePing } from '../podping/podping.js';
 import { mediaPath, mediaPrefix, RESERVED_SLUGS } from '../urls.js';
 import { downloadToFile, FetchError, fetchFeedText, withRetry } from './http.js';
 
@@ -405,6 +406,8 @@ async function copyMedia(
   await db.tx(async (q) => {
     await writeFeedContent(q, podcastId, feed);
     await q.query(`UPDATE podcasts SET status = 'active' WHERE id = $1`, [podcastId]);
+    // Imported episodes aren't "new" — only episodes added or scheduled later get announced.
+    await q.query(`UPDATE episodes SET announced_at = now() WHERE podcast_id = $1 AND announced_at IS NULL`, [podcastId]);
     await q.query(
       `UPDATE episodes e SET enclosure_media_id = m.id
          FROM media_files m
@@ -413,6 +416,8 @@ async function copyMedia(
       [podcastId, config.mediaBaseUrl],
     );
   });
+  // Tell apps and Podcast Index about the feed at its new home.
+  await queuePing(db, config, podcastId, 'update');
   await setProgress(db, jobId, { ...progress, stage: 'done' });
 }
 

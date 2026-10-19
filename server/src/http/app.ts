@@ -22,6 +22,7 @@ import { buildFeed } from '../feed/builder.js';
 import { buildPrefixChain, PREFIX_SERVICES, PrefixError, type PrefixSetting } from '../feed/prefixes.js';
 import { isPrivateAddress } from '../import/http.js';
 import { enqueueImport, ImportError, KIND_DIRS } from '../import/importer.js';
+import { latestPings, podpingEnabled, queuePing } from '../podping/podping.js';
 import { feedPath } from '../urls.js';
 import { HttpError, parseCookies, readJson, Router, sendJson, type Ctx } from './router.js';
 
@@ -253,9 +254,20 @@ export function createApp(deps: AppDeps) {
         position: Number.isInteger(o.position) ? (o.position as number) : i,
       };
     });
-    await db.tx((q) => setPrefixConfig(q, podcastId, { settings, prefixAlternateEnclosures: body.prefixAlternateEnclosures === true }));
+    await db.tx(async (q) => {
+      await setPrefixConfig(q, podcastId, { settings, prefixAlternateEnclosures: body.prefixAlternateEnclosures === true });
+      // Every enclosure URL just changed, so tell apps to refresh.
+      await queuePing(q, config, podcastId, 'update');
+    });
     const cfg = await getPrefixConfig(db, podcastId);
     sendJson(ctx.res, 200, { services: PREFIX_SERVICES, ...cfg, chain: buildPrefixChain(cfg.settings) });
+  });
+
+  // ───────────── podping ─────────────
+
+  router.get('/api/podcasts/:id/podping', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'viewer');
+    sendJson(ctx.res, 200, { enabled: podpingEnabled(config), pings: await latestPings(db, podcastId) });
   });
 
   // ───────────── imports ─────────────
@@ -321,6 +333,7 @@ export function createApp(deps: AppDeps) {
         selfUrl: feedUrl(p.slug),
         prefixChain: chain,
         prefixAlternateEnclosures: prefixCfg.prefixAlternateEnclosures,
+        usesPodping: podpingEnabled(config),
       });
       etag = `"${createHash('sha256').update(xml).digest('base64url').slice(0, 27)}"`;
       // Scheduled episodes appear on time because the cache is only kept until the next one is due.
