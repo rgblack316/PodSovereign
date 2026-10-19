@@ -37,6 +37,10 @@ export interface Config {
   storage: { provider: string; settings: Record<string, string | boolean>; secret: string | null };
   /** While existing media is being moved to new storage: the store it is moving from. */
   storageMoveFrom: { provider: string; settings: Record<string, string | boolean>; secret: string | null } | null;
+  /** Importers must prove they own a show before it's imported (Site settings). */
+  requireVerification: boolean;
+  /** Outgoing email for verification codes; null = not set up. */
+  smtp: import('./mail/smtp.js').SmtpConfig | null;
   /** Hostnames this site used before a base-URL change; requests for them are 301-redirected. */
   previousHosts: string[];
   /**
@@ -81,6 +85,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     siteVersion: 0,
     storage: { provider: 'local', settings: {}, secret: null },
     storageMoveFrom: null,
+    requireVerification: true,
+    smtp: null,
     previousHosts: [],
     envDefaults: {
       publicBaseUrl,

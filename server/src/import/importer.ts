@@ -15,6 +15,7 @@ import { chapterImageUrls, collectMediaRefs, rewriteChapterImages, type MediaKin
 import { parseFeed } from '../feed/parser.js';
 import type { Feed } from '../feed/types.js';
 import { claimMove, runMove } from '../storage/move.js';
+import { expireVerifications, feedHasToken, newToken, ownerEmail, previewOf } from './verify.js';
 import { activeStore, localPath, storeFor } from '../storage/store.js';
 import { mediaPath, mediaPrefix, RESERVED_SLUGS } from '../urls.js';
 import { downloadToFile, FetchError, fetchFeedText, withRetry } from './http.js';
@@ -27,6 +28,8 @@ export interface ImportJob {
   status: 'queued' | 'running' | 'done' | 'failed';
   options: { slug?: string };
   attempts: number;
+  verified_at: Date | null;
+  verify_token: string | null;
 }
 
 export interface ImportProgress {
@@ -82,12 +85,13 @@ export async function claimNextJob(db: Db): Promise<ImportJob | null> {
             started_at = COALESCE(started_at, now()), heartbeat_at = now()
       WHERE id = (SELECT id FROM import_jobs WHERE status = 'queued'
                    ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1)
-      RETURNING id, podcast_id, user_id, source_url, status, options, attempts`,
+      RETURNING id, podcast_id, user_id, source_url, status, options, attempts, verified_at, verify_token`,
   );
 }
 
 /** Requeue jobs whose worker died (no heartbeat for 5 minutes). */
 export async function requeueStaleJobs(db: Db): Promise<number> {
+  await expireVerifications(db);
   const r = await db.query(
     `UPDATE import_jobs SET status = CASE WHEN attempts >= $1 THEN 'failed' ELSE 'queued' END,
             error = CASE WHEN attempts >= $1 THEN 'Import stopped responding too many times' ELSE error END
@@ -107,9 +111,12 @@ export async function runImportJob(deps: ImporterDeps, job: ImportJob): Promise<
   const { db } = deps;
   const warnings: string[] = [];
   try {
-    const { feed, podcastId, slug } = job.podcast_id
-      ? await resume(deps, job)
-      : await fetchAndSave(deps, job, warnings);
+    const saved = job.podcast_id ? await resume(deps, job) : await fetchAndSave(deps, job, warnings);
+    if (!saved) {
+      deps.log?.(`import ${job.id} is waiting for ownership verification`);
+      return;
+    }
+    const { feed, podcastId, slug } = saved;
     await copyMedia(deps, job.id, podcastId, slug, feed, warnings);
     await db.query(
       `UPDATE import_jobs SET status = 'done', finished_at = now(), heartbeat_at = now(),
@@ -173,6 +180,20 @@ async function fetchAndSave(deps: ImporterDeps, job: ImportJob, warnings: string
         ? 'You have already imported this podcast.'
         : 'This podcast is already hosted on this server by another account.',
     );
+  }
+
+  // Prove ownership before anything is saved or copied.
+  if (config.requireVerification && !job.verified_at) {
+    if (job.verify_token && feedHasToken(feed, job.verify_token)) {
+      await db.query(`UPDATE import_jobs SET verified_at = now(), verified_method = 'feed' WHERE id = $1`, [job.id]);
+    } else {
+      await db.query(
+        `UPDATE import_jobs SET status = 'verifying', preview = $2, verify_token = COALESCE(verify_token, $3),
+                verify_email = $4, heartbeat_at = now() WHERE id = $1`,
+        [job.id, JSON.stringify(previewOf(feed)), newToken(), ownerEmail(feed)],
+      );
+      return null;
+    }
   }
 
   await setProgress(db, job.id, { stage: 'saving', episodes: feed.items.length });

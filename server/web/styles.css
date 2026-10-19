@@ -372,6 +372,16 @@ details summary { cursor: pointer; font-weight: 600; font-size: var(--t-sm); }
 .test-steps { list-style: none; padding: 0; margin: var(--s4) 0 0; display: grid; gap: var(--s2); }
 .test-steps p { margin: 2px 0 0 17px; }
 .move { margin-bottom: var(--s4); }
+.panel h3 + .hint { margin-top: var(--s2); }
+.verify-preview { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: var(--s4); align-items: center; margin-bottom: var(--s5); }
+.verify-preview .art { width: 72px; height: 72px; border-radius: var(--r-md); }
+.verify-preview p { margin: 2px 0 0; }
+.verify-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--s4); align-items: start; }
+.verify-options .panel { margin-bottom: 0; }
+.verify-options + .actions { margin: var(--s5) 0 var(--s2); }
+.codebox { display: flex; gap: var(--s2); align-items: flex-start; margin: var(--s3) 0; }
+.codebox code { flex: 1; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.8rem; background: var(--console); border-radius: var(--r-sm); padding: 10px 12px; overflow-wrap: anywhere; }
+code.inline { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.8rem; background: var(--console); padding: 1px 6px; border-radius: 3px; overflow-wrap: anywhere; }
 .warn-note { border-left: 3px solid var(--amber); padding: var(--s2) var(--s3); background: #fbf3dc; border-radius: var(--r-sm); font-size: var(--t-sm); }
 .empty h2 { margin-bottom: var(--s2); }
 

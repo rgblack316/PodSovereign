@@ -32,6 +32,5 @@ FeedHost doesn't stream today. Live items point at an outside stream (Icecast, Y
 ## Other open items
 - [ ] Self-host the dashboard font instead of loading it from Google Fonts
 - [ ] Encrypt saved provider secrets and the Podping key at rest (today they're stored in the database as-is)
-- [ ] Podcast ownership verification on import (email code to the itunes:owner address, or a `podcast:txt` token)
 - [ ] Storage quotas per account or per podcast, with a usage display
 - [ ] Episode editing and new uploads (beyond import)

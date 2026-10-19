@@ -22,6 +22,8 @@ import { buildFeed } from '../feed/builder.js';
 import { buildPrefixChain, PREFIX_SERVICES, PrefixError, type PrefixSetting } from '../feed/prefixes.js';
 import { isPrivateAddress } from '../import/http.js';
 import { enqueueImport, ImportError, KIND_DIRS } from '../import/importer.js';
+import { cancelImport, checkCode, checkFeed, markVerified, sendCode, VERIFY_EXPIRES_DAYS, VerifyError, verifyingJob } from '../import/verify.js';
+import { sendMail, SmtpError } from '../mail/smtp.js';
 import { createLiveItem, deleteLiveItem, listLiveItems, LiveError, setLiveStatus, updateLiveItem } from '../live/live.js';
 import { latestPings, podpingEnabled, queuePing, setShowPodping } from '../podping/podping.js';
 import { feedPath } from '../urls.js';
@@ -417,7 +419,7 @@ export function createApp(deps: AppDeps) {
     const body = await readJson(ctx.req);
     const active = await maybeOne<{ n: number }>(
       db,
-      `SELECT count(*)::int AS n FROM import_jobs WHERE user_id = $1 AND status IN ('queued','running')`,
+      `SELECT count(*)::int AS n FROM import_jobs WHERE user_id = $1 AND status IN ('queued','running','verifying')`,
       [user.id],
     );
     if ((active?.n ?? 0) >= MAX_ACTIVE_IMPORTS) throw new HttpError(429, 'You already have imports in progress. Wait for one to finish.');
@@ -443,14 +445,88 @@ export function createApp(deps: AppDeps) {
   });
 
   async function jobJson(userId: string, jobId: string) {
-    return maybeOne(
+    const j = await maybeOne<Record<string, any>>(
       db,
       `SELECT id, podcast_id AS "podcastId", source_url AS "sourceUrl", status, progress, warnings, error,
-              created_at AS "createdAt", finished_at AS "finishedAt"
+              created_at AS "createdAt", finished_at AS "finishedAt", preview, verify_token, verify_email,
+              verify_code_expires, verified_method AS "verifiedMethod"
          FROM import_jobs WHERE id = $1 AND user_id = $2`,
       [jobId, userId],
     );
+    if (!j) return null;
+    const { verify_token, verify_email, verify_code_expires, ...rest } = j;
+    return {
+      ...rest,
+      verification: j.status === 'verifying'
+        ? {
+            token: verify_token,
+            tag: `<podcast:txt purpose="verify">${verify_token}</podcast:txt>`,
+            canEmail: !!config.smtp && !!verify_email,
+            emailReason: !config.smtp ? 'not_configured' : !verify_email ? 'no_owner_email' : null,
+            codeSent: !!verify_code_expires && new Date(verify_code_expires).getTime() > Date.now(),
+            expiresInDays: VERIFY_EXPIRES_DAYS,
+          }
+        : null,
+    };
   }
+
+  // ───────────── ownership verification ─────────────
+
+  router.post('/api/imports/:id/check-feed', async (ctx) => {
+    const user = await requireUser(ctx);
+    const r = await checkFeed(db, config, ctx.params.id!, user.id);
+    sendJson(ctx.res, 200, { ...r, job: await jobJson(user.id, ctx.params.id!) });
+  });
+
+  router.post('/api/imports/:id/send-code', async (ctx) => {
+    const user = await requireUser(ctx);
+    let r;
+    try {
+      r = await sendCode(db, config, ctx.params.id!, user.id);
+    } catch (e) {
+      if (e instanceof SmtpError) throw new VerifyError(`The code couldn’t be sent: ${e.message}. Use the feed tag instead, or ask an admin to check the email settings.`, 502);
+      throw e;
+    }
+    sendJson(ctx.res, 200, { ...r, job: await jobJson(user.id, ctx.params.id!) });
+  });
+
+  router.post('/api/imports/:id/verify-code', async (ctx) => {
+    const user = await requireUser(ctx);
+    const body = await readJson(ctx.req);
+    await checkCode(db, ctx.params.id!, user.id, body.code);
+    sendJson(ctx.res, 200, { verified: true, job: await jobJson(user.id, ctx.params.id!) });
+  });
+
+  /** Admins may vouch for shows they manage. */
+  router.post('/api/imports/:id/skip-verification', async (ctx) => {
+    const user = await requireAdmin(ctx);
+    await verifyingJob(db, ctx.params.id!, user.id);
+    await markVerified(db, ctx.params.id!, 'admin');
+    sendJson(ctx.res, 200, { verified: true, job: await jobJson(user.id, ctx.params.id!) });
+  });
+
+  router.post('/api/imports/:id/cancel', async (ctx) => {
+    const user = await requireUser(ctx);
+    await cancelImport(db, ctx.params.id!, user.id);
+    sendJson(ctx.res, 200, { job: await jobJson(user.id, ctx.params.id!) });
+  });
+
+  router.post('/api/admin/site/test-email', async (ctx) => {
+    const user = await requireAdmin(ctx);
+    if (!config.smtp) throw new HttpError(400, 'Save the email settings first');
+    const body = await readJson(ctx.req);
+    const to = typeof body.to === 'string' && body.to.trim() ? body.to.trim() : user.email;
+    try {
+      await sendMail(config.smtp, {
+        to,
+        subject: `Test email from ${config.siteName}`,
+        text: `This is a test from ${config.siteName} (${config.publicBaseUrl}).\n\nIf you got it, email is set up: podcasters can now confirm they own a show with an emailed code.`,
+      });
+    } catch (e) {
+      throw new HttpError(502, e instanceof Error ? e.message : String(e));
+    }
+    sendJson(ctx.res, 200, { sentTo: to });
+  });
 
   // ───────────── public feed + media ─────────────
 
@@ -678,7 +754,7 @@ export function createApp(deps: AppDeps) {
         return;
       }
       if (e instanceof HttpError) return sendJson(res, e.status, { error: e.message }, e.headers);
-      if (e instanceof AuthError || e instanceof LiveError) return sendJson(res, e.status, { error: e.message });
+      if (e instanceof AuthError || e instanceof LiveError || e instanceof VerifyError) return sendJson(res, e.status, { error: e.message });
       if (e instanceof ImportError || e instanceof PrefixError || e instanceof SettingsError || e instanceof StorageConfigError || e instanceof MoveError) {
         return sendJson(res, 400, { error: e.message });
       }

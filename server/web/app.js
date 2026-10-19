@@ -110,9 +110,12 @@ function toInputValue(iso) {
 }
 
 function artImg(url, title, size = '') {
-  if (url) return h('img', { class: `art ${size}`, src: url, alt: '', loading: 'lazy' });
   const initials = (title || '?').split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
-  return h('div', { class: `art placeholder ${size}`, 'aria-hidden': 'true' }, initials);
+  const placeholder = () => h('div', { class: `art placeholder ${size}`, 'aria-hidden': 'true' }, initials);
+  if (!url) return placeholder();
+  // Fall back to initials if the image can't load (e.g. art still on an old http:// host).
+  const img = h('img', { class: `art ${size}`, src: url, alt: '', loading: 'lazy', onerror: () => img.replaceWith(placeholder()) });
+  return img;
 }
 
 function formError() {
@@ -421,16 +424,20 @@ async function viewImport() {
         h('thead', null, h('tr', null, h('th', null, 'Feed'), h('th', null, 'Status'), h('th', null, 'Started'))),
         h('tbody', null, jobs.map((j) => h('tr', null,
           h('td', null, h('a', { href: `#/import/${j.id}` }, j.sourceUrl)),
-          h('td', null, h('span', { class: `pill ${j.status === 'failed' ? 'live' : j.status === 'done' ? '' : 'pending'}` }, jobStatusText(j.status))),
+          h('td', null, h('span', { class: `pill ${j.status === 'failed' ? 'ended' : j.status === 'done' ? '' : 'pending'}` }, jobStatusText(j.status))),
           h('td', { class: 'nowrap' }, fmtDate(j.createdAt, true)))))))) : null);
 }
 
-const jobStatusText = (s) => ({ queued: 'Waiting', running: 'Importing', done: 'Finished', failed: 'Failed' })[s] ?? s;
+const jobStatusText = (s) => ({ queued: 'Waiting', running: 'Importing', verifying: 'Needs verification', done: 'Finished', failed: 'Failed' })[s] ?? s;
 
 async function viewImportJob(jobId) {
   const page = h('div', { class: 'page' });
   const draw = async () => {
     const { job } = await api('GET', `/api/imports/${jobId}`);
+    if (job.status === 'verifying') {
+      page.replaceChildren(verificationView(job));
+      return job;
+    }
     const p = job.progress ?? {};
     const stages = [
       ['fetching', 'Read the feed'],
@@ -469,16 +476,147 @@ async function viewImportJob(jobId) {
     const t = setInterval(async () => {
       try {
         const j = await draw();
-        if (j.status === 'done' || j.status === 'failed') {
+        if (j.status === 'done' || j.status === 'failed' || j.status === 'verifying') {
           clearInterval(t);
           await refreshPodcasts();
-          if (j.status === 'done') render();
+          if (j.status !== 'failed') render();
         }
       } catch { /* keep polling */ }
     }, 1500);
     cleanup.push(() => clearInterval(t));
   }
   return page;
+}
+
+/** Step 2 of an import: prove you own the show (feed tag or emailed code). */
+function verificationView(job) {
+  const v = job.verification;
+  const pv = job.preview ?? {};
+  const reload = () => render();
+
+  // Option A: tag in the feed
+  const feedMsg = h('p', { class: 'hint', role: 'status' });
+  const checkBtn = h('button', {
+    type: 'button',
+    class: 'primary',
+    onclick: async () => {
+      checkBtn.disabled = true;
+      checkBtn.textContent = 'Checking…';
+      feedMsg.className = 'hint';
+      feedMsg.textContent = '';
+      try {
+        const r = await api('POST', `/api/imports/${job.id}/check-feed`);
+        if (r.verified) {
+          toast('Ownership confirmed. Importing now.');
+          return reload();
+        }
+        feedMsg.className = 'error';
+        feedMsg.textContent = r.message;
+      } catch (e) {
+        feedMsg.className = 'error';
+        feedMsg.textContent = e.message;
+      }
+      checkBtn.disabled = false;
+      checkBtn.textContent = 'Check my feed now';
+    },
+  }, 'Check my feed now');
+
+  const feedOption = h('section', { class: 'panel verify-option' },
+    h('h2', null, 'Add a tag to your feed'),
+    h('p', { class: 'muted' }, 'At your current host, add this to the show’s feed. Look for “custom RSS tags” or “channel tags” in the show settings.'),
+    h('div', { class: 'codebox' }, h('code', null, v.tag),
+      h('button', { type: 'button', onclick: () => copy(v.tag, 'Tag copied') }, 'Copy tag')),
+    h('p', { class: 'hint' }, 'Host doesn’t allow custom tags? Paste just the code into the show’s description instead: ',
+      h('code', { class: 'inline' }, v.token), ' ',
+      h('a', { href: '#', onclick: (e) => { e.preventDefault(); copy(v.token, 'Code copied'); } }, 'Copy code')),
+    h('div', { class: 'actions' }, checkBtn),
+    feedMsg,
+    h('p', { class: 'hint' }, 'You can remove the tag or code once the import has finished.'));
+
+  // Option B: emailed code
+  const mailMsg = h('p', { class: 'hint', role: 'status' });
+  const codeInput = h('input', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 9, placeholder: '123456', 'aria-label': 'Code from the email' });
+  const codeForm = h('form', {
+    class: 'row',
+    hidden: !v.codeSent,
+    onsubmit: (ev) => {
+      ev.preventDefault();
+      busy(codeForm, async () => {
+        try {
+          await api('POST', `/api/imports/${job.id}/verify-code`, { code: codeInput.value });
+          toast('Ownership confirmed. Importing now.');
+          reload();
+        } catch (e) {
+          mailMsg.className = 'error';
+          mailMsg.textContent = e.message;
+        }
+      });
+    },
+  }, h('div', { style: 'flex:0 1 180px' }, codeInput), h('button', { class: 'primary', type: 'submit' }, 'Confirm code'));
+  const sendBtn = h('button', {
+    type: 'button',
+    onclick: async () => {
+      sendBtn.disabled = true;
+      mailMsg.className = 'hint';
+      mailMsg.textContent = 'Sending…';
+      try {
+        const r = await api('POST', `/api/imports/${job.id}/send-code`);
+        mailMsg.textContent = `Code sent to ${r.sentTo}. It works for 30 minutes.`;
+        codeForm.hidden = false;
+        sendBtn.textContent = 'Send a new code';
+        codeInput.focus();
+      } catch (e) {
+        mailMsg.className = 'error';
+        mailMsg.textContent = e.message;
+      }
+      sendBtn.disabled = false;
+    },
+  }, v.codeSent ? 'Send a new code' : 'Email me a code');
+
+  const emailOption = h('section', { class: 'panel verify-option' },
+    h('h2', null, 'Get a code by email'),
+    v.canEmail
+      ? [
+          h('p', { class: 'muted' }, `We’ll email a code to the owner address listed in the feed: ${pv.ownerEmail}.`),
+          h('div', { class: 'actions' }, sendBtn),
+          mailMsg,
+          codeForm,
+        ]
+      : h('p', { class: 'muted' }, v.emailReason === 'no_owner_email'
+        ? 'The feed doesn’t list an owner email (<itunes:owner>), so use the feed tag instead.'
+        : 'Email isn’t set up on this site yet, so use the feed tag instead.'));
+
+  return h('div', null,
+    h('div', { class: 'page-head' }, h('h1', null, 'Confirm you own this show'),
+      h('p', { class: 'muted' }, 'Nothing has been copied yet. Prove the show is yours in one of these two ways, and the import continues by itself.')),
+    h('div', { class: 'verify-preview' },
+      artImg(pv.imageUrl, pv.title),
+      h('div', null,
+        h('h2', null, pv.title),
+        h('p', { class: 'muted' }, [pv.author, `${pv.episodes} episode${pv.episodes === 1 ? '' : 's'}`].filter(Boolean).join(', ')),
+        h('p', { class: 'hint', style: 'overflow-wrap:anywhere' }, job.sourceUrl))),
+    h('div', { class: 'verify-options' }, feedOption, emailOption),
+    h('div', { class: 'actions' },
+      state.me.isAdmin ? h('button', {
+        type: 'button',
+        onclick: async () => {
+          if (!confirm(`Skip verification for “${pv.title}”?\n\nOnly do this for shows you manage or have permission to move.`)) return;
+          await api('POST', `/api/imports/${job.id}/skip-verification`);
+          toast('Verification skipped. Importing now.');
+          reload();
+        },
+      }, 'Skip: I manage this show') : null,
+      h('button', {
+        type: 'button',
+        class: 'quiet',
+        onclick: async () => {
+          if (!confirm('Cancel this import?')) return;
+          await api('POST', `/api/imports/${job.id}/cancel`);
+          toast('Import cancelled');
+          go('#/import');
+        },
+      }, 'Cancel import')),
+    h('p', { class: 'hint' }, `This request stays open for ${v.expiresInDays} days. You can leave and come back from Import a show.`));
 }
 
 // ───────────── show page ─────────────
@@ -1241,11 +1379,110 @@ async function viewSite() {
     brandForm,
     addrForm,
     storagePanel(storage),
+    verifyPanel(s),
     h('section', { class: 'panel' },
       h('h2', null, 'Sign-ups'),
       h('label', { class: 'switch', style: 'margin-top:12px' }, reg, 'Anyone can create an account'),
       h('p', { class: 'hint', style: 'margin-top:8px' }, 'When off, only admins can add podcasters (under People).')),
     keyForm);
+}
+
+// ───────────── ownership verification + email ─────────────
+
+function verifyPanel(s) {
+  const req = h('input', {
+    type: 'checkbox',
+    role: 'switch',
+    checked: s.requireVerification,
+    onchange: async () => {
+      req.disabled = true;
+      try {
+        await api('PUT', '/api/admin/site', { requireVerification: req.checked });
+        toast(req.checked ? 'Imports now need ownership verification' : 'Verification turned off');
+      } catch (e) {
+        toast(e.message);
+        req.checked = !req.checked;
+      }
+      req.disabled = false;
+    },
+  });
+
+  const m = s.smtp;
+  const err = formError();
+  const hostIn = h('input', { type: 'text', value: m.host, placeholder: 'smtp.example.com', autocomplete: 'off' });
+  const sec = h('select', null, h('option', { value: 'starttls' }, 'STARTTLS (usually port 587)'), h('option', { value: 'tls' }, 'TLS (usually port 465)'), h('option', { value: 'none' }, 'None (not recommended)'));
+  sec.value = m.security;
+  const port = h('input', { type: 'text', inputmode: 'numeric', value: m.port ?? '', placeholder: sec.value === 'tls' ? '465' : '587' });
+  sec.addEventListener('change', () => { port.placeholder = sec.value === 'tls' ? '465' : '587'; });
+  const user = h('input', { type: 'text', value: m.user, autocomplete: 'off' });
+  const pass = h('input', { type: 'password', autocomplete: 'new-password', placeholder: m.passwordSet ? 'Saved. Leave blank to keep it.' : '' });
+  const from = h('input', { type: 'text', value: m.from, placeholder: `${siteName()} <podcasts@example.com>` });
+  const testTo = h('input', { type: 'email', placeholder: state.me.email, 'aria-label': 'Send the test to' });
+
+  const form = h('form', {
+    onsubmit: (ev) => {
+      ev.preventDefault();
+      err.hidden = true;
+      busy(form, async () => {
+        try {
+          await api('PUT', '/api/admin/site', {
+            smtp: { host: hostIn.value, port: port.value, security: sec.value, user: user.value, password: pass.value || undefined, from: from.value },
+          });
+          toast('Email settings saved');
+          render();
+        } catch (e) {
+          showError(err, e);
+        }
+      });
+    },
+  },
+  h('div', { class: 'fields-grid' },
+    field('Mail server', hostIn), field('Security', sec), field('Port', port),
+    field('Username', user), field('Password', pass), field('From', from, 'The sender shown to podcasters.')),
+  err,
+  h('div', { class: 'actions' },
+    h('button', { class: 'primary', type: 'submit' }, 'Save email settings'),
+    m.configured ? h('button', {
+      type: 'button',
+      class: 'quiet',
+      onclick: async () => {
+        if (!confirm('Remove the email settings? Podcasters will only be able to verify with the feed tag.')) return;
+        await api('PUT', '/api/admin/site', { smtp: null });
+        toast('Email settings removed');
+        render();
+      },
+    }, 'Remove') : null));
+
+  const testMsg = h('p', { class: 'hint', role: 'status' });
+  const testBtn = h('button', {
+    type: 'button',
+    disabled: !m.configured,
+    onclick: async () => {
+      testBtn.disabled = true;
+      testMsg.className = 'hint';
+      testMsg.textContent = 'Sending…';
+      try {
+        const r = await api('POST', '/api/admin/site/test-email', { to: testTo.value || undefined });
+        testMsg.textContent = `Sent to ${r.sentTo}. Check that inbox (and its spam folder).`;
+      } catch (e) {
+        testMsg.className = 'error';
+        testMsg.textContent = e.message;
+      }
+      testBtn.disabled = false;
+    },
+  }, 'Send test email');
+
+  return h('section', { class: 'panel' },
+    h('h2', null, 'Ownership verification'),
+    h('p', { class: 'muted' }, 'Before a show is imported, the person importing it proves they own it: by adding a tag to the feed at their current host, or with a code emailed to the owner address in the feed. Admins can skip it for shows they manage.'),
+    h('label', { class: 'switch', style: 'margin:12px 0 20px' }, req, 'Require verification for every import'),
+    h('h3', null, 'Email for verification codes'),
+    h('p', { class: 'hint', style: 'margin-bottom:12px' }, m.configured
+      ? h('span', { class: 'light on' }, 'Email is set up')
+      : 'Optional. Without it, podcasters verify with the feed tag.'),
+    form,
+    h('div', { class: 'row', style: 'margin-top:16px' }, h('div', { style: 'flex:0 1 280px' }, testTo), testBtn),
+    testMsg);
 }
 
 // ───────────── media storage ─────────────

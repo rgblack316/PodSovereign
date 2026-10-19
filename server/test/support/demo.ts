@@ -8,6 +8,8 @@ import { createRequire } from 'node:module';
 import { createApp } from '../../src/http/app.js';
 import { claimNextJob, enqueueImport, runImportJob, startImportWorker } from '../../src/import/importer.js';
 import { startFakeS3 } from './fake-storage.js';
+import { startFakeSmtp } from './fake-smtp.js';
+import { loadSiteSettings } from '../../src/site/settings.js';
 import { createLiveItem, setLiveStatus } from '../../src/live/live.js';
 import { setShowPodping } from '../../src/podping/podping.js';
 import { hashPassword } from '../../src/auth/passwords.js';
@@ -83,6 +85,20 @@ await createLiveItem(db, night, {
   start: '2026-11-03T20:00:00-05:00',
   streamUrl: 'https://stream.johnscreekstudios.com/nightshift.mp3',
 });
+
+// Verification on, with a fake mail server that logs the codes it receives.
+const smtp = await startFakeSmtp();
+const logMail = setInterval(() => {
+  while (smtp.messages.length) console.log(`email to ${smtp.messages[0]!.to.join(',')}: ${smtp.messages.shift()!.subject}`);
+}, 200);
+logMail.unref();
+await db.query(`UPDATE site_settings SET require_verification = true, smtp_host = '127.0.0.1', smtp_port = $1, smtp_security = 'none', smtp_from = 'Johns Creek Studios <podcasts@johnscreekstudios.com>'`, [smtp.port]);
+await loadSiteSettings(db, config);
+host.feeds.set('fresh', fixtureOn(host.base, (x) => x
+  .replace('917393e3', 'abcdabcd')
+  .replace('<title>The Test Show &amp; Friends</title>', '<title>Morning Mill Report</title>')
+  .replace('<itunes:email>owner@example.com</itunes:email>', '<itunes:email>marisol@morningmill.fm</itunes:email>')));
+console.log(`feed to import: ${host.base}/feeds/fresh.xml`);
 
 // A local fake S3 bucket for trying Media storage → "Other S3-compatible".
 const s3 = await startFakeS3({ bucket: 'demo-bucket', accessKeyId: 'DEMOKEY', secret: 'demo-secret', region: 'us-east-1' });

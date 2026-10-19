@@ -35,6 +35,23 @@ Admins can change these from the dashboard. Saved values override the environmen
 | Sign-ups | Whether anyone can create an account |
 | Podping key | Kept on the server and never shown again after saving |
 
+## Ownership verification
+
+So nobody can import a show they don't own, each import pauses after reading the feed. It shows a preview and waits until the person importing proves the show is theirs. **Nothing is saved or copied until then.** Either way works:
+
+- **A tag in the feed.** Add `<podcast:txt purpose="verify">feedhost-verify-…</podcast:txt>` (the Podcasting 2.0 verification tag) to the feed at the current host, then click **Check my feed now**. Hosts without custom tags: paste the code into the show description instead. The tag can be removed after the import.
+- **An emailed code.** A 6-digit code goes to the owner address in the feed (`<itunes:owner>`, or `<managingEditor>`), never to the person importing. Codes last 30 minutes, are stored only as a hash, allow 5 tries, and can be resent once a minute, up to 5 times.
+
+Admins can **skip** verification for shows they manage. Unfinished verifications expire after 7 days, and cancelling is always possible. **Site settings → Ownership verification** turns the requirement on or off (on by default) and holds the email server settings:
+
+| Setting | Notes |
+|---|---|
+| Mail server · Security · Port | STARTTLS (587), TLS (465) or none; certificates are checked |
+| Username · Password | Optional. AUTH PLAIN or LOGIN. The password is never shown again |
+| From | e.g. `Johns Creek Studios <podcasts@johnscreekstudios.com>` |
+
+**Send test email** confirms the settings work. Without email set up, podcasters verify with the feed tag.
+
 ## Media storage
 
 Under **Site settings → Media storage**, admins choose where episode files, artwork, transcripts and chapter files are kept.
@@ -213,6 +230,8 @@ All `/api` calls use a session cookie. Requests that change something must send 
 | POST | `/api/podcasts/:id/live/:liveId/status` `{status}` | editor+ |
 | DELETE | `/api/podcasts/:id` | owner |
 | POST | `/api/imports` `{url, slug?}` · GET `/api/imports` · `/api/imports/:id` | your own imports |
+| POST | `/api/imports/:id/check-feed` · `/send-code` · `/verify-code` `{code}` · `/cancel` | your own imports |
+| POST | `/api/imports/:id/skip-verification` · `/api/admin/site/test-email` | admin |
 | GET | `/:slug/feed.xml` · `/:slug/media/:type/:file` | public |
 
 If you don't have access to a podcast, you get **404**, so the existence of other people's shows isn't revealed.
@@ -220,7 +239,7 @@ If you don't have access to a podcast, you get **404**, so the existence of othe
 ## Tests
 
 ```bash
-npm test     # 121 tests: feed engine, import worker, API and isolation
+npm test     # 137 tests: feed engine, import worker, API and isolation
 ```
 
 `npm run demo` starts a throwaway demo (two imported shows, one on air) at `http://127.0.0.1:8099`, signed in as `randy@johnscreekstudios.com` with the password `demo password 123`. It uses the same local test database as the tests below.
@@ -233,7 +252,8 @@ The import and API tests need a local PostgreSQL that allows trust auth for the 
 |---|---|
 | Feed engine | `src/feed/`: parser, builder, stats prefixes, media references |
 | Database | `src/db/`: migrations, feed save/load, the `podcastRole` access check |
-| Import | `src/import/`: SSRF-guarded HTTP, job queue, resumable media copy |
+| Import | `src/import/`: SSRF-guarded HTTP, job queue, ownership verification, resumable media copy |
+| Email | `src/mail/`: SMTP client (TLS, STARTTLS, AUTH PLAIN/LOGIN) |
 | Accounts | `src/auth/`: scrypt passwords, hashed session tokens, login rate limiting |
 | HTTP | `src/http/`: routes, CSRF checks, public feed with ETag caching, 301 check, dashboard files |
 | Dashboard | `web/`: index.html, app.js, styles.css |
@@ -245,9 +265,10 @@ The import and API tests need a local PostgreSQL that allows trust auth for the 
 ### Import, step by step
 1. Fetch the feed. Redirects are followed, and private and internal addresses are blocked, even through DNS tricks.
 2. Refuse the import if the feed is `<podcast:locked>`, if you have already imported it, or if another account already hosts it.
-3. Save everything. Existing stats prefixes are detected and pre-checked, and a `podcast:guid` is generated if the feed has none.
-4. Copy every file: audio, video, alternate versions, artwork, transcripts, chapters, people images and trailers, plus **images embedded in show notes** and **images listed inside chapter files**. Chapter files are rewritten to point at the copies. Live streams, plain links and IPFS/torrent sources are skipped.
-5. Rewrite the URLs to point at this server. Files that fail to copy keep their original URL and are listed as warnings.
+3. Wait for ownership verification (see above), unless it's turned off or an admin skips it.
+4. Save everything. Existing stats prefixes are detected and pre-checked, and a `podcast:guid` is generated if the feed has none.
+5. Copy every file: audio, video, alternate versions, artwork, transcripts, chapters, people images and trailers, plus **images embedded in show notes** and **images listed inside chapter files**. Chapter files are rewritten to point at the copies. Live streams, plain links and IPFS/torrent sources are skipped.
+6. Rewrite the URLs to point at this server. Files that fail to copy keep their original URL and are listed as warnings.
 
 ### Storage layout
 

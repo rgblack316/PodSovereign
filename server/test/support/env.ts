@@ -14,6 +14,8 @@ const SCRATCH = fileURLToPath(new URL('../../.scratch/', import.meta.url));
 export async function setupDb(name: string): Promise<Db> {
   const db = await freshDatabase(name);
   await migrate(db);
+  // Most tests import shows directly; verification has its own tests that turn it on.
+  await db.query(`UPDATE site_settings SET require_verification = false`);
   return db;
 }
 
@@ -48,6 +50,8 @@ export function testConfig(over: Partial<Config> = {}): Config {
     siteVersion: 0,
     storage: { provider: 'local', settings: {}, secret: null },
     storageMoveFrom: null,
+    requireVerification: false,
+    smtp: null,
     previousHosts: [],
     ...over,
   };

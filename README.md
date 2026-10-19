@@ -17,7 +17,7 @@ Clone it and run your own: the site's name, logo, favicon and web address are al
 - [x] Media storage on this server or a provider (R2, B2, S3, Wasabi, Spaces, Bunny, other S3) with connection test and background moves
 - [x] Admin Site settings: name, logo, favicon, web and media address (stored links rewritten, old hostname redirected), sign-ups, Podping key
 - [x] Web dashboard: shows, move checklist with 301 check, import progress, stats prefixes, Podping, live shows, people
-- [ ] Podcast ownership verification on import
+- [x] Ownership verification on import: podcast:txt tag or a code emailed to the feed's owner (built-in SMTP), admin skip
 - [ ] Docker and Nginx deployment
 
 Planned public URLs: `https://podcasts.johnscreekstudios.com/<show>/feed.xml`, with media under `/<show>/media/`, served through a Cloudflare Tunnel.
