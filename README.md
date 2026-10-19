@@ -12,7 +12,7 @@ Self-hosted podcast feed host. It imports an existing podcast RSS feed, replicat
 - [x] JSON API and public feed endpoint
 - [x] Podping (per-show switch, off after import): scheduled episodes going live and stats prefix changes
 - [x] Live show (`podcast:liveItem`) management: pending → live → ended, with live and liveEnd Podpings
-- [ ] Web dashboard
+- [x] Web dashboard: shows, move checklist with 301 check, import progress, stats prefixes, Podping, live shows, people
 - [ ] Podcast ownership verification on import
 - [ ] Docker and Nginx deployment
 

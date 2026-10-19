@@ -72,31 +72,66 @@ interface Opened {
   finalUrl: string;
 }
 
+/** One guarded GET, no redirect following. */
+async function requestOnce(url: string, opts: GetOptions): Promise<{ res: http.IncomingMessage; u: URL }> {
+  const u = new URL(url);
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new FetchError(`Unsupported URL scheme ${u.protocol}`, false);
+  if (u.username || u.password) throw new FetchError('URLs with credentials are not allowed', false);
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  if (net.isIP(host) && !opts.allowPrivate && isPrivateAddress(host)) {
+    throw new FetchError(`Refusing to connect to private address ${host}`, false);
+  }
+  const res = await new Promise<http.IncomingMessage>((resolve, reject) => {
+    const mod = u.protocol === 'https:' ? https : http;
+    const req = mod.get(
+      u,
+      {
+        headers: { 'User-Agent': USER_AGENT, Accept: opts.accept ?? '*/*', 'Accept-Encoding': 'identity' },
+        lookup: guardedLookup(opts.allowPrivate) as unknown as typeof dns.lookup,
+        timeout: opts.timeoutMs ?? 30_000,
+      },
+      resolve,
+    );
+    req.on('timeout', () => req.destroy(new FetchError(`Timed out fetching ${u.host}`, true)));
+    req.on('error', (e) => reject(e instanceof FetchError ? e : new FetchError(`${e.message} (${u.host})`, true)));
+  });
+  return { res, u };
+}
+
+export interface RedirectHop {
+  url: string;
+  status: number;
+}
+
+/**
+ * Follow redirects by hand and report every hop (for the 301 check).
+ * `stopAt` ends the trace without requesting a URL (e.g. our own feed, which
+ * would otherwise be fetched back through the tunnel).
+ */
+export async function traceRedirects(url: string, opts: GetOptions, stopAt?: (url: string) => boolean): Promise<RedirectHop[]> {
+  const hops: RedirectHop[] = [];
+  let current = url;
+  for (let i = 0; i <= (opts.maxRedirects ?? 5); i++) {
+    if (i > 0 && stopAt?.(current)) {
+      hops.push({ url: current, status: 200 });
+      return hops;
+    }
+    const { res, u } = await requestOnce(current, opts);
+    res.resume();
+    const status = res.statusCode ?? 0;
+    hops.push({ url: current, status });
+    const loc = res.headers.location;
+    if (![301, 302, 303, 307, 308].includes(status) || !loc) return hops;
+    current = new URL(loc, u).toString();
+  }
+  hops.push({ url: current, status: 0 });
+  return hops;
+}
+
 async function open(url: string, opts: GetOptions): Promise<Opened> {
   let current = url;
   for (let hop = 0; hop <= (opts.maxRedirects ?? 5); hop++) {
-    const u = new URL(current);
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new FetchError(`Unsupported URL scheme ${u.protocol}`, false);
-    if (u.username || u.password) throw new FetchError('URLs with credentials are not allowed', false);
-    const host = u.hostname.replace(/^\[|\]$/g, '');
-    if (net.isIP(host) && !opts.allowPrivate && isPrivateAddress(host)) {
-      throw new FetchError(`Refusing to connect to private address ${host}`, false);
-    }
-
-    const res = await new Promise<http.IncomingMessage>((resolve, reject) => {
-      const mod = u.protocol === 'https:' ? https : http;
-      const req = mod.get(
-        u,
-        {
-          headers: { 'User-Agent': USER_AGENT, Accept: opts.accept ?? '*/*', 'Accept-Encoding': 'identity' },
-          lookup: guardedLookup(opts.allowPrivate) as unknown as typeof dns.lookup,
-          timeout: opts.timeoutMs ?? 30_000,
-        },
-        resolve,
-      );
-      req.on('timeout', () => req.destroy(new FetchError(`Timed out fetching ${u.host}`, true)));
-      req.on('error', (e) => reject(e instanceof FetchError ? e : new FetchError(`${e.message} (${u.host})`, true)));
-    });
+    const { res, u } = await requestOnce(current, opts);
 
     const status = res.statusCode ?? 0;
     if ([301, 302, 303, 307, 308].includes(status)) {

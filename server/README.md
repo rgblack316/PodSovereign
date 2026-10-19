@@ -18,7 +18,23 @@ PUBLIC_BASE_URL=https://podcasts.johnscreekstudios.com \
 npm start
 ```
 
+Then open `https://podcasts.johnscreekstudios.com/` (or `http://127.0.0.1:8080/` on the server) and create the first account.
+
 To make it public, see [Cloudflare Tunnel](#cloudflare-tunnel) below.
+
+## Dashboard
+
+The dashboard is served at `/`. It's plain JavaScript and CSS in `web/`, with no build step.
+
+- **Shows:** each show opens with a status strip: feed live, media copied, old feed redirecting here, Podping, and on air.
+- **Finish moving this show:** a checklist that confirms the media is copied, checks for you whether the old host's 301 redirect is in place (and whether it's permanent), and walks you to turning on Podping.
+- **Episodes, Stats prefixes, Podping, Live and Settings** tabs. Stats prefixes are checkboxes, with ID fields where a service needs one, arrows to set the order, and a preview of the resulting episode link.
+- **Import a show,** with live progress and the import notes.
+- **Account** (change password) and **People** (admins add podcasters).
+
+Security: the pages are served with a strict Content Security Policy (scripts only from this server), all feed content is shown as plain text, and every change goes through the same API checks as before.
+
+The typeface (Archivo) loads from Google Fonts. Without internet access, the dashboard falls back to the system font.
 
 Migrations run automatically on startup. The **first account registered becomes the admin**. After that, the admin creates accounts unless `ALLOW_REGISTRATION=1`.
 
@@ -141,10 +157,12 @@ All `/api` calls use a session cookie. Requests that change something must send 
 | Method | Path | Who |
 |---|---|---|
 | POST | `/api/auth/register` · `/login` · `/logout` | anyone |
+| GET | `/api/setup` (first-run status) | anyone |
 | GET | `/api/me` · POST `/api/me/password` | signed in |
-| POST | `/api/admin/users` | admin |
+| GET · POST | `/api/admin/users` | admin |
 | GET | `/api/podcasts` | your own shows, plus ones shared with you |
 | GET | `/api/podcasts/:id` · `/episodes` · `/prefixes` | viewer+ |
+| POST | `/api/podcasts/:id/redirect-check` (is the old feed 301-redirecting here?) | editor+ |
 | PUT | `/api/podcasts/:id/prefixes` | editor+ |
 | GET · PUT | `/api/podcasts/:id/podping` (status · show switch) | viewer+ · editor+ |
 | GET · POST | `/api/podcasts/:id/live` (list · create) | viewer+ · editor+ |
@@ -159,8 +177,10 @@ If you don't have access to a podcast, you get **404**, so the existence of othe
 ## Tests
 
 ```bash
-npm test     # 75 tests: feed engine, import worker, API and isolation
+npm test     # 79 tests: feed engine, import worker, API and isolation
 ```
+
+`npm run demo` starts a throwaway demo (two imported shows, one on air) at `http://127.0.0.1:8099`, signed in as `randy@johnscreekstudios.com` with the password `demo password 123`. It uses the same local test database as the tests below.
 
 The import and API tests need a local PostgreSQL that allows trust auth for the `postgres` user over its Unix socket. Set `TEST_PG_SOCKET` if the socket isn't at `/var/run/postgresql/.s.PGSQL.5432`. Each test file creates its own throwaway database.
 
@@ -172,7 +192,8 @@ The import and API tests need a local PostgreSQL that allows trust auth for the 
 | Database | `src/db/`: migrations, feed save/load, the `podcastRole` access check |
 | Import | `src/import/`: SSRF-guarded HTTP, job queue, resumable media copy |
 | Accounts | `src/auth/`: scrypt passwords, hashed session tokens, login rate limiting |
-| HTTP | `src/http/`: routes, CSRF checks, public feed with ETag caching |
+| HTTP | `src/http/`: routes, CSRF checks, public feed with ETag caching, 301 check, dashboard files |
+| Dashboard | `web/`: index.html, app.js, styles.css |
 | Podping | `src/podping/`: change queue, podping.cloud sender, scheduled-episode announcer |
 | Live | `src/live/`: `podcast:liveItem` create, edit, status changes (with live and liveEnd pings) |
 

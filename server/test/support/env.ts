@@ -57,17 +57,25 @@ export async function startOldHost(): Promise<{
   hits: Map<string, number>;
   feeds: Map<string, string>;
   missing: Set<string>;
+  /** Path → [status, Location] redirects. */
+  redirects: Map<string, [number, string]>;
   /** Custom bodies for specific /old/ paths. */
-  files: Map<string, { type: string; body: string }>;
+  files: Map<string, { type: string; body: string | Buffer }>;
   close: () => Promise<void>;
 }> {
-  const files = new Map<string, { type: string; body: string }>();
+  const files = new Map<string, { type: string; body: string | Buffer }>();
+  const redirects = new Map<string, [number, string]>();
   const hits = new Map<string, number>();
   const feeds = new Map<string, string>();
   const missing = new Set<string>();
   const server = http.createServer((req, res) => {
     const url = req.url ?? '/';
     hits.set(url, (hits.get(url) ?? 0) + 1);
+    const rd = redirects.get(url);
+    if (rd) {
+      res.writeHead(rd[0], { Location: rd[1] }).end();
+      return;
+    }
     if (url === '/moved.xml') {
       res.writeHead(301, { Location: '/feeds/main.xml' }).end();
       return;
@@ -91,7 +99,7 @@ export async function startOldHost(): Promise<{
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return { base, hits, feeds, missing, files, close: () => new Promise((r) => server.close(() => r())) };
+  return { base, hits, feeds, missing, files, redirects, close: () => new Promise((r) => server.close(() => r())) };
 }
 
 /** The fixture feed, re-pointed at the fake old host. */

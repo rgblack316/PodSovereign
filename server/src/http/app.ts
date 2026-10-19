@@ -25,6 +25,8 @@ import { enqueueImport, ImportError, KIND_DIRS } from '../import/importer.js';
 import { createLiveItem, deleteLiveItem, listLiveItems, LiveError, setLiveStatus, updateLiveItem } from '../live/live.js';
 import { latestPings, podpingEnabled, queuePing, setShowPodping } from '../podping/podping.js';
 import { feedPath } from '../urls.js';
+import { checkRedirect, saveRedirectResult } from './redirect-check.js';
+import { serveStatic } from './static.js';
 import { HttpError, parseCookies, readJson, Router, sendJson, type Ctx } from './router.js';
 
 export const SESSION_COOKIE = 'fh_session';
@@ -153,6 +155,27 @@ export function createApp(deps: AppDeps) {
     sendJson(ctx.res, 204, undefined);
   });
 
+  router.get('/api/admin/users', async (ctx) => {
+    const user = await requireUser(ctx);
+    if (!user.is_admin) throw new HttpError(403, 'Admins only');
+    const { rows } = await db.query<User & { podcasts: number }>(
+      `SELECT u.id, u.email, u.display_name, u.is_admin, u.created_at,
+              (SELECT count(*)::int FROM podcasts p WHERE p.owner_id = u.id) AS podcasts
+         FROM users u ORDER BY u.created_at`,
+    );
+    sendJson(ctx.res, 200, { users: rows.map((u) => ({ ...userJson(u), podcasts: u.podcasts, createdAt: u.created_at })) });
+  });
+
+  /** Public: lets the sign-in page know whether to offer "create the first account". */
+  router.get('/api/setup', async (ctx) => {
+    const r = await maybeOne<{ n: number }>(db, `SELECT count(*)::int AS n FROM users`);
+    sendJson(ctx.res, 200, {
+      needsFirstAccount: (r?.n ?? 0) === 0,
+      registrationOpen: config.allowRegistration,
+      publicBaseUrl: config.publicBaseUrl,
+    });
+  });
+
   router.post('/api/admin/users', async (ctx) => {
     const user = await requireUser(ctx);
     if (!user.is_admin) throw new HttpError(403, 'Admins only');
@@ -181,29 +204,70 @@ export function createApp(deps: AppDeps) {
         role: p.role,
         episodeCount: p.episode_count,
         feedUrl: feedUrl(p.slug),
+        podpingEnabled: p.podping_enabled,
+        redirectStatus: p.redirect_status,
+        imported: p.imported,
+        liveNow: p.live_now,
+        mediaFailed: p.media_failed,
       })),
     });
   });
 
   router.get('/api/podcasts/:id', async (ctx) => {
     const { podcastId, role } = await requirePodcast(ctx, 'viewer');
-    const p = (await getPodcastRow(db, podcastId))!;
-    sendJson(ctx.res, 200, {
-      podcast: {
-        id: p.id,
-        slug: p.slug,
-        status: p.status,
-        role,
-        feedUrl: feedUrl(p.slug),
-        sourceFeedUrl: (p as unknown as { source_feed_url: string | null }).source_feed_url,
-        title: p.title,
-        description: p.description,
-        imageUrl: p.image_url,
-        author: p.itunes_author,
-        language: p.language,
-        podcastGuid: p.podcast_guid,
-      },
-    });
+    sendJson(ctx.res, 200, { podcast: await podcastDetail(podcastId, role) });
+  });
+
+  async function podcastDetail(podcastId: string, role: Role) {
+    const p = (await getPodcastRow(db, podcastId))! as Awaited<ReturnType<typeof getPodcastRow>> & Record<string, any>;
+    const media = (await maybeOne<{ done: number; failed: number; pending: number; bytes: number }>(
+      db,
+      `SELECT count(*) FILTER (WHERE status = 'done')::int AS done,
+              count(*) FILTER (WHERE status = 'failed')::int AS failed,
+              count(*) FILTER (WHERE status = 'pending')::int AS pending,
+              COALESCE(sum(bytes) FILTER (WHERE status = 'done'), 0)::bigint AS bytes
+         FROM media_files WHERE podcast_id = $1`,
+      [podcastId],
+    ))!;
+    const counts = (await maybeOne<{ episodes: number; live_now: number; live_upcoming: number }>(
+      db,
+      `SELECT (SELECT count(*)::int FROM episodes WHERE podcast_id = $1) AS episodes,
+              (SELECT count(*)::int FROM tag_elements WHERE podcast_id = $1 AND episode_id IS NULL
+                 AND ns_prefix = 'podcast' AND name = 'liveItem' AND attributes->>'status' = 'live') AS live_now,
+              (SELECT count(*)::int FROM tag_elements WHERE podcast_id = $1 AND episode_id IS NULL
+                 AND ns_prefix = 'podcast' AND name = 'liveItem' AND attributes->>'status' = 'pending') AS live_upcoming`,
+      [podcastId],
+    ))!;
+    return {
+      id: p.id,
+      slug: p.slug,
+      status: p.status,
+      role,
+      feedUrl: feedUrl(p.slug),
+      sourceFeedUrl: p.source_feed_url,
+      importedAt: p.imported_at,
+      title: p.title,
+      description: p.description,
+      imageUrl: p.image_url,
+      author: p.itunes_author,
+      language: p.language,
+      podcastGuid: p.podcast_guid,
+      episodeCount: counts.episodes,
+      media,
+      podping: { serverEnabled: podpingEnabled(config), enabled: p.podping_enabled },
+      live: { now: counts.live_now, upcoming: counts.live_upcoming },
+      redirect: { status: p.redirect_status, detail: p.redirect_detail, checkedAt: p.redirect_checked_at },
+    };
+  }
+
+  /** Check whether the old host now 301-redirects to this feed (the move's last step). */
+  router.post('/api/podcasts/:id/redirect-check', async (ctx) => {
+    const { podcastId, role } = await requirePodcast(ctx, 'editor');
+    const p = (await getPodcastRow(db, podcastId))! as unknown as { slug: string; source_feed_url: string | null };
+    if (!p.source_feed_url) throw new HttpError(400, 'This show was not imported, so there is no old feed to check');
+    const result = await checkRedirect(config, p.source_feed_url, feedUrl(p.slug));
+    await saveRedirectResult(db, podcastId, result);
+    sendJson(ctx.res, 200, { result, podcast: await podcastDetail(podcastId, role) });
   });
 
   router.delete('/api/podcasts/:id', async (ctx) => {
@@ -431,6 +495,11 @@ export function createApp(deps: AppDeps) {
     if (!row || !st?.isFile()) throw new HttpError(404, 'Not found');
     sendFile(ctx.req, ctx.res, full, st.size, row.mime_type ?? 'application/octet-stream');
   });
+
+  // ───────────── dashboard (static) ─────────────
+
+  router.get('/', async (ctx) => serveStatic(ctx, 'index.html'));
+  router.get('/app/:file', async (ctx) => serveStatic(ctx, ctx.params.file!));
 
   router.get('/healthz', async (ctx) => {
     await db.query('SELECT 1');

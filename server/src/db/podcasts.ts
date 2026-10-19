@@ -35,13 +35,22 @@ export interface PodcastSummary {
   status: string;
   role: Role;
   episode_count: number;
+  podping_enabled: boolean;
+  redirect_status: string | null;
+  imported: boolean;
+  live_now: number;
+  media_failed: number;
 }
 
 export async function listPodcastsForUser(q: Queryable, userId: string): Promise<PodcastSummary[]> {
   const { rows } = await q.query<PodcastSummary>(
     `SELECT p.id, p.slug, p.title, p.image_url, p.status,
             CASE WHEN p.owner_id = $1 THEN 'owner' ELSE m.role END AS role,
-            (SELECT count(*)::int FROM episodes e WHERE e.podcast_id = p.id) AS episode_count
+            (SELECT count(*)::int FROM episodes e WHERE e.podcast_id = p.id) AS episode_count,
+            p.podping_enabled, p.redirect_status, (p.source_feed_url IS NOT NULL) AS imported,
+            (SELECT count(*)::int FROM tag_elements t WHERE t.podcast_id = p.id AND t.episode_id IS NULL
+               AND t.ns_prefix = 'podcast' AND t.name = 'liveItem' AND t.attributes->>'status' = 'live') AS live_now,
+            (SELECT count(*)::int FROM media_files m WHERE m.podcast_id = p.id AND m.status = 'failed') AS media_failed
        FROM podcasts p
        LEFT JOIN podcast_members m ON m.podcast_id = p.id AND m.user_id = $1
       WHERE p.owner_id = $1 OR m.user_id IS NOT NULL

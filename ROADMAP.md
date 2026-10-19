@@ -44,7 +44,7 @@ FeedHost doesn't stream today. Live items point at an outside stream (Icecast, Y
 **Hosting caveat:** Cloudflare's terms prohibit streaming video through its CDN and Tunnel hostnames on Free, Pro and Business plans, and restrict large-file traffic. A streaming server would need a different path, such as a separate DNS-only subdomain, Cloudflare Stream, or another provider. Weigh this together with the media CDN item above.
 
 ## Other open items
-- [ ] Web dashboard: login, podcast list, import with live progress, and stats prefix checkboxes
+- [ ] Self-host the dashboard font instead of loading it from Google Fonts
 - [ ] Podcast ownership verification on import (email code to the itunes:owner address, or a `podcast:txt` token)
 - [ ] Storage quotas per account or per podcast, with a usage display
 - [ ] Episode editing and new uploads (beyond import)

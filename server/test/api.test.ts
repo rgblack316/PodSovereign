@@ -283,6 +283,68 @@ describe('stats prefixes and the public feed', () => {
   });
 });
 
+describe('dashboard support', () => {
+  test('setup status is public; the dashboard and its files are served with a strict CSP', async () => {
+    const s = await anon.get('/api/setup');
+    assert.deepEqual(s.json, { needsFirstAccount: false, registrationOpen: false, publicBaseUrl: 'http://feeds.mine.test' });
+    const page = await anon.get('/');
+    assert.equal(page.status, 200);
+    assert.match(page.headers.get('content-type')!, /text\/html/);
+    assert.match(page.headers.get('content-security-policy')!, /script-src 'self'/);
+    assert.match(page.headers.get('content-security-policy')!, /frame-ancestors 'none'/);
+    assert.equal((await anon.get('/app/app.js')).status, 200);
+    assert.equal((await anon.get('/app/styles.css')).status, 200);
+    for (const p of ['/app/..%2Fpackage.json', '/app/nope.js', '/app/']) assert.equal((await anon.get(p)).status, 404, p);
+  });
+
+  test('admins can list people; others cannot', async () => {
+    const r = await alice.get('/api/admin/users');
+    assert.equal(r.status, 200);
+    assert.ok(r.json.users.some((u: any) => u.email === 'bob@example.com' && u.podcasts === 0));
+    assert.ok(!JSON.stringify(r.json).includes('scrypt'), 'no password hashes');
+    assert.equal((await bob.get('/api/admin/users')).status, 403);
+  });
+
+  test('podcast detail carries what the signal lights need', async () => {
+    const { podcast: p } = (await alice.get(`/api/podcasts/${alicePodcast}`)).json;
+    assert.equal(p.status, 'active');
+    assert.ok(p.media.done > 0);
+    assert.equal(p.media.failed, 0);
+    assert.equal(p.episodeCount, 2);
+    assert.deepEqual(p.podping, { serverEnabled: false, enabled: false });
+    assert.equal(p.redirect.status, null);
+    const list = (await alice.get('/api/podcasts')).json.podcasts[0];
+    assert.equal(list.imported, true);
+    assert.equal(list.podpingEnabled, false);
+  });
+
+  test('the 301 check: none → temporary → elsewhere → ok', async () => {
+    const check = async () => (await alice.post(`/api/podcasts/${alicePodcast}/redirect-check`)).json;
+    const ours = `http://feeds.mine.test/${slug}/feed.xml`;
+
+    let r = await check();
+    assert.equal(r.result.status, 'none');
+
+    host.redirects.set('/feeds/main.xml', [302, ours]);
+    r = await check();
+    assert.equal(r.result.status, 'temporary');
+    assert.match(r.result.detail, /permanent \(301\)/);
+
+    host.redirects.set('/feeds/main.xml', [301, `${host.base}/hop`]);
+    host.redirects.set('/hop', [301, `${host.base}/old/elsewhere.xml`]);
+    r = await check();
+    assert.equal(r.result.status, 'elsewhere');
+
+    host.redirects.set('/feeds/main.xml', [301, `${host.base}/hop`]);
+    host.redirects.set('/hop', [301, ours]);
+    r = await check();
+    assert.equal(r.result.status, 'ok', JSON.stringify(r.result));
+    assert.equal(r.podcast.redirect.status, 'ok', 'saved for the dashboard');
+    assert.equal((await bob.post(`/api/podcasts/${alicePodcast}/redirect-check`)).status, 404);
+    host.redirects.clear();
+  });
+});
+
 describe('live items over the API', () => {
   test('owner manages live items; other users get 404', async () => {
     const created = await alice.post(`/api/podcasts/${alicePodcast}/live`, {
