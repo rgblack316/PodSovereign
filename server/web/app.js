@@ -245,7 +245,7 @@ async function render() {
     if (section === 'import' && a) view = await viewImportJob(a);
     else if (section === 'import') view = await viewImport();
     else if (section === 'new') view = await viewNewShow();
-    else if (section === 'show' && a) view = await viewShow(a, b ?? 'overview', c);
+    else if (section === 'show' && a) view = await viewShow(a, b, c);
     else if (section === 'account') view = await viewAccount();
     else if (section === 'people' && state.me.isAdmin) view = await viewPeople();
     else if (section === 'site' && state.me.isAdmin) view = await viewSite();
@@ -627,24 +627,27 @@ function verificationView(job) {
 
 const TABS = [
   ['overview', 'Overview'],
-  ['episodes', 'Episodes'],
   ['details', 'Show details'],
-  ['prefixes', 'Stats prefixes'],
-  ['podping', 'Podping'],
-  ['live', 'Live'],
-  ['team', 'Team'],
+  ['episodes', 'Episodes'],
   ['settings', 'Settings'],
 ];
+/** Old tab addresses → where that content lives now. */
+const MOVED_TABS = { podping: ['settings', 'podping'], prefixes: ['settings', 'prefixes'], team: ['settings', 'team'], live: ['episodes', 'live'] };
 
 async function viewShow(id, tab, sub) {
   const { podcast: p } = await api('GET', `/api/podcasts/${id}`);
   const canEdit = p.role !== 'viewer';
   const body = h('div');
   const reload = () => render();
+  const showOverview = !p.setup?.overviewHidden;
+  let jumpTo = null;
+  if (MOVED_TABS[tab]) [tab, jumpTo] = MOVED_TABS[tab];
+  if (!tab) tab = showOverview ? 'overview' : 'episodes';
 
-  const views = { overview: tabOverview, episodes: tabEpisodes, details: tabDetails, prefixes: tabPrefixes, podping: tabPodping, live: tabLive, team: tabTeam, settings: tabSettings };
+  const views = { overview: tabOverview, episodes: tabEpisodes, details: tabDetails, settings: tabSettings };
   if (tab === 'episodes' && sub) body.append(await viewEpisode(p, canEdit, sub));
   else body.append(await (views[tab] ?? tabOverview)(p, canEdit, reload));
+  if (jumpTo) requestAnimationFrame(() => document.getElementById(`section-${jumpTo}`)?.scrollIntoView({ block: 'start' }));
 
   return h('div', { class: 'page' },
     h('header', { class: 'strip' },
@@ -658,7 +661,7 @@ async function viewShow(id, tab, sub) {
     h('div', { class: 'lights', role: 'list', 'aria-label': 'Show status' },
       showLights(p).map((l) => h('span', { class: `light ${l.cls}`, role: 'listitem' }, l.text))),
     h('nav', { class: 'tabs', 'aria-label': 'Show sections' },
-      TABS.filter(([k]) => k !== 'settings' || p.role === 'owner').map(([k, label]) =>
+      TABS.filter(([k]) => k !== 'overview' || showOverview || tab === 'overview').map(([k, label]) =>
         h('a', { href: `#/show/${id}/${k}`, 'aria-current': k === tab ? 'page' : null }, label))),
     body);
 }
@@ -666,6 +669,14 @@ async function viewShow(id, tab, sub) {
 // Overview: the move checklist + facts
 async function tabOverview(p, canEdit, reload) {
   const parts = [];
+  if (p.setup?.done && p.setup.overviewHidesAt) {
+    const hides = new Date(p.setup.overviewHidesAt);
+    parts.push(h('section', { class: 'panel setup-done' },
+      h('h2', null, 'Setup is complete'),
+      p.setup.overviewHidden
+        ? h('p', { class: 'muted' }, 'This tab is hidden now that setup is done. Show facts are under Settings.')
+        : h('p', { class: 'muted' }, `This tab hides on ${fmtDate(hides)}, 7 days after the last step was finished. Show facts and the feed address are always under Settings.`)));
+  }
   if (p.sourceFeedUrl) {
     const m = p.media;
     const mediaDone = p.status === 'active' && !m.pending;
@@ -733,16 +744,6 @@ async function tabOverview(p, canEdit, reload) {
         h('a', { class: 'btn', href: `#/show/${p.id}/episodes/new` }, 'New episode'))));
     }
   }
-
-  parts.push(h('section', { class: 'panel' },
-    h('h2', null, 'About this show'),
-    h('dl', { class: 'facts', style: 'margin-top:12px' },
-      h('dt', null, 'Episodes'), h('dd', null, p.episodeCount),
-      p.sourceFeedUrl ? [h('dt', null, 'Imported from'), h('dd', null, p.sourceFeedUrl)] : null,
-      p.importedAt ? [h('dt', null, 'Imported'), h('dd', null, fmtDate(p.importedAt, true))] : null,
-      h('dt', null, 'Podcast GUID'), h('dd', null, p.podcastGuid ?? '—'),
-      p.language ? [h('dt', null, 'Language'), h('dd', null, p.language)] : null,
-      h('dt', null, 'Your access'), h('dd', null, { owner: 'Owner', editor: 'Editor', viewer: 'Viewer (read only)' }[p.role]))));
 
   // Import notes for this show
   const { jobs } = await api('GET', '/api/imports');
@@ -929,13 +930,18 @@ function episodeRow(p, e) {
 async function tabEpisodes(p, canEdit) {
   const { episodes } = await api('GET', `/api/podcasts/${p.id}/episodes`);
   const newBtn = canEdit ? h('a', { class: 'btn primary', href: `#/show/${p.id}/episodes/new` }, 'New episode') : null;
+  const live = h('div', { id: 'section-live', class: 'settings-section' }, await tabLive(p, canEdit, () => render()));
+  // Something on air or coming up goes first, so Go live / End is right there.
+  const liveFirst = p.live.now || p.live.upcoming;
   if (!episodes.length) {
     return h('div', null,
+      liveFirst ? live : null,
       h('div', { class: 'section-head' }, h('p', { class: 'muted' }, 'No episodes yet.'), newBtn),
       h('div', { class: 'panel' },
         h('h2', null, 'Publish your first episode'),
         h('p', { class: 'muted' }, 'Upload the audio, give it a title and description, and publish it now or schedule it for later.'),
-        canEdit ? h('a', { class: 'btn primary', href: `#/show/${p.id}/episodes/new` }, 'New episode') : null));
+        canEdit ? h('a', { class: 'btn primary', href: `#/show/${p.id}/episodes/new` }, 'New episode') : null),
+      liveFirst ? null : live);
   }
 
   let size = savedPageSize();
@@ -989,10 +995,12 @@ async function tabEpisodes(p, canEdit) {
   draw();
 
   return h('div', null,
+    liveFirst ? live : null,
     h('div', { class: 'section-head' }, count, newBtn),
     h('div', { class: 'list-tools' }, sizes),
     h('div', { class: 'panel', style: 'padding:0' }, h('div', { class: 'table-wrap' }, table)),
-    pager);
+    pager,
+    liveFirst ? null : live);
 }
 
 // ───────────── people (<podcast:person>) ─────────────
@@ -2261,7 +2269,7 @@ async function tabTeam(p, canEdit, reload) {
   return h('div', null, parts);
 }
 
-async function tabSettings(p) {
+async function feedAndDelete(p) {
   const err = formError();
   const confirmInput = h('input', { type: 'text', autocomplete: 'off', 'aria-label': `Type ${p.slug} to confirm` });
   const del = h('button', {
@@ -2283,16 +2291,43 @@ async function tabSettings(p) {
     },
   }, 'Delete this show');
   return h('div', null,
-    h('section', { class: 'panel' },
-      h('h2', null, 'Feed address'),
-      h('p', { class: 'muted' }, 'The address can’t be changed once a show is live, because podcast apps and directories keep it.'),
-      h('dl', { class: 'facts' }, h('dt', null, 'Feed'), h('dd', null, p.feedUrl), h('dt', null, 'Media'), h('dd', null, `${state.setup.publicBaseUrl}/${p.slug}/media/`))),
-    h('section', { class: 'panel' },
+    h('section', { class: 'panel', id: 'section-feed' },
+      h('h2', null, 'Feed and show facts'),
+      h('p', { class: 'muted' }, 'The feed address can’t be changed once a show is listed, because podcast apps and directories keep it.'),
+      h('dl', { class: 'facts' },
+        h('dt', null, 'Feed'), h('dd', null, p.feedUrl),
+        h('dt', null, 'Media'), h('dd', null, `${state.setup.publicBaseUrl}/${p.slug}/media/`),
+        h('dt', null, 'Podcast GUID'), h('dd', null, p.podcastGuid ?? '—'),
+        h('dt', null, 'Episodes'), h('dd', null, p.episodeCount),
+        p.sourceFeedUrl ? [h('dt', null, 'Imported from'), h('dd', null, p.sourceFeedUrl)] : null,
+        p.importedAt ? [h('dt', null, 'Imported'), h('dd', null, fmtDate(p.importedAt, true))] : null,
+        h('dt', null, 'Your access'), h('dd', null, { owner: 'Owner', editor: 'Editor', viewer: 'Viewer (read only)' }[p.role]))),
+    p.role !== 'owner' ? null : h('section', { class: 'panel', id: 'section-delete' },
       h('h2', null, 'Delete this show'),
       h('p', { class: 'muted' }, 'Removes the feed, every episode and all copied media from this server. Subscribers following this feed will stop getting episodes. This can’t be undone.'),
       field(`Type ${p.slug} to confirm`, confirmInput),
       err,
       h('div', { class: 'actions' }, del)));
+}
+
+/** Settings: Podping, stats prefixes, the team, feed facts and (owners) deleting the show. */
+async function tabSettings(p, canEdit, reload) {
+  const parts = [
+    ['podping', 'Podping', await tabPodping(p, canEdit, reload)],
+    ['prefixes', 'Stats prefixes', await tabPrefixes(p, canEdit, reload)],
+    ['team', 'Team', await tabTeam(p, canEdit, reload)],
+    ['feed', 'Feed', null],
+  ];
+  const rest = await feedAndDelete(p);
+  if (p.role === 'owner') parts.push(['delete', 'Delete show', null]);
+  return h('div', null,
+    h('nav', { class: 'jump', 'aria-label': 'Settings sections' }, parts.map(([k, label]) => h('button', {
+      type: 'button',
+      class: 'quiet',
+      onclick: () => document.getElementById(`section-${k}`)?.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }),
+    }, label))),
+    parts.filter(([, , el]) => el).map(([k, , el]) => h('div', { id: `section-${k}`, class: 'settings-section' }, el)),
+    rest);
 }
 
 // ───────────── account & people ─────────────

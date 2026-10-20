@@ -538,6 +538,12 @@ table.team select { width: auto; min-width: 120px; padding: 6px 8px; font-size: 
 
 .table-title { font-size: var(--t-base); padding: var(--s4) var(--s4) var(--s1); }
 
+/* Settings tab */
+.jump { display: flex; flex-wrap: wrap; gap: var(--s1); margin: calc(-1 * var(--s2)) 0 var(--s4); }
+.jump button { min-height: 32px; padding: 6px 10px; color: var(--ink-2); }
+.settings-section { scroll-margin-top: var(--s4); }
+.setup-done { border-left: 4px solid var(--signal); }
+
 /* ───────── Small screens ───────── */
 
 @media (max-width: 860px) {

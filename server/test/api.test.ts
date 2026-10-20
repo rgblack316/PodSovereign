@@ -351,6 +351,25 @@ describe('dashboard support', () => {
     assert.equal((await bob.post(`/api/podcasts/${alicePodcast}/redirect-check`)).status, 404);
     host.redirects.clear();
   });
+
+  test('the Overview tab hides 7 days after setup is done, and comes back if a step breaks', async () => {
+    const detail = async () => (await alice.get(`/api/podcasts/${alicePodcast}`)).json.podcast;
+    let p = await detail();
+    assert.equal(p.setup.done, false, 'redirect ok, but Podping is still off');
+    await alice.put(`/api/podcasts/${alicePodcast}/podping`, { enabled: true });
+    p = await detail();
+    assert.equal(p.setup.done, true);
+    assert.equal(p.setup.overviewHidden, false);
+    const days = (Date.parse(p.setup.overviewHidesAt) - Date.parse(p.setup.completedAt)) / 86400_000;
+    assert.equal(Math.round(days), 7);
+    await db.query(`UPDATE podcasts SET setup_completed_at = now() - interval '8 days' WHERE id = $1`, [alicePodcast]);
+    assert.equal((await detail()).setup.overviewHidden, true);
+    await alice.put(`/api/podcasts/${alicePodcast}/podping`, { enabled: false });
+    p = await detail();
+    assert.equal(p.setup.done, false);
+    assert.equal(p.setup.completedAt, null, 'starts over once everything is done again');
+    assert.equal(p.setup.overviewHidden, false);
+  });
 });
 
 describe('live items over the API', () => {

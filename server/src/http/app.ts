@@ -52,6 +52,8 @@ import { HttpError, parseCookies, readJson, Router, sendJson, type Ctx } from '.
 
 export const SESSION_COOKIE = 'fh_session';
 const MAX_ACTIVE_IMPORTS = 3;
+/** The Overview tab hides this many days after a show's setup steps are all done. */
+const OVERVIEW_DAYS = 7;
 const KIND_DIR_NAMES = new Set(Object.values(KIND_DIRS));
 
 export interface AppDeps {
@@ -284,12 +286,31 @@ export function createApp(deps: AppDeps) {
                  AND ns_prefix = 'podcast' AND name = 'liveItem' AND attributes->>'status' = 'pending') AS live_upcoming`,
       [podcastId],
     ))!;
+    // Setup is done when an imported show's media is copied, the old feed 301s here and Podping is on;
+    // for a new show, when the directory checklist is empty. Overview hides 7 days after that.
+    const setupDone = p.source_feed_url
+      ? p.status === 'active' && !media.pending && p.redirect_status === 'ok' && p.podping_enabled
+      : p.status === 'active' && (await getShow(db, podcastId)).checklist.length === 0;
+    let completedAt: Date | null = p.setup_completed_at ?? null;
+    if (setupDone && !completedAt) {
+      completedAt = (await maybeOne<{ at: Date }>(db, `UPDATE podcasts SET setup_completed_at = now() WHERE id = $1 RETURNING setup_completed_at AS at`, [podcastId]))!.at;
+    } else if (!setupDone && completedAt) {
+      completedAt = null;
+      await db.query(`UPDATE podcasts SET setup_completed_at = NULL WHERE id = $1`, [podcastId]);
+    }
+    const overviewHidesAt = completedAt ? new Date(new Date(completedAt).getTime() + OVERVIEW_DAYS * 86400_000) : null;
     return {
       id: p.id,
       slug: p.slug,
       status: p.status,
       role,
       feedUrl: feedUrl(p.slug),
+      setup: {
+        done: setupDone,
+        completedAt,
+        overviewHidesAt,
+        overviewHidden: !!overviewHidesAt && overviewHidesAt.getTime() <= Date.now(),
+      },
       sourceFeedUrl: p.source_feed_url,
       importedAt: p.imported_at,
       title: p.title,
