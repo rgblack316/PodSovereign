@@ -91,7 +91,8 @@ The dashboard is served at `/`. It's plain JavaScript and CSS in `web/`, with no
 - **Show details:** artwork, title, description, categories, owner and every other channel tag, with a checklist of what Apple Podcasts and Spotify still need.
 - **Stats prefixes, Podping, Live and Settings** tabs. Stats prefixes are checkboxes, with ID fields where a service needs one, arrows to set the order, and a preview of the resulting episode link.
 - **Import a show,** with live progress and the import notes, or **Start a new show** from scratch.
-- **Account** (change password) and **People** (admins add podcasters).
+- **Team** tab on each show: the owner adds people by email as **editors** (episodes, show details, prefixes, Podping, live) or **viewers** (read only), changes roles, removes people, or hands ownership to a team member (staying on as an editor). Members can leave a show.
+- **Account** (change password) and **People** (admins): add accounts, see each account's shows and roles, make or remove administrators (there's always at least one), and delete accounts. Deleting an account that owns shows asks whether to give those shows to someone else or delete them.
 
 Security: the pages are served with a strict Content Security Policy (scripts only from this server), all feed content is shown as plain text, and every change goes through the same API checks as before.
 
@@ -245,7 +246,9 @@ All `/api` calls use a session cookie. Requests that change something must send 
 | POST | `/api/auth/register` · `/login` · `/logout` | anyone |
 | GET | `/api/setup` (first-run status) | anyone |
 | GET | `/api/me` · POST `/api/me/password` | signed in |
-| GET · POST | `/api/admin/users` | admin |
+| GET · POST | `/api/admin/users` · PATCH `/api/admin/users/:userId` `{isAdmin}` · DELETE `{shows: "transfer", transferTo} \| {shows: "delete"}` | admin |
+| GET | `/api/podcasts/:id/team` | viewer+ |
+| POST · PATCH · DELETE | `/api/podcasts/:id/team` `{email, role}` · `/team/:userId` `{role}` (role `owner` hands the show over) | owner (members may remove themselves) |
 | GET · PUT | `/api/admin/site` · POST/DELETE `/api/admin/site/logo` and `/favicon` | admin |
 | GET | `/site/logo` · `/site/favicon` | public |
 | GET · PUT | `/api/admin/storage` · POST `/api/admin/storage/test` | admin |

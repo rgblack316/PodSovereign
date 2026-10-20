@@ -28,6 +28,7 @@ import { createLiveItem, deleteLiveItem, listLiveItems, LiveError, setLiveStatus
 import { latestPings, podpingEnabled, queuePing, setShowPodping } from '../podping/podping.js';
 import { feedPath } from '../urls.js';
 import { checkRedirect, saveRedirectResult } from './redirect-check.js';
+import { addMember, deleteUser, listTeam, removeMember, setAdmin, setRole, TeamError } from '../db/team.js';
 import { serveStatic } from './static.js';
 import { appendChunk, cancelUpload, completeUpload, getMedia, startUpload, UploadError, uploadStatus } from '../media/uploads.js';
 import { isReferenced, ownMediaPaths, pruneMedia } from '../media/prune.js';
@@ -176,12 +177,37 @@ export function createApp(deps: AppDeps) {
 
   router.get('/api/admin/users', async (ctx) => {
     await requireAdmin(ctx);
-    const { rows } = await db.query<User & { podcasts: number }>(
+    const { rows } = await db.query<User & { podcasts: number; shows: { id: string; title: string; role: string }[] | null }>(
       `SELECT u.id, u.email, u.display_name, u.is_admin, u.created_at,
-              (SELECT count(*)::int FROM podcasts p WHERE p.owner_id = u.id) AS podcasts
+              (SELECT count(*)::int FROM podcasts p WHERE p.owner_id = u.id) AS podcasts,
+              (SELECT json_agg(json_build_object('id', s.id, 'title', s.title, 'role', s.role) ORDER BY s.role = 'owner' DESC, s.title)
+                 FROM (SELECT p.id, p.title, 'owner' AS role FROM podcasts p WHERE p.owner_id = u.id
+                       UNION ALL
+                       SELECT p.id, p.title, m.role FROM podcast_members m JOIN podcasts p ON p.id = m.podcast_id WHERE m.user_id = u.id) s) AS shows
          FROM users u ORDER BY u.created_at`,
     );
-    sendJson(ctx.res, 200, { users: rows.map((u) => ({ ...userJson(u), podcasts: u.podcasts, createdAt: u.created_at })) });
+    sendJson(ctx.res, 200, {
+      users: rows.map((u) => ({ ...userJson(u), podcasts: u.podcasts, shows: u.shows ?? [], createdAt: u.created_at })),
+    });
+  });
+
+  router.patch('/api/admin/users/:userId', async (ctx) => {
+    const admin = await requireAdmin(ctx);
+    const body = await readJson(ctx.req);
+    await db.tx((q) => setAdmin(q, admin.id, ctx.params.userId!, body.isAdmin));
+    sendJson(ctx.res, 204, undefined);
+  });
+
+  /** {shows: "transfer", transferTo: userId} or {shows: "delete"} when the account owns shows. */
+  router.delete('/api/admin/users/:userId', async (ctx) => {
+    const admin = await requireAdmin(ctx);
+    const body = await readJson(ctx.req);
+    const target = ctx.params.userId!;
+    const owned = isUuid(target) ? (await db.query<{ id: string }>(`SELECT id FROM podcasts WHERE owner_id = $1`, [target])).rows.map((r) => r.id) : [];
+    const where = await remoteProviders(owned);
+    const r = await db.tx((q) => deleteUser(q, config, admin.id, target, body));
+    for (const show of r.deletedShows) await removeShowFiles(show.slug, where(show.id));
+    sendJson(ctx.res, 200, { deletedShows: r.deletedShows.length, transferred: r.transferred });
   });
 
   /** Public: lets the sign-in page know whether to offer "create the first account". */
@@ -290,26 +316,64 @@ export function createApp(deps: AppDeps) {
     sendJson(ctx.res, 200, { result, podcast: await podcastDetail(podcastId, role) });
   });
 
+  /** Remove a deleted show's copied media wherever it lives. */
+  async function removeShowFiles(slug: string, providers: string[]) {
+    if (!/^[a-z0-9-]+$/.test(slug)) return; // validated on creation; check again anyway
+    const dir = path.resolve(config.mediaDir, slug);
+    if (path.dirname(dir) === path.resolve(config.mediaDir)) await rm(dir, { recursive: true, force: true });
+    for (const provider of providers) {
+      try {
+        await storeFor(config, provider).deletePrefix(`${slug}/`);
+      } catch (e) {
+        deps.log?.(`couldn't delete ${slug}/ from ${provider}: ${(e as Error).message}`);
+      }
+    }
+  }
+  const remoteProviders = async (podcastIds: string[]) => {
+    const { rows } = await db.query<{ podcast_id: string; storage_provider: string }>(
+      `SELECT DISTINCT podcast_id, storage_provider FROM media_files
+        WHERE podcast_id IN (SELECT jsonb_array_elements_text($1::jsonb)::uuid) AND storage_provider <> 'local'`,
+      [JSON.stringify(podcastIds)],
+    );
+    return (id: string) => rows.filter((r) => r.podcast_id === id).map((r) => r.storage_provider);
+  };
+
   router.delete('/api/podcasts/:id', async (ctx) => {
     const { podcastId } = await requirePodcast(ctx, 'owner');
     const p = (await getPodcastRow(db, podcastId))!;
-    const { rows: where } = await db.query<{ storage_provider: string }>(
-      `SELECT DISTINCT storage_provider FROM media_files WHERE podcast_id = $1 AND storage_provider <> 'local'`,
-      [podcastId],
-    );
+    const where = await remoteProviders([podcastId]);
     await db.query(`DELETE FROM podcasts WHERE id = $1`, [podcastId]);
-    // Remove copied media wherever it lives. The slug is validated on creation; check again anyway.
-    if (/^[a-z0-9-]+$/.test(p.slug)) {
-      const dir = path.resolve(config.mediaDir, p.slug);
-      if (path.dirname(dir) === path.resolve(config.mediaDir)) await rm(dir, { recursive: true, force: true });
-      for (const w of where) {
-        try {
-          await storeFor(config, w.storage_provider).deletePrefix(`${p.slug}/`);
-        } catch (e) {
-          deps.log?.(`couldn't delete ${p.slug}/ from ${w.storage_provider}: ${(e as Error).message}`);
-        }
-      }
-    }
+    await removeShowFiles(p.slug, where(podcastId));
+    sendJson(ctx.res, 204, undefined);
+  });
+
+  // ───────────── team (who can work on a show) ─────────────
+
+  router.get('/api/podcasts/:id/team', async (ctx) => {
+    const { podcastId, user } = await requirePodcast(ctx, 'viewer');
+    sendJson(ctx.res, 200, { team: await listTeam(db, podcastId), me: user.id });
+  });
+
+  router.post('/api/podcasts/:id/team', async (ctx) => {
+    const { podcastId, user } = await requirePodcast(ctx, 'owner');
+    const body = await readJson(ctx.req);
+    await db.tx((q) => addMember(q, podcastId, body.email, body.role));
+    sendJson(ctx.res, 201, { team: await listTeam(db, podcastId), me: user.id });
+  });
+
+  /** {role: "editor" | "viewer" | "owner"}. "owner" hands the show over. */
+  router.patch('/api/podcasts/:id/team/:userId', async (ctx) => {
+    const { podcastId, user } = await requirePodcast(ctx, 'owner');
+    const body = await readJson(ctx.req);
+    await db.tx((q) => setRole(q, podcastId, ctx.params.userId!, body.role));
+    sendJson(ctx.res, 200, { team: await listTeam(db, podcastId), me: user.id });
+  });
+
+  /** The owner removes someone, or a member leaves. */
+  router.delete('/api/podcasts/:id/team/:userId', async (ctx) => {
+    const { podcastId, user, role } = await requirePodcast(ctx, 'viewer');
+    if (role !== 'owner' && ctx.params.userId !== user.id) throw new HttpError(403, 'Only the owner can remove people');
+    await db.tx((q) => removeMember(q, podcastId, ctx.params.userId!));
     sendJson(ctx.res, 204, undefined);
   });
 
@@ -861,7 +925,7 @@ export function createApp(deps: AppDeps) {
         return;
       }
       if (e instanceof HttpError) return sendJson(res, e.status, { error: e.message }, e.headers);
-      if (e instanceof AuthError || e instanceof LiveError || e instanceof VerifyError || e instanceof PublishError) return sendJson(res, e.status, { error: e.message });
+      if (e instanceof AuthError || e instanceof LiveError || e instanceof VerifyError || e instanceof PublishError || e instanceof TeamError) return sendJson(res, e.status, { error: e.message });
       if (e instanceof UploadError) return sendJson(res, e.status, { error: e.message, ...e.extra });
       if (e instanceof ImportError || e instanceof PrefixError || e instanceof SettingsError || e instanceof StorageConfigError || e instanceof MoveError) {
         return sendJson(res, 400, { error: e.message });

@@ -10,7 +10,7 @@ Clone it and run your own: the site's name, logo, favicon and web address are al
 - [x] Stats prefixes (OP3, Podtrac, Podscribe, Magellan AI, Blubrry, custom), with detection on import
 - [x] PostgreSQL schema
 - [x] Import worker (media download and URL rewrite, resumable, SSRF-guarded)
-- [x] Accounts, sessions and per-user access (owner, editor and viewer roles)
+- [x] Accounts, sessions and per-user access: show teams (owner, editors, viewers, ownership hand-over), admin account management and deletion
 - [x] JSON API and public feed endpoint
 - [x] Podping (per-show switch, off after import): scheduled episodes going live and stats prefix changes
 - [x] Live show (`podcast:liveItem`) management: pending → live → ended, with live and liveEnd Podpings

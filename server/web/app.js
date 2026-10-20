@@ -633,6 +633,7 @@ const TABS = [
   ['prefixes', 'Stats prefixes'],
   ['podping', 'Podping'],
   ['live', 'Live'],
+  ['team', 'Team'],
   ['settings', 'Settings'],
 ];
 
@@ -642,7 +643,7 @@ async function viewShow(id, tab, sub) {
   const body = h('div');
   const reload = () => render();
 
-  const views = { overview: tabOverview, episodes: tabEpisodes, details: tabDetails, prefixes: tabPrefixes, podping: tabPodping, live: tabLive, settings: tabSettings };
+  const views = { overview: tabOverview, episodes: tabEpisodes, details: tabDetails, prefixes: tabPrefixes, podping: tabPodping, live: tabLive, team: tabTeam, settings: tabSettings };
   if (tab === 'episodes' && sub) body.append(await viewEpisode(p, canEdit, sub));
   else body.append(await (views[tab] ?? tabOverview)(p, canEdit, reload));
 
@@ -2068,6 +2069,121 @@ async function tabLive(p, canEdit, reload) {
   return wrap;
 }
 
+// ───────────── team ─────────────
+
+const ROLE_HELP = [
+  ['Owner', 'Everything, including the team, the feed address and deleting the show. One per show.'],
+  ['Editor', 'Episodes, show details, stats prefixes, Podping and live shows.'],
+  ['Viewer', 'Can look at everything, can’t change anything.'],
+];
+
+async function tabTeam(p, canEdit, reload) {
+  const { team, me } = await api('GET', `/api/podcasts/${p.id}/team`);
+  const isOwner = p.role === 'owner';
+  const err = formError();
+  const act = async (fn, msg) => {
+    err.hidden = true;
+    try {
+      await fn();
+      if (msg) toast(msg);
+      await refreshPodcasts();
+      reload();
+    } catch (e) {
+      showError(err, e);
+    }
+  };
+
+  const rows = team.map((m) => {
+    const who = h('div', null, h('b', null, m.displayName || m.email), m.userId === me ? h('span', { class: 'hint' }, ' (you)') : null,
+      m.displayName ? h('div', { class: 'hint' }, m.email) : null);
+    let roleCell;
+    const actions = [];
+    if (m.role === 'owner') roleCell = h('span', { class: 'pill' }, 'Owner');
+    else if (isOwner) {
+      const sel = h('select', { 'aria-label': `Role for ${m.email}` }, h('option', { value: 'editor' }, 'Editor'), h('option', { value: 'viewer' }, 'Viewer'));
+      sel.value = m.role;
+      sel.addEventListener('change', () => act(() => api('PATCH', `/api/podcasts/${p.id}/team/${m.userId}`, { role: sel.value }), 'Role changed'));
+      roleCell = sel;
+      actions.push(h('button', {
+        type: 'button',
+        class: 'quiet',
+        onclick: () => {
+          if (!confirm(`Make ${m.displayName || m.email} the owner of “${p.title}”? You’ll stay on the team as an editor.`)) return;
+          act(() => api('PATCH', `/api/podcasts/${p.id}/team/${m.userId}`, { role: 'owner' }), 'Ownership handed over');
+        },
+      }, 'Make owner'));
+      actions.push(h('button', {
+        type: 'button',
+        class: 'quiet danger',
+        onclick: () => confirm(`Remove ${m.displayName || m.email} from “${p.title}”?`) &&
+          act(() => api('DELETE', `/api/podcasts/${p.id}/team/${m.userId}`), 'Removed from the team'),
+      }, 'Remove'));
+    } else {
+      roleCell = h('span', { class: 'pill' }, m.role === 'editor' ? 'Editor' : 'Viewer');
+      if (m.userId === me) {
+        actions.push(h('button', {
+          type: 'button',
+          class: 'quiet danger',
+          onclick: async () => {
+            if (!confirm(`Leave “${p.title}”? You’ll lose access until the owner adds you again.`)) return;
+            try {
+              await api('DELETE', `/api/podcasts/${p.id}/team/${me}`);
+              await refreshPodcasts();
+              toast('You left the show');
+              go('#/');
+            } catch (e) {
+              showError(err, e);
+            }
+          },
+        }, 'Leave this show'));
+      }
+    }
+    return h('tr', null, h('td', null, who), h('td', null, roleCell), h('td', { class: 'team-actions' }, actions));
+  });
+
+  const parts = [h('section', { class: 'panel' },
+    h('h2', null, 'Team'),
+    h('p', { class: 'muted' }, isOwner ? 'Everyone here can open this show in their own dashboard.' : 'Everyone who can open this show. Only the owner can change the team.'),
+    h('div', { class: 'table-wrap' }, h('table', { class: 'team' },
+      h('thead', null, h('tr', null, h('th', null, 'Person'), h('th', null, 'Role'), h('th', null, ''))),
+      h('tbody', null, rows))),
+    err)];
+
+  if (isOwner) {
+    const addErr = formError();
+    const email = h('input', { type: 'email', required: true, placeholder: 'name@example.com' });
+    const role = h('select', null, h('option', { value: 'editor' }, 'Editor'), h('option', { value: 'viewer' }, 'Viewer'));
+    const form = h('form', {
+      class: 'panel',
+      onsubmit: (ev) => {
+        ev.preventDefault();
+        addErr.hidden = true;
+        busy(form, async () => {
+          try {
+            await api('POST', `/api/podcasts/${p.id}/team`, { email: email.value, role: role.value });
+            toast('Added to the team');
+            reload();
+          } catch (e) {
+            showError(addErr, e);
+          }
+        });
+      },
+    },
+    h('h2', null, 'Add someone'),
+    h('p', { class: 'muted' }, state.me.isAdmin
+      ? 'They need an account on this site. Create one on the People page if they don’t have one yet.'
+      : 'They need an account on this site. If they don’t have one, ask the site administrator to create it.'),
+    h('div', { class: 'row' }, h('div', { class: 'field', style: 'flex:3 1 260px' }, h('label', { for: 'team-email' }, 'Their email'), (email.id = 'team-email', email)), field('Role', role),
+      h('div', { class: 'field', style: 'flex:0 0 auto' }, h('button', { class: 'primary', type: 'submit' }, 'Add'))),
+    addErr);
+    parts.push(form);
+  }
+
+  parts.push(h('section', { class: 'panel' }, h('h2', null, 'What each role can do'),
+    h('dl', { class: 'facts', style: 'margin-top:12px' }, ROLE_HELP.map(([r, d]) => [h('dt', null, r), h('dd', null, d)]))));
+  return h('div', null, parts);
+}
+
 async function tabSettings(p) {
   const err = formError();
   const confirmInput = h('input', { type: 'text', autocomplete: 'off', 'aria-label': `Type ${p.slug} to confirm` });
@@ -2159,22 +2275,92 @@ async function viewPeople() {
     },
   },
   h('h2', null, 'Add a podcaster'),
-  h('p', { class: 'muted' }, 'They sign in with this email and the starting password, then can change it under Account. They only see their own shows.'),
+  h('p', { class: 'muted' }, 'They sign in with this email and the starting password, then can change it under Account. They see their own shows and any show they’re added to.'),
   h('div', { class: 'row' }, field('Email', email), field('Name (optional)', name)),
   field('Starting password', pw, 'At least 10 characters. Share it with them privately.'),
   h('div', { class: 'field' }, h('label', { class: 'check' }, admin, h('span', null, 'Make them an administrator too'))),
   err,
   h('div', { class: 'actions' }, h('button', { class: 'primary', type: 'submit' }, 'Create account')));
 
+  const deleteSlot = h('div');
+  function openDelete(u) {
+    const owned = u.shows.filter((x) => x.role === 'owner');
+    const others = users.filter((x) => x.id !== u.id);
+    const dErr = formError();
+    let mode = owned.length ? 'transfer' : 'none';
+    const to = h('select', null, others.map((x) => h('option', { value: x.id }, x.displayName ? `${x.displayName} (${x.email})` : x.email)));
+    to.value = state.me.id;
+    const confirmBox = h('input', { type: 'text', autocomplete: 'off', placeholder: 'delete' });
+    const choice = (value, labelText, extra) => {
+      const r = h('input', { type: 'radio', name: 'del-mode', checked: mode === value });
+      r.addEventListener('change', () => { mode = value; });
+      return h('label', { class: 'choice' }, r, h('span', null, labelText, extra));
+    };
+    const del = h('button', { type: 'button', class: 'danger solid' }, `Delete ${u.displayName || u.email}`);
+    del.addEventListener('click', async () => {
+      dErr.hidden = true;
+      if (mode === 'delete' && confirmBox.value.trim().toLowerCase() !== 'delete') return showError(dErr, 'Type delete to confirm deleting their shows.');
+      del.disabled = true;
+      try {
+        const body = mode === 'transfer' ? { shows: 'transfer', transferTo: to.value } : mode === 'delete' ? { shows: 'delete' } : {};
+        const r = await api('DELETE', `/api/admin/users/${u.id}`, body);
+        toast(r.transferred ? `Account deleted; ${r.transferred} show${r.transferred === 1 ? '' : 's'} handed over` : r.deletedShows ? 'Account and shows deleted' : 'Account deleted');
+        await refreshPodcasts();
+        render();
+      } catch (e) {
+        showError(dErr, e);
+        del.disabled = false;
+      }
+    });
+    deleteSlot.replaceChildren(h('section', { class: 'panel danger-panel' },
+      h('h2', null, `Delete ${u.displayName || u.email}?`),
+      h('p', { class: 'muted' }, 'They won’t be able to sign in, and they’re removed from every show’s team. This can’t be undone.'),
+      owned.length ? [
+        h('p', null, `They own ${owned.length === 1 ? 'one show' : `${owned.length} shows`}: ${owned.map((x) => x.title).join(', ')}.`),
+        h('div', { class: 'choices' },
+          choice('transfer', 'Give their shows to someone else', h('small', null, 'Episodes, media and feed addresses stay exactly as they are. ', to)),
+          choice('delete', 'Delete their shows too', h('small', null, 'Removes the feeds, every episode and all media. Type delete to confirm: ', confirmBox))),
+      ] : null,
+      dErr,
+      h('div', { class: 'actions' }, del, h('button', { type: 'button', onclick: () => deleteSlot.replaceChildren() }, 'Cancel'))));
+    deleteSlot.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+  }
+
+  const roleLabel = { owner: 'Owner', editor: 'Editor', viewer: 'Viewer' };
   return h('div', { class: 'page' },
     h('div', { class: 'page-head' }, h('h1', null, 'People')),
-    h('section', { class: 'panel', style: 'padding:0' }, h('div', { class: 'table-wrap' }, h('table', null,
-      h('thead', null, h('tr', null, h('th', null, 'Name'), h('th', null, 'Email'), h('th', { class: 'num' }, 'Shows'), h('th', null, 'Joined'))),
-      h('tbody', null, users.map((u) => h('tr', null,
-        h('td', null, u.displayName || '—', u.isAdmin ? h('span', { class: 'hint' }, ' (admin)') : null),
-        h('td', null, u.email),
-        h('td', { class: 'num' }, u.podcasts),
-        h('td', { class: 'nowrap' }, fmtDate(u.createdAt)))))))),
+    h('section', { class: 'panel', style: 'padding:0' }, h('div', { class: 'table-wrap' }, h('table', { class: 'people-table' },
+      h('thead', null, h('tr', null, h('th', null, 'Name'), h('th', null, 'Shows'), h('th', null, 'Joined'), h('th', null, ''))),
+      h('tbody', null, users.map((u) => {
+        const self = u.id === state.me.id;
+        const adminBtn = h('button', {
+          type: 'button',
+          class: 'quiet',
+          disabled: self && u.isAdmin,
+          title: self ? 'You can’t remove your own administrator access' : null,
+          onclick: async () => {
+            if (u.isAdmin && !confirm(`Remove administrator access from ${u.displayName || u.email}?`)) return;
+            try {
+              await api('PATCH', `/api/admin/users/${u.id}`, { isAdmin: !u.isAdmin });
+              toast(u.isAdmin ? 'No longer an administrator' : 'Now an administrator');
+              render();
+            } catch (e) {
+              toast(e.message);
+            }
+          },
+        }, u.isAdmin ? 'Remove admin' : 'Make admin');
+        return h('tr', null,
+          h('td', null, h('b', null, u.displayName || u.email), u.isAdmin ? h('span', { class: 'pill', style: 'margin-left:6px' }, 'Admin') : null,
+            self ? h('span', { class: 'hint' }, ' (you)') : null, u.displayName ? h('div', { class: 'hint' }, u.email) : null),
+          h('td', null, u.shows.length
+            ? h('ul', { class: 'show-roles' }, u.shows.map((x) => h('li', null, x.title, h('span', { class: 'hint' }, ` · ${roleLabel[x.role]}`))))
+            : h('span', { class: 'hint' }, 'None')),
+          h('td', { class: 'nowrap' }, fmtDate(u.createdAt)),
+          h('td', { class: 'team-actions' }, adminBtn,
+            self ? null : h('button', { type: 'button', class: 'quiet danger', onclick: () => openDelete(u) }, 'Delete')));
+      }))))),
+    deleteSlot,
+    h('p', { class: 'hint', style: 'margin:-8px 0 24px' }, 'To let someone work on a show, add them on that show’s Team tab.'),
     form);
 }
 
