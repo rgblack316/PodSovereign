@@ -7,7 +7,7 @@ import type { Db } from '../src/db/db.js';
 import { buildFeed } from '../src/feed/builder.js';
 import { parseFeed } from '../src/feed/parser.js';
 import { claimNextJob, enqueueImport, runImportJob } from '../src/import/importer.js';
-import { announceDueEpisodes, queuePing, sendDuePings, setShowPodping } from '../src/podping/podping.js';
+import { announceDueEpisodes, latestPings, queuePing, sendDuePings, setShowPodping, trimHistory } from '../src/podping/podping.js';
 import { createUser, FIXTURE, fixtureOn, setupDb, startOldHost, tempDir, testConfig } from './support/env.js';
 
 let db: Db;
@@ -174,6 +174,23 @@ test('a refusal from the hub is logged and retried', async () => {
     hub.close();
     await db.query(`DELETE FROM podping_queue`);
   }
+});
+
+test('each show keeps only its 5 most recent notifications; waiting ones are never trimmed', async () => {
+  await db.query(`DELETE FROM podping_queue`);
+  for (let i = 0; i < 8; i++) {
+    await db.query(
+      `INSERT INTO podping_queue (podcast_id, feed_url, reason, status, created_at, sent_at)
+       VALUES ($1, 'https://x/feed.xml', 'update', 'sent', now() - make_interval(mins => $2), now())`,
+      [podcastId, 60 - i],
+    );
+  }
+  await db.query(`INSERT INTO podping_queue (podcast_id, feed_url, reason, status) VALUES ($1, 'https://x/feed.xml', 'update', 'pending')`, [podcastId]);
+  await trimHistory(db);
+  const { rows } = await db.query<{ status: string; n: number }>(`SELECT status, count(*)::int AS n FROM podping_queue GROUP BY status ORDER BY status`);
+  assert.deepEqual(rows, [{ status: 'pending', n: 1 }, { status: 'sent', n: 5 }]);
+  assert.equal((await latestPings(db, podcastId)).length, 5);
+  await db.query(`DELETE FROM podping_queue`);
 });
 
 test('feeds advertise <podcast:podping> only when this server sends pings', () => {

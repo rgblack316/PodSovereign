@@ -536,6 +536,8 @@ table.team select { width: auto; min-width: 120px; padding: 6px 8px; font-size: 
 .pager .pages { display: flex; gap: var(--s1); align-items: center; flex-wrap: wrap; }
 .pager .gap { color: var(--ink-3); padding: 0 2px; }
 
+.table-title { font-size: var(--t-base); padding: var(--s4) var(--s4) var(--s1); }
+
 /* ───────── Small screens ───────── */
 
 @media (max-width: 860px) {

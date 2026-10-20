@@ -17,6 +17,8 @@ import { feedPath } from '../urls.js';
 export type PingReason = 'update' | 'live' | 'liveEnd';
 
 const MAX_ATTEMPTS = 6;
+/** How many finished notifications each show keeps (shown on its Podping tab). */
+export const HISTORY_KEEP = 5;
 
 /**
  * Queue a notification for a podcast. No-op when the show's Podping switch is
@@ -114,7 +116,20 @@ export async function sendDuePings(
       failed++;
     }
   }
+  await trimHistory(db);
   return { sent, failed };
+}
+
+/** Keep only the most recent finished notifications per show; ones still waiting are never removed. */
+export async function trimHistory(q: Queryable): Promise<void> {
+  await q.query(
+    `DELETE FROM podping_queue WHERE id IN (
+       SELECT id FROM (
+         SELECT id, row_number() OVER (PARTITION BY podcast_id ORDER BY created_at DESC) AS n
+           FROM podping_queue WHERE status <> 'pending') old
+        WHERE n > $1)`,
+    [HISTORY_KEEP],
+  );
 }
 
 /** Turn a show's Podping switch on or off. Turning it on announces the feed once. */
@@ -135,8 +150,8 @@ export async function setShowPodping(q: Queryable, config: Config, podcastId: st
 export async function latestPings(q: Queryable, podcastId: string) {
   const { rows } = await q.query(
     `SELECT reason, status, attempts, last_error AS "lastError", created_at AS "createdAt", sent_at AS "sentAt"
-       FROM podping_queue WHERE podcast_id = $1 ORDER BY created_at DESC LIMIT 10`,
-    [podcastId],
+       FROM podping_queue WHERE podcast_id = $1 ORDER BY created_at DESC LIMIT $2`,
+    [podcastId, HISTORY_KEEP],
   );
   return rows;
 }

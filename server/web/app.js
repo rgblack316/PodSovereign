@@ -1992,8 +1992,9 @@ async function tabPodping(p, canEdit, reload) {
       h('p', { class: 'muted' }, 'Podping tells podcast apps the moment your feed changes, so new episodes show up in minutes instead of hours. It goes through Podcast Index; there’s nothing to set up.'),
       h('label', { class: 'switch' }, toggle, st.enabled ? 'Podping is on for this show' : 'Podping is off for this show'),
       h('p', { class: 'hint', style: 'margin-top:12px' }, 'Imported shows start with Podping off. Turn it on after your old host redirects to this feed; turning it on announces the feed once.')),
-    st.pings.length ? h('section', { class: 'panel', style: 'padding:0' }, h('div', { class: 'table-wrap' }, h('table', null,
-      h('thead', null, h('tr', null, h('th', null, 'Ping'), h('th', null, 'Result'), h('th', null, 'When'))),
+    st.pings.length ? h('section', { class: 'panel', style: 'padding:0' },
+      h('h3', { class: 'table-title' }, 'Recent notifications'), h('div', { class: 'table-wrap' }, h('table', null,
+      h('thead', null, h('tr', null, h('th', null, 'Change'), h('th', null, 'Result'), h('th', null, 'When'))),
       h('tbody', null, st.pings.map((x) => h('tr', null,
         h('td', null, reasons[x.reason] ?? x.reason),
         h('td', null, x.status === 'sent' ? h('span', { class: 'light on' }, 'Sent')
