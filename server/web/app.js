@@ -884,38 +884,118 @@ function episodeState(e) {
   return null;
 }
 
+const PAGE_SIZES = [10, 25, 50, 0]; // 0 = all
+const pageMemory = {}; // podcastId → page, so returning from the editor lands on the same page
+
+function savedPageSize() {
+  try {
+    const v = localStorage.getItem('fh.episodesPerPage');
+    if (v !== null && PAGE_SIZES.includes(Number(v))) return Number(v);
+  } catch { /* storage unavailable: use the default */ }
+  return 10;
+}
+function savePageSize(n) {
+  try { localStorage.setItem('fh.episodesPerPage', String(n)); } catch { /* ignore */ }
+}
+
+/** Page numbers to show: first, last, and two either side of the current one, with gaps as null. */
+function pageList(current, total) {
+  const keep = new Set([1, total, current - 2, current - 1, current, current + 1, current + 2].filter((n) => n >= 1 && n <= total));
+  const out = [];
+  let last = 0;
+  for (const n of [...keep].sort((a, b) => a - b)) {
+    if (n - last > 1) out.push(null);
+    out.push(n);
+    last = n;
+  }
+  return out;
+}
+
+function episodeRow(p, e) {
+  return h('tr', null,
+    h('td', null,
+      h('a', { class: 'ep-title', href: `#/show/${p.id}/episodes/${e.id}` }, e.title || 'Untitled'),
+      ' ', episodeState(e),
+      h('div', { class: 'hint' }, [
+        e.itunes_season ? `Season ${e.itunes_season}` : null,
+        e.itunes_episode ? `Episode ${e.itunes_episode}` : null,
+        e.itunes_episode_type && e.itunes_episode_type !== 'full' ? e.itunes_episode_type[0].toUpperCase() + e.itunes_episode_type.slice(1) : null,
+        e.hasTranscript ? 'Transcript' : null,
+        e.hasChapters ? 'Chapters' : null,
+        !e.enclosure_url ? 'No audio yet' : null,
+      ].filter(Boolean).join(' · '))),
+    h('td', { class: 'nowrap' }, e.status === 'draft' ? '—' : fmtDate(e.pub_date)),
+    h('td', { class: 'num' }, fmtDuration(e.itunes_duration)),
+    h('td', { class: 'num nowrap' }, e.enclosure_length ? fmtBytes(Number(e.enclosure_length)) : '—'));
+}
+
 async function tabEpisodes(p, canEdit) {
   const { episodes } = await api('GET', `/api/podcasts/${p.id}/episodes`);
-  const head = h('div', { class: 'section-head' },
-    h('p', { class: 'muted' }, episodes.length
-      ? `${episodes.length} episode${episodes.length === 1 ? '' : 's'}. Drafts and scheduled episodes aren’t in the feed yet.`
-      : 'No episodes yet.'),
-    canEdit ? h('a', { class: 'btn primary', href: `#/show/${p.id}/episodes/new` }, 'New episode') : null);
+  const newBtn = canEdit ? h('a', { class: 'btn primary', href: `#/show/${p.id}/episodes/new` }, 'New episode') : null;
   if (!episodes.length) {
-    return h('div', null, head, h('div', { class: 'panel' },
-      h('h2', null, 'Publish your first episode'),
-      h('p', { class: 'muted' }, 'Upload the audio, give it a title and description, and publish it now or schedule it for later.'),
-      canEdit ? h('a', { class: 'btn primary', href: `#/show/${p.id}/episodes/new` }, 'New episode') : null));
+    return h('div', null,
+      h('div', { class: 'section-head' }, h('p', { class: 'muted' }, 'No episodes yet.'), newBtn),
+      h('div', { class: 'panel' },
+        h('h2', null, 'Publish your first episode'),
+        h('p', { class: 'muted' }, 'Upload the audio, give it a title and description, and publish it now or schedule it for later.'),
+        canEdit ? h('a', { class: 'btn primary', href: `#/show/${p.id}/episodes/new` }, 'New episode') : null));
   }
-  return h('div', null, head, h('div', { class: 'panel', style: 'padding:0' }, h('div', { class: 'table-wrap' }, h('table', { class: 'episodes' },
+
+  let size = savedPageSize();
+  let page = pageMemory[p.id] ?? 1;
+  const tbody = h('tbody');
+  const count = h('p', { class: 'muted', 'aria-live': 'polite' });
+  const sizes = h('div', { class: 'page-sizes', role: 'group', 'aria-label': 'Episodes per page' });
+  const pager = h('nav', { class: 'pager', 'aria-label': 'Episode pages' });
+  const table = h('table', { class: 'episodes' },
     h('thead', null, h('tr', null,
-      h('th', null, 'Episode'), h('th', null, 'Published'), h('th', { class: 'num' }, 'Length'),
-      h('th', { class: 'num' }, 'Size'))),
-    h('tbody', null, episodes.map((e) => h('tr', null,
-      h('td', null,
-        h('a', { class: 'ep-title', href: `#/show/${p.id}/episodes/${e.id}` }, e.title || 'Untitled'),
-        ' ', episodeState(e),
-        h('div', { class: 'hint' }, [
-          e.itunes_season ? `Season ${e.itunes_season}` : null,
-          e.itunes_episode ? `Episode ${e.itunes_episode}` : null,
-          e.itunes_episode_type && e.itunes_episode_type !== 'full' ? e.itunes_episode_type[0].toUpperCase() + e.itunes_episode_type.slice(1) : null,
-          e.hasTranscript ? 'Transcript' : null,
-          e.hasChapters ? 'Chapters' : null,
-          !e.enclosure_url ? 'No audio yet' : null,
-        ].filter(Boolean).join(' · '))),
-      h('td', { class: 'nowrap' }, e.status === 'draft' ? '—' : fmtDate(e.pub_date)),
-      h('td', { class: 'num' }, fmtDuration(e.itunes_duration)),
-      h('td', { class: 'num nowrap' }, e.enclosure_length ? fmtBytes(Number(e.enclosure_length)) : '—'))))))));
+      h('th', null, 'Episode'), h('th', null, 'Published'), h('th', { class: 'num' }, 'Length'), h('th', { class: 'num' }, 'Size'))),
+    tbody);
+
+  function draw(scroll) {
+    const pages = size ? Math.max(1, Math.ceil(episodes.length / size)) : 1;
+    page = Math.min(Math.max(1, page), pages);
+    pageMemory[p.id] = page;
+    const from = size ? (page - 1) * size : 0;
+    const shown = size ? episodes.slice(from, from + size) : episodes;
+    tbody.replaceChildren(...shown.map((e) => episodeRow(p, e)));
+
+    const n = episodes.length;
+    count.textContent = (size && n > size ? `Showing ${from + 1}–${from + shown.length} of ${n} episodes.` : `${n} episode${n === 1 ? '' : 's'}.`) +
+      ' Drafts and scheduled episodes aren’t in the feed yet.';
+
+    sizes.replaceChildren(h('span', { class: 'hint' }, 'Per page'), ...PAGE_SIZES.map((sz) => h('button', {
+      type: 'button',
+      'aria-pressed': String(sz === size),
+      onclick: () => {
+        // Keep the first episode on screen in view when the page size changes.
+        size = sz;
+        page = sz ? Math.floor(from / sz) + 1 : 1;
+        savePageSize(sz);
+        draw();
+      },
+    }, sz ? String(sz) : 'All')));
+
+    const goTo = (n2) => {
+      page = n2;
+      draw(true);
+    };
+    pager.hidden = pages <= 1;
+    pager.replaceChildren(
+      h('button', { type: 'button', disabled: page === 1, onclick: () => goTo(page - 1) }, '‹ Previous'),
+      h('div', { class: 'pages' }, pageList(page, pages).map((n2) => n2 === null
+        ? h('span', { class: 'gap', 'aria-hidden': 'true' }, '…')
+        : h('button', { type: 'button', 'aria-current': n2 === page ? 'page' : null, 'aria-label': `Page ${n2}`, onclick: () => goTo(n2) }, String(n2)))),
+      h('button', { type: 'button', disabled: page === pages, onclick: () => goTo(page + 1) }, 'Next ›'));
+    if (scroll) table.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  }
+  draw();
+
+  return h('div', null,
+    h('div', { class: 'section-head' }, count, newBtn),
+    h('div', { class: 'list-tools' }, sizes),
+    h('div', { class: 'panel', style: 'padding:0' }, h('div', { class: 'table-wrap' }, table)),
+    pager);
 }
 
 // ───────────── people (<podcast:person>) ─────────────
