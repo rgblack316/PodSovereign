@@ -62,8 +62,19 @@ It shows what's new, backs up the database to `backups/` (the last 10 are kept),
 | Restart | `sudo docker compose restart app` |
 | Stop / start | `sudo docker compose down` / `sudo docker compose up -d` |
 | Status | `sudo docker compose ps` |
+| Reset a forgotten password | `sudo docker compose exec app node --import tsx src/cli/reset-password.ts [email]` |
 
 The app listens only on `127.0.0.1` (port 8080 by default). A Cloudflare Tunnel (run by Docker when you give a token, or installed separately) or any reverse proxy on the same machine makes it public.
+
+## Forgot a password
+
+Passwords are stored as one-way hashes, so they can't be looked up, only replaced. On the server:
+
+```bash
+cd /opt/feedhost && sudo docker compose exec app node --import tsx src/cli/reset-password.ts
+```
+
+With no email it resets the only admin account (with more than one, it lists the accounts so you can name one). It prints a new random password and signs that account out everywhere. Sign in with it, then choose your own under **Account**.
 
 ## URLs
 
