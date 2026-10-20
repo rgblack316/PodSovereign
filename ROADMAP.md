@@ -13,7 +13,7 @@ Background: Cloudflare's terms restrict serving video, or a disproportionate amo
 
 Done:
 - [x] Create, edit and delete live items: title, times, stream URL, image, content links
-- [x] Status changes pending → live → ended, with Podping `live` and `liveEnd`
+- [x] Status changes pending → live → ended, each announced through Podping (Podcast Index hub)
 
 Possible next steps:
 - [ ] Go live and end automatically at the scheduled times (optional, per live item)
@@ -31,7 +31,7 @@ FeedHost doesn't stream today. Live items point at an outside stream (Icecast, Y
 
 ## Other open items
 - [ ] Self-host the dashboard font instead of loading it from Google Fonts
-- [ ] Encrypt saved provider secrets and the Podping key at rest (today they're stored in the database as-is)
+- [ ] Encrypt saved secrets at rest: storage provider keys, SMTP password, Resend key (today they're stored in the database as-is)
 - [ ] Storage quotas per account or per podcast, with a usage display
 - [ ] Structured editors for more Podcasting 2.0 tags (today they round-trip and are editable as XML under *Other tags*):
   - [ ] `podcast:value` / `valueRecipient`: Lightning splits at show and episode level (lnaddress and keysend, splits, fees, customKey/customValue), plus `valueTimeSplit` for guests
