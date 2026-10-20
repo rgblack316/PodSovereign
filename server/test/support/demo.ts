@@ -38,8 +38,7 @@ const config = testConfig({
   publicBaseUrl: `http://127.0.0.1:${port}`,
   mediaBaseUrl: `http://127.0.0.1:${port}`,
   allowRegistration: false,
-  podpingToken: process.env.DEMO_NO_PODPING ? null : 'demo',
-  podpingUrl: 'http://127.0.0.1:1/',
+  podpingHubUrl: 'http://127.0.0.1:1/pubnotify',
 });
 
 const { rows } = await db.query<{ id: string }>(
@@ -71,7 +70,7 @@ const night = ids.find((r) => r.slug === 'night-shift')!.id;
 
 // Creekside: fully moved. Night Shift: mid-move, on air.
 await db.query(`UPDATE podcasts SET redirect_status = 'ok', redirect_detail = 'The old feed permanently redirects here.', redirect_checked_at = now() WHERE id = $1`, [creek]);
-if (config.podpingToken) await setShowPodping(db, config, creek, true);
+await setShowPodping(db, config, creek, true);
 await db.query(`DELETE FROM podping_queue`);
 const li = await createLiveItem(db, night, {
   title: 'Friday request line',

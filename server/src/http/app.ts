@@ -25,7 +25,7 @@ import { enqueueImport, ImportError, KIND_DIRS } from '../import/importer.js';
 import { cancelImport, checkCode, checkFeed, markVerified, sendCode, VERIFY_EXPIRES_DAYS, VerifyError, verifyingJob } from '../import/verify.js';
 import { MailError, sendEmail } from '../mail/mailer.js';
 import { createLiveItem, deleteLiveItem, listLiveItems, LiveError, setLiveStatus, updateLiveItem } from '../live/live.js';
-import { latestPings, podpingEnabled, queuePing, setShowPodping } from '../podping/podping.js';
+import { latestPings, queuePing, setShowPodping } from '../podping/podping.js';
 import { feedPath } from '../urls.js';
 import { checkRedirect, saveRedirectResult } from './redirect-check.js';
 import { addMember, deleteUser, listTeam, removeMember, setAdmin, setRole, TeamError } from '../db/team.js';
@@ -300,7 +300,7 @@ export function createApp(deps: AppDeps) {
       podcastGuid: p.podcast_guid,
       episodeCount: counts.episodes,
       media,
-      podping: { serverEnabled: podpingEnabled(config), enabled: p.podping_enabled },
+      podping: { enabled: p.podping_enabled },
       live: { now: counts.live_now, upcoming: counts.live_upcoming },
       redirect: { status: p.redirect_status, detail: p.redirect_detail, checkedAt: p.redirect_checked_at },
     };
@@ -528,7 +528,6 @@ export function createApp(deps: AppDeps) {
   async function podpingStatus(podcastId: string) {
     const p = (await getPodcastRow(db, podcastId)) as unknown as { podping_enabled: boolean };
     return {
-      serverEnabled: podpingEnabled(config),
       enabled: p.podping_enabled,
       pings: await latestPings(db, podcastId),
     };
@@ -720,7 +719,7 @@ export function createApp(deps: AppDeps) {
         selfUrl: feedUrl(p.slug),
         prefixChain: chain,
         prefixAlternateEnclosures: prefixCfg.prefixAlternateEnclosures,
-        usesPodping: podpingEnabled(config) && (p as unknown as { podping_enabled: boolean }).podping_enabled,
+        usesPodping: (p as unknown as { podping_enabled: boolean }).podping_enabled,
       });
       etag = `"${createHash('sha256').update(xml).digest('base64url').slice(0, 27)}"`;
       // Scheduled episodes appear on time because the cache is only kept until the next one is due.

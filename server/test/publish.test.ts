@@ -82,7 +82,6 @@ before(async () => {
     mediaDir,
     publicBaseUrl: 'http://feeds.mine.test',
     mediaBaseUrl: 'http://feeds.mine.test',
-    podpingToken: 'test-token',
   });
   server = http.createServer(createApp({ db, config }));
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));

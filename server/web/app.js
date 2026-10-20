@@ -180,8 +180,7 @@ function showLights(p) {
     );
   }
 
-  if (!p.podping.serverEnabled) lights.push({ cls: '', text: 'Podping off for this site' });
-  else lights.push(p.podping.enabled ? { cls: 'on', text: 'Podping on' } : { cls: '', text: 'Podping off' });
+  lights.push(p.podping.enabled ? { cls: 'on', text: 'Podping on' } : { cls: '', text: 'Podping off' });
 
   if (p.live.now) lights.push({ cls: 'live', text: 'On air' });
   else if (p.live.upcoming) lights.push({ cls: 'warn', text: `${p.live.upcoming} live show${p.live.upcoming === 1 ? '' : 's'} scheduled` });
@@ -671,7 +670,7 @@ async function tabOverview(p, canEdit, reload) {
     const m = p.media;
     const mediaDone = p.status === 'active' && !m.pending;
     const redirectOk = p.redirect?.status === 'ok';
-    const podpingOn = p.podping.enabled && p.podping.serverEnabled;
+    const podpingOn = p.podping.enabled;
 
     const checkErr = formError();
     const checkBtn = h('button', {
@@ -722,9 +721,7 @@ async function tabOverview(p, canEdit, reload) {
         h('li', { class: podpingOn ? 'done' : '' },
           h('div', null,
             h('h3', null, 'Turn on Podping'),
-            h('p', { class: 'muted' }, p.podping.serverEnabled
-              ? 'Once the redirect is in place, Podping tells apps the moment you publish.'
-              : 'Podping is turned off for this site. An administrator can turn it on in Site settings.'),
+            h('p', { class: 'muted' }, 'Once the redirect is in place, Podping tells apps the moment you publish.'),
             h('a', { class: 'btn', href: `#/show/${p.id}/podping` }, 'Podping settings'))))));
   }
 
@@ -1484,7 +1481,7 @@ async function viewEpisode(p, canEdit, episodeId) {
   const stateLine = isNew ? 'New episode'
     : ep.status === 'draft' ? 'Draft'
       : ep.inFeed ? `In the feed since ${fmtDate(ep.pubDate, true)}` : `Scheduled for ${fmtDate(ep.pubDate, true)}`;
-  const pingNote = p.podping.enabled && p.podping.serverEnabled
+  const pingNote = p.podping.enabled
     ? 'Podping tells apps as soon as it’s in the feed.'
     : 'Apps pick it up the next time they check the feed.';
 
@@ -1973,7 +1970,7 @@ async function tabPodping(p, canEdit, reload) {
     type: 'checkbox',
     role: 'switch',
     checked: st.enabled,
-    disabled: !canEdit || !st.serverEnabled,
+    disabled: !canEdit,
     onchange: async () => {
       toggle.disabled = true;
       try {
@@ -1992,8 +1989,7 @@ async function tabPodping(p, canEdit, reload) {
   return h('div', null,
     h('section', { class: 'panel' },
       h('h2', null, 'Podping'),
-      h('p', { class: 'muted' }, 'Podping tells podcast apps and Podcast Index the moment your feed changes, so new episodes show up in seconds instead of hours.'),
-      !st.serverEnabled ? h('p', { class: 'error' }, 'Podping is turned off for this site. An administrator can turn it on in Site settings.') : null,
+      h('p', { class: 'muted' }, 'Podping tells podcast apps the moment your feed changes, so new episodes show up in minutes instead of hours. It goes through Podcast Index; there’s nothing to set up.'),
       h('label', { class: 'switch' }, toggle, st.enabled ? 'Podping is on for this show' : 'Podping is off for this show'),
       h('p', { class: 'hint', style: 'margin-top:12px' }, 'Imported shows start with Podping off. Turn it on after your old host redirects to this feed; turning it on announces the feed once.')),
     st.pings.length ? h('section', { class: 'panel', style: 'padding:0' }, h('div', { class: 'table-wrap' }, h('table', null,
@@ -2140,7 +2136,7 @@ async function tabLive(p, canEdit, reload) {
   wrap.append(
     h('section', { class: 'panel' },
       h('h2', null, 'Live shows'),
-      h('p', { class: 'muted' }, p.podping.enabled && p.podping.serverEnabled
+      h('p', { class: 'muted' }, p.podping.enabled
         ? 'Going live and ending a show update the feed and send a Podping, so listeners’ apps react right away.'
         : 'Going live and ending a show update the feed. Turn on Podping to alert apps instantly.'),
       items.length ? list : h('p', { class: 'muted' }, 'No live shows scheduled.'),
@@ -2609,61 +2605,6 @@ async function viewSite() {
     },
   });
 
-  // Podping: how notifications go out
-  const keyErr = formError();
-  const key = h('input', { type: 'password', autocomplete: 'off', placeholder: s.podpingKeySet ? 'A key is saved. Enter a new one to replace it.' : 'Paste your podping.cloud key' });
-  let mode = s.podpingMode === 'auto' ? (s.podpingKeySet ? 'cloud' : 'hub') : s.podpingMode;
-  const keyField = h('div', { style: 'margin-top:8px' }, field('podping.cloud key', key),
-    h('p', { class: 'hint', style: 'margin-top:-8px' }, s.podpingKeySet
-      ? (s.podpingKeyFromEnv ? 'A key is set on the server (PODPING_TOKEN).' : 'A key is saved.')
-      : 'Ask Podcast Index (info@podcastindex.org) for a podping.cloud key.'));
-  const choice = (value, labelText, small, extra) => {
-    const r = h('input', { type: 'radio', name: 'podping-mode', checked: mode === value });
-    r.addEventListener('change', () => { mode = value; keyField.hidden = mode !== 'cloud'; });
-    return h('label', { class: 'choice' }, r, h('span', null, labelText, h('small', null, small), extra ?? null));
-  };
-  keyField.hidden = mode !== 'cloud';
-  const methodText = { hub: 'Sending through the Podcast Index hub', cloud: 'Sending through podping.cloud' };
-  const keyForm = h('form', {
-    class: 'panel',
-    onsubmit: (ev) => {
-      ev.preventDefault();
-      keyErr.hidden = true;
-      if (mode === 'cloud' && !s.podpingKeySet && !key.value.trim()) return showError(keyErr, 'Paste the podping.cloud key first.');
-      busy(keyForm, async () => {
-        try {
-          const body = { podpingMode: mode };
-          if (mode === 'cloud' && key.value.trim()) body.podpingKey = key.value;
-          await api('PUT', '/api/admin/site', body);
-          toast(mode === 'off' ? 'Podping turned off' : 'Podping settings saved');
-          render();
-        } catch (e) {
-          showError(keyErr, e);
-        }
-      });
-    },
-  },
-  h('h2', null, 'Podping'),
-  h('p', { class: 'muted' }, 'Podping tells podcast apps and Podcast Index the moment a feed changes, so new episodes show up in minutes instead of hours. Each show also has its own Podping switch.'),
-  h('p', null, h('span', { class: `light ${s.podpingMethod ? 'on' : ''}` }, s.podpingMethod ? methodText[s.podpingMethod] : 'Podping is off for this site')),
-  h('div', { class: 'choices' },
-    choice('hub', 'Podcast Index hub (recommended)', 'No key needed. Podcast Index checks the feed right away and sends the podping for you.'),
-    choice('cloud', 'podping.cloud with a key', 'Sends podpings directly, including separate “live” and “live ended” alerts for live shows.', keyField),
-    choice('off', 'Off', 'No notifications. Apps find changes on their own schedule.')),
-  keyErr,
-  h('div', { class: 'actions' },
-    h('button', { class: 'primary', type: 'submit' }, 'Save Podping settings'),
-    s.podpingKeySet && !s.podpingKeyFromEnv ? h('button', {
-      type: 'button',
-      class: 'quiet',
-      onclick: async () => {
-        if (!confirm('Remove the podping.cloud key?')) return;
-        await api('PUT', '/api/admin/site', { podpingKey: null, ...(mode === 'cloud' ? { podpingMode: 'hub' } : {}) });
-        toast('Key removed');
-        render();
-      },
-    }, 'Remove key') : null));
-
   return h('div', { class: 'page' },
     h('div', { class: 'page-head' }, h('h1', null, 'Site settings'),
       h('p', { class: 'muted' }, 'These apply to the whole site and every podcaster on it.')),
@@ -2674,8 +2615,7 @@ async function viewSite() {
     h('section', { class: 'panel' },
       h('h2', null, 'Sign-ups'),
       h('label', { class: 'switch', style: 'margin-top:12px' }, reg, 'Anyone can create an account'),
-      h('p', { class: 'hint', style: 'margin-top:8px' }, 'When off, only admins can add podcasters (under People).')),
-    keyForm);
+      h('p', { class: 'hint', style: 'margin-top:8px' }, 'When off, only admins can add podcasters (under People).')));
 }
 
 // ───────────── ownership verification + email ─────────────

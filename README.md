@@ -12,10 +12,10 @@ Clone it and run your own: the site's name, logo, favicon and web address are al
 - [x] Import worker (media download and URL rewrite, resumable, SSRF-guarded)
 - [x] Accounts, sessions and per-user access: show teams (owner, editors, viewers, ownership hand-over), admin account management and deletion
 - [x] JSON API and public feed endpoint
-- [x] Podping (per-show switch, off after import): scheduled episodes going live and stats prefix changes
+- [x] Podping through the Podcast Index hub, no key needed (per-show switch, off after import)
 - [x] Live show (`podcast:liveItem`) management: pending → live → ended, with live and liveEnd Podpings
 - [x] Media storage on this server or a provider (R2, B2, S3, Wasabi, Spaces, Bunny, other S3) with connection test and background moves
-- [x] Admin Site settings: name, logo, favicon, web and media address (stored links rewritten, old hostname redirected), sign-ups, Podping key
+- [x] Admin Site settings: name, logo, favicon, web and media address (stored links rewritten, old hostname redirected), sign-ups
 - [x] Web dashboard: shows, move checklist with 301 check, import progress, stats prefixes, Podping, live shows, people
 - [x] Ownership verification on import: podcast:txt tag or a code emailed to the feed's owner (via Resend or SMTP), admin skip
 - [x] Publishing: start new shows, publish/schedule/edit episodes, resumable uploads (audio, art, transcripts, chapters), show details with an Apple/Spotify checklist

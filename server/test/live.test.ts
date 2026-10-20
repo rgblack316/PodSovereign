@@ -17,21 +17,20 @@ let host: Awaited<ReturnType<typeof startOldHost>>;
 let pingServer: http.Server;
 let config: Config;
 let podcastId: string;
-const pings: { reason: string | null; url: string | null }[] = [];
+const pings: { podping: string | null; url: string | null }[] = [];
 
 before(async () => {
   db = await setupDb('feedhost_live_test');
   host = await startOldHost();
   pingServer = http.createServer((req, res) => {
     const u = new URL(req.url!, 'http://x');
-    pings.push({ reason: u.searchParams.get('reason'), url: u.searchParams.get('url') });
+    pings.push({ podping: u.searchParams.get('podping'), url: u.searchParams.get('url') });
     res.writeHead(200).end('Success!');
   });
   await new Promise<void>((r) => pingServer.listen(0, '127.0.0.1', r));
   config = testConfig({
     mediaDir: await tempDir('live-media'),
-    podpingToken: 't',
-    podpingUrl: `http://127.0.0.1:${(pingServer.address() as AddressInfo).port}/`,
+    podpingHubUrl: `http://127.0.0.1:${(pingServer.address() as AddressInfo).port}/pubnotify`,
   });
   const user = await createUser(db, 'live@example.com');
   // An imported live item that also carries a tag we don't manage (podcast:chat).
@@ -111,7 +110,7 @@ test('a new live item appears in the feed as pending', async () => {
   assert.deepEqual(parseFeed(xml).warnings, [], 'well-formed');
 });
 
-test('going live updates the feed and sends a Podping "live"', async () => {
+test('going live updates the feed and notifies the hub (logged as "live")', async () => {
   const now = new Date('2026-11-03T20:01:00-05:00');
   const li = await setLiveStatus(db, config, podcastId, newId, 'live', now);
   assert.equal(li.status, 'live');
@@ -120,7 +119,7 @@ test('going live updates the feed and sends a Podping "live"', async () => {
   assert.ok((await feedXml()).includes('<podcast:liveItem status="live" start="2026-11-03T20:00:00-05:00"'));
 
   await sendDuePings(db, config);
-  assert.equal(pings.at(-1)!.reason, 'live');
+  assert.equal(pings.at(-1)!.podping, '1');
   assert.match(pings.at(-1)!.url!, /\/feed\.xml$/);
 });
 
@@ -134,14 +133,14 @@ test('going live early moves the start time to now', async () => {
   await db.query(`DELETE FROM podping_queue WHERE status = 'pending'`);
 });
 
-test('ending sends "liveEnd" and stamps the real end time', async () => {
+test('ending notifies the hub (logged as "liveEnd") and stamps the real end time', async () => {
   const now = new Date('2026-11-03T22:15:00-05:00');
   const li = await setLiveStatus(db, config, podcastId, newId, 'ended', now);
   assert.equal(li.status, 'ended');
   assert.equal(li.end, now.toISOString(), 'scheduled end was later, so it becomes the real end');
   assert.deepEqual(await queued(), ['liveEnd']);
   await sendDuePings(db, config);
-  assert.equal(pings.at(-1)!.reason, 'liveEnd');
+  assert.equal(pings.at(-1)!.podping, '1');
 
   await setLiveStatus(db, config, podcastId, newId, 'ended', now);
   assert.deepEqual(await queued(), [], 'already ended: no second ping');

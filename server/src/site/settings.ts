@@ -1,14 +1,13 @@
 /**
  * Site settings (admin panel): name, logo, favicon, public address, media
- * address, open registration and the Podping key. Stored in the database and
+ * address and open registration. Stored in the database and
  * applied onto the shared Config at startup and on every save, so the rest of
  * the app reads them like any other setting.
  */
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { PODPING_MODES, type Config, type PodpingMode } from '../config.js';
-import { podpingMethod } from '../podping/podping.js';
+import type { Config } from '../config.js';
 import { maybeOne, type Db, type Queryable } from '../db/db.js';
 import { storeFor } from '../storage/store.js';
 import { mediaPrefix } from '../urls.js';
@@ -20,8 +19,6 @@ interface Row {
   public_base_url: string | null;
   media_base_url: string | null;
   allow_registration: boolean | null;
-  podping_token: string | null;
-  podping_mode: PodpingMode | null;
   logo_file: string | null;
   logo_type: string | null;
   favicon_file: string | null;
@@ -70,8 +67,6 @@ export function applyRow(config: Config, row: Row): void {
     secret: row.storage_secret,
   };
   config.allowRegistration = row.allow_registration ?? env.allowRegistration;
-  config.podpingToken = row.podping_token || env.podpingToken;
-  config.podpingMode = row.podping_mode ?? env.podpingMode ?? 'auto';
   config.cookieSecure = env.cookieSecure ?? config.publicBaseUrl.startsWith('https://');
   config.previousHosts = row.previous_hosts ?? [];
   config.requireVerification = row.require_verification ?? true;
@@ -100,7 +95,7 @@ export async function loadSiteSettings(db: Db, config: Config): Promise<void> {
   applyRow(config, await getRow(db));
 }
 
-/** What the admin panel shows. The Podping key itself is never sent back. */
+/** What the admin panel shows. Secrets are never sent back. */
 export async function siteSettingsView(db: Db, config: Config) {
   const row = await getRow(db);
   return {
@@ -108,10 +103,6 @@ export async function siteSettingsView(db: Db, config: Config) {
     publicBaseUrl: config.publicBaseUrl,
     mediaBaseUrl: row.media_base_url ?? '',
     allowRegistration: config.allowRegistration,
-    podpingKeySet: !!config.podpingToken,
-    podpingKeyFromEnv: !row.podping_token && !!config.envDefaults.podpingToken,
-    podpingMode: config.podpingMode,
-    podpingMethod: podpingMethod(config),
     storageProvider: row.storage_provider,
     requireVerification: config.requireVerification,
     mail: {
@@ -160,10 +151,6 @@ export interface SettingsInput {
   publicBaseUrl?: unknown;
   mediaBaseUrl?: unknown;
   allowRegistration?: unknown;
-  /** New key; '' or null removes the saved key; undefined leaves it unchanged. */
-  podpingKey?: unknown;
-  /** auto | hub | cloud | off */
-  podpingMode?: unknown;
   requireVerification?: unknown;
   /** Email server, or null to remove it. A blank password keeps the saved one. */
   smtp?: unknown;
@@ -208,16 +195,6 @@ export async function saveSiteSettings(db: Db, config: Config, input: SettingsIn
   if (input.allowRegistration !== undefined) {
     if (typeof input.allowRegistration !== 'boolean') throw new SettingsError('allowRegistration must be true or false');
     set('allow_registration', input.allowRegistration);
-  }
-  if (input.podpingKey !== undefined) {
-    if (input.podpingKey !== null && typeof input.podpingKey !== 'string') throw new SettingsError('Podping key must be text');
-    const key = (input.podpingKey as string | null)?.trim() || null;
-    if (key && key.length > 500) throw new SettingsError('Podping key is too long');
-    set('podping_token', key);
-  }
-  if (input.podpingMode !== undefined) {
-    if (!PODPING_MODES.includes(input.podpingMode as PodpingMode)) throw new SettingsError(`Podping method must be one of ${PODPING_MODES.join(', ')}`);
-    set('podping_mode', input.podpingMode);
   }
   if (input.requireVerification !== undefined) {
     if (typeof input.requireVerification !== 'boolean') throw new SettingsError('requireVerification must be true or false');

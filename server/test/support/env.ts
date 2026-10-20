@@ -42,9 +42,6 @@ export function testConfig(over: Partial<Config> = {}): Config {
     maxMediaBytes: 50 * 1024 * 1024,
     downloadConcurrency: 3,
     sessionDays: 30,
-    podpingMode: 'auto',
-    podpingToken: null,
-    podpingUrl: 'http://127.0.0.1:1/',
     podpingHubUrl: 'http://127.0.0.1:1/pubnotify',
     podpingDelaySec: 0,
     siteName: 'FeedHost',
@@ -64,8 +61,6 @@ export function testConfig(over: Partial<Config> = {}): Config {
     publicBaseUrl: cfg.publicBaseUrl,
     mediaBaseUrl: over.mediaBaseUrl ?? null,
     allowRegistration: cfg.allowRegistration,
-    podpingToken: cfg.podpingToken,
-    podpingMode: cfg.podpingMode,
     cookieSecure: cfg.cookieSecure,
   };
   return cfg;

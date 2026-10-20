@@ -8,7 +8,6 @@ import type { Db } from '../src/db/db.js';
 import { loadFeed } from '../src/db/podcasts.js';
 import { createApp } from '../src/http/app.js';
 import { claimNextJob, runImportJob } from '../src/import/importer.js';
-import { podpingEnabled, podpingMethod } from '../src/podping/podping.js';
 import { sniffImage } from '../src/site/settings.js';
 import { fixtureOn, setupDb, startOldHost, tempDir, testConfig } from './support/env.js';
 
@@ -61,7 +60,7 @@ before(async () => {
     mediaDir: await tempDir('site-media'),
     siteDir: await tempDir('site-assets'),
     allowRegistration: false,
-    envDefaults: { publicBaseUrl: 'https://feeds.mine.test', mediaBaseUrl: null, allowRegistration: false, podpingToken: null, podpingMode: 'auto', cookieSecure: false },
+    envDefaults: { publicBaseUrl: 'https://feeds.mine.test', mediaBaseUrl: null, allowRegistration: false, cookieSecure: false },
   });
   server = http.createServer(createApp({ db, config }));
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -232,28 +231,10 @@ describe('sign-ups and Podping key', () => {
     await admin.put('/api/admin/site', { allowRegistration: false });
   });
 
-  test('the Podping key is saved but never sent back', async () => {
-    assert.equal(podpingMethod(config), 'hub', 'no key: the Podcast Index hub');
-    const r = await admin.put('/api/admin/site', { podpingKey: 'secret-key-123' });
-    assert.equal(r.json.settings.podpingKeySet, true);
-    assert.ok(!JSON.stringify(r.json).includes('secret-key-123'));
-    assert.equal(podpingMethod(config), 'cloud');
-    assert.equal(config.podpingToken, 'secret-key-123');
-    await admin.put('/api/admin/site', { podpingKey: null });
-    assert.equal(podpingMethod(config), 'hub');
-  });
-
-  test('the Podping method can be chosen, including off', async () => {
-    let r = await admin.put('/api/admin/site', { podpingMode: 'off' });
-    assert.equal(r.status, 200, JSON.stringify(r.json));
-    assert.equal(r.json.settings.podpingMode, 'off');
-    assert.equal(r.json.settings.podpingMethod, null);
-    assert.equal(podpingEnabled(config), false);
-    r = await admin.put('/api/admin/site', { podpingMode: 'cloud' });
-    assert.equal(r.json.settings.podpingMethod, null, 'podping.cloud without a key sends nothing');
-    assert.equal((await admin.put('/api/admin/site', { podpingMode: 'sometimes' })).status, 400);
-    r = await admin.put('/api/admin/site', { podpingMode: 'auto' });
-    assert.equal(r.json.settings.podpingMethod, 'hub');
+  test('there is no Podping key setting any more', async () => {
+    const r = await admin.get('/api/admin/site');
+    assert.ok(!('podpingKeySet' in r.json.settings));
+    assert.ok(!('podpingMode' in r.json.settings));
   });
 
   test('"site" is reserved as a show address', async () => {

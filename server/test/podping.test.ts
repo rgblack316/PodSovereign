@@ -7,7 +7,7 @@ import type { Db } from '../src/db/db.js';
 import { buildFeed } from '../src/feed/builder.js';
 import { parseFeed } from '../src/feed/parser.js';
 import { claimNextJob, enqueueImport, runImportJob } from '../src/import/importer.js';
-import { podpingMethod, announceDueEpisodes, podpingMedium, queuePing, sendDuePings, setShowPodping } from '../src/podping/podping.js';
+import { announceDueEpisodes, queuePing, sendDuePings, setShowPodping } from '../src/podping/podping.js';
 import { createUser, FIXTURE, fixtureOn, setupDb, startOldHost, tempDir, testConfig } from './support/env.js';
 
 let db: Db;
@@ -30,8 +30,7 @@ before(async () => {
   await new Promise<void>((r) => pingServer.listen(0, '127.0.0.1', r));
   config = testConfig({
     mediaDir: await tempDir('podping-media'),
-    podpingToken: 'test-token',
-    podpingUrl: `http://127.0.0.1:${(pingServer.address() as AddressInfo).port}/`,
+    podpingHubUrl: `http://127.0.0.1:${(pingServer.address() as AddressInfo).port}/pubnotify`,
   });
   user = await createUser(db, 'pinger@example.com');
 });
@@ -60,16 +59,16 @@ test('importing sends no ping: the show starts with Podping off', async () => {
 
 test('turning the show switch on announces the feed once', async () => {
   await setShowPodping(db, config, podcastId, true);
-  const { rows: q } = await db.query<Record<string, string>>(`SELECT feed_url, reason, medium, status FROM podping_queue`);
-  assert.deepEqual(q, [{ feed_url: `https://feeds.mine.test/${slug}/feed.xml`, reason: 'update', medium: 'podcast', status: 'pending' }]);
+  const { rows: q } = await db.query<Record<string, string>>(`SELECT feed_url, reason, status FROM podping_queue`);
+  assert.deepEqual(q, [{ feed_url: `https://feeds.mine.test/${slug}/feed.xml`, reason: 'update', status: 'pending' }]);
 
   const r = await sendDuePings(db, config);
   assert.deepEqual(r, { sent: 1, failed: 0 });
   const ping = received.at(-1)!;
-  assert.equal(ping.auth, 'test-token');
+  assert.equal(ping.auth, undefined, 'no key is sent');
+  assert.equal(ping.url.pathname, '/pubnotify');
   assert.equal(ping.url.searchParams.get('url'), `https://feeds.mine.test/${slug}/feed.xml`);
-  assert.equal(ping.url.searchParams.get('reason'), 'update');
-  assert.equal(ping.url.searchParams.get('medium'), 'podcast');
+  assert.equal(ping.url.searchParams.get('podping'), '1');
 
   await setShowPodping(db, config, podcastId, true);
   assert.equal(await pending(), 0, 'already on: no extra ping');
@@ -146,15 +145,7 @@ test('drafts are never announced', async () => {
   assert.equal(await announceDueEpisodes(db, config), 0);
 });
 
-test('choosing the method: a key means podping.cloud, no key means the Podcast Index hub, off means nothing', () => {
-  assert.equal(podpingMethod({ ...config, podpingMode: 'auto', podpingToken: 'k' }), 'cloud');
-  assert.equal(podpingMethod({ ...config, podpingMode: 'auto', podpingToken: null }), 'hub');
-  assert.equal(podpingMethod({ ...config, podpingMode: 'hub', podpingToken: 'k' }), 'hub');
-  assert.equal(podpingMethod({ ...config, podpingMode: 'cloud', podpingToken: null }), null);
-  assert.equal(podpingMethod({ ...config, podpingMode: 'off', podpingToken: 'k' }), null);
-});
-
-test('the hub method: GET pubnotify?url=…&podping=1, no key; a refusal is retried', async () => {
+test('a refusal from the hub is logged and retried', async () => {
   const calls: { url: string; auth: string | undefined }[] = [];
   let answer = { status: 200, body: '{"status":"true","description":"Feed marked for immediate update."}' };
   const hub = http.createServer((req, res) => {
@@ -162,7 +153,7 @@ test('the hub method: GET pubnotify?url=…&podping=1, no key; a refusal is retr
     res.writeHead(answer.status, { 'Content-Type': 'application/json' }).end(answer.body);
   });
   await new Promise<void>((r) => hub.listen(0, '127.0.0.1', r));
-  const viaHub = { ...config, podpingMode: 'auto' as const, podpingToken: null, podpingHubUrl: `http://127.0.0.1:${(hub.address() as AddressInfo).port}/pubnotify` };
+  const viaHub = { ...config, podpingHubUrl: `http://127.0.0.1:${(hub.address() as AddressInfo).port}/pubnotify` };
   try {
     await db.query(`DELETE FROM podping_queue`);
     assert.equal(await queuePing(db, viaHub, podcastId, 'live'), true);
@@ -185,13 +176,6 @@ test('the hub method: GET pubnotify?url=…&podping=1, no key; a refusal is retr
   }
 });
 
-test('with Podping turned off for the site nothing is queued or sent', async () => {
-  const off = { ...config, podpingMode: 'off' as const };
-  assert.equal(await queuePing(db, off, podcastId), false);
-  assert.equal(await pending(), 0);
-  assert.deepEqual(await sendDuePings(db, off), { sent: 0, failed: 0 });
-});
-
 test('feeds advertise <podcast:podping> only when this server sends pings', () => {
   const withOldTag = FIXTURE.replace('<podcast:medium>', '<podcast:podping usesPodping="true"/>\n    <podcast:medium>');
   const { feed } = parseFeed(withOldTag);
@@ -201,9 +185,3 @@ test('feeds advertise <podcast:podping> only when this server sends pings', () =
   assert.equal(xml.match(/<podcast:podping usesPodping="true"\/>/g)?.length, 1);
 });
 
-test('medium mapping', () => {
-  assert.equal(podpingMedium('music'), 'music');
-  assert.equal(podpingMedium('Video'), 'video');
-  assert.equal(podpingMedium(null), 'podcast');
-  assert.equal(podpingMedium('something-new'), 'podcast');
-});

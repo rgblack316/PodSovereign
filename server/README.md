@@ -35,7 +35,6 @@ Admins can change these from the dashboard. Saved values override the environmen
 | Web address | The public address, e.g. `https://podcasts.johnscreekstudios.com`. Must be a bare address (no path) |
 | Media address | Optional. Episode files are served from here instead (for a CDN later) |
 | Sign-ups | Whether anyone can create an account |
-| Podping key | Kept on the server and never shown again after saving |
 
 ## Ownership verification
 
@@ -128,8 +127,6 @@ Migrations run automatically on startup. The **first account registered becomes 
 | `ALLOW_PRIVATE_NETWORKS` | off | Allow imports from local or private addresses (dev only) |
 | `SITE_NAME` | `FeedHost` | Starting site name (Site settings overrides it) |
 | `SITE_DIR` | `/var/lib/feedhost/site` | Where the uploaded logo and favicon are stored |
-| `PODPING_MODE` | `auto` | `auto` (podping.cloud when a key is set, otherwise the Podcast Index hub), `hub`, `cloud` or `off`. Site settings override it |
-| `PODPING_TOKEN` | not set | podping.cloud authorization key from Podcast Index (only for the podping.cloud method) |
 | `PODPING_HUB_URL` | `https://hub.podcastindex.org/pubnotify` | The Podcast Index hub endpoint |
 | `PODPING_DELAY_SEC` | `30` | Wait before sending, so a burst of edits becomes one ping |
 
@@ -144,15 +141,13 @@ Media:  https://podcasts.johnscreekstudios.com/<show>/media/<type>/<file>
 
 ## Podping
 
-When a feed changes, the server announces it through [Podping](https://podping.org), so apps and Podcast Index refresh it within seconds instead of waiting for their next check.
+When a feed changes, the server tells Podcast Index's open hub, which checks the feed right away and announces it through [Podping](https://podping.org), so apps refresh it within minutes instead of waiting for their next check. No key or setup is needed:
 
-- **How it's sent** (Site settings → Podping):
-  - **Podcast Index hub** (default, no key): `GET https://hub.podcastindex.org/pubnotify?url=<feed>&podping=1`. Podcast Index polls the feed immediately and sends the podping on your behalf.
-  - **podping.cloud with a key** (from Podcast Index, info@podcastindex.org): sends the podping directly, with its reason (`update`, `live`, `liveEnd`) and medium. Used automatically when a key is saved.
-  - **Off.**
+`GET https://hub.podcastindex.org/pubnotify?url=<feed>&podping=1`
+
 - **Each show has its own switch, off after import.** Nothing is announced while the podcaster moves media and sets up the 301 redirect at the old host. Turning the switch on (`PUT /api/podcasts/:id/podping {"enabled": true}`) announces the feed once. Turning it off cancels any pings still waiting.
 - **When it pings (switch on):** when an episode is published or a scheduled one's time arrives; when a public episode is edited, unpublished or deleted; when show details or stats prefixes change; when a live show starts or ends. Imports never ping.
-- **What else it does:** a burst of changes is sent as one ping, and failures are retried with backoff (30s, 1m, 2m, 4m, 8m) before giving up. Feeds include `<podcast:podping usesPodping="true"/>` only while it's on for both the server and the show; the old host's tag is dropped on import.
+- **What else it does:** a burst of changes is sent as one ping, and failures are retried with backoff (30s, 1m, 2m, 4m, 8m) before giving up. Feeds include `<podcast:podping usesPodping="true"/>` while the show's switch is on; the old host's tag is dropped on import.
 - **Status:** `GET /api/podcasts/:id/podping` shows recent pings.
 
 ## Live shows (`podcast:liveItem`)
@@ -161,9 +156,9 @@ Each show can announce live broadcasts in its feed. Apps that support Podcasting
 
 - **Create** a live item with a title, start time (and optionally an end time), the stream URL, and optional description, image and links ("Watch on YouTube", for example). It starts as **pending**.
 - **Change status:** pending → **live** → **ended**.
-  - Going live sends a Podping `live`. If you go live before the scheduled start, the start time moves to now.
-  - Ending sends a Podping `liveEnd` and records the real end time.
-  - Removing a live item that's still live also sends `liveEnd`.
+  - Going live notifies the hub so apps see it right away. If you go live before the scheduled start, the start time moves to now.
+  - Ending notifies the hub and records the real end time.
+  - Removing a live item that's still live counts as ending it.
   - Pings follow the show's Podping switch.
 - **Imported live items** can be edited the same way. Tags inside them that FeedHost doesn't manage, such as `podcast:chat` or `podcast:value`, are kept as they are. The live item's GUID never changes.
 - **FeedHost doesn't stream.** The stream URL points at your own streaming service, such as Icecast or a YouTube or Twitch live page. A built-in streaming server is on the [roadmap](../ROADMAP.md) as a possible future upgrade.
@@ -302,8 +297,8 @@ The import and API tests need a local PostgreSQL that allows trust auth for the 
 | HTTP | `src/http/`: routes, CSRF checks, public feed with ETag caching, 301 check, dashboard files |
 | Dashboard | `web/`: index.html, app.js, styles.css |
 | Media storage | `src/storage/`: local disk, S3-compatible (SigV4) and Bunny clients, connection test, background moves |
-| Site settings | `src/site/`: branding, web and media address (with link rewrite and old-host redirects), sign-ups, Podping key |
-| Podping | `src/podping/`: change queue, podping.cloud sender, scheduled-episode announcer |
+| Site settings | `src/site/`: branding, web and media address (with link rewrite and old-host redirects), sign-ups |
+| Podping | `src/podping/`: change queue, Podcast Index hub notifier, scheduled-episode announcer |
 | Live | `src/live/`: `podcast:liveItem` create, edit, status changes (with live and liveEnd pings) |
 
 ### Import, step by step

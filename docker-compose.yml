@@ -39,7 +39,6 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
       SITE_NAME: ${SITE_NAME:-FeedHost}
       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
-      PODPING_TOKEN: ${PODPING_TOKEN:-}
     volumes:
       # Copied media and the uploaded logo/favicon (on the host, easy to back up).
       - ${FEEDHOST_DATA_DIR:-./data}:/data
