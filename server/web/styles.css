@@ -544,6 +544,8 @@ table.team select { width: auto; min-width: 120px; padding: 6px 8px; font-size: 
 .settings-section { scroll-margin-top: var(--s4); }
 .setup-done { border-left: 4px solid var(--signal); }
 
+.provider .pill.untested { margin-left: 6px; vertical-align: 2px; font-weight: 600; }
+
 /* ───────── Small screens ───────── */
 
 @media (max-width: 860px) {

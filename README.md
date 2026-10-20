@@ -14,7 +14,7 @@ Clone it and run your own: the site's name, logo, favicon and web address are al
 - [x] JSON API and public feed endpoint
 - [x] Podping through the Podcast Index hub, no key needed (per-show switch, off after import)
 - [x] Live show (`podcast:liveItem`) management: pending → live → ended, with live and liveEnd Podpings
-- [x] Media storage on this server or a provider (R2, B2, S3, Wasabi, Spaces, Bunny, other S3) with connection test and background moves
+- [x] Media storage on this server or a provider, with connection test and background moves. Cloudflare R2 is in production use; B2, S3, Wasabi, Spaces, Bunny and other S3-compatible are available but untested (issues and pull requests welcome)
 - [x] Admin Site settings: name, logo, favicon, web and media address (stored links rewritten, old hostname redirected), sign-ups
 - [x] Web dashboard: shows, move checklist with 301 check, import progress, stats prefixes, Podping, live shows, people
 - [x] Ownership verification on import: podcast:txt tag or a code emailed to the feed's owner (via Resend or SMTP), admin skip

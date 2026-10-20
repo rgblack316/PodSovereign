@@ -2,9 +2,9 @@
 
 ## Media on a CDN instead of the Cloudflare Tunnel
 
-**Status:** built. Choose a provider under Site settings → Media storage. Still to do after testing with real shows:
-- [ ] Try each provider with a real account: R2, B2, S3, Wasabi, Spaces, Bunny
-- [ ] Decide which to use for John's Creek Studios. R2 has no egress fees and sits on the same Cloudflare account as the tunnel.
+**Status:** built. Choose a provider under Site settings → Media storage.
+- [x] Cloudflare R2: in production use for John's Creek Studios
+- [ ] Backblaze B2, Amazon S3, Wasabi, DigitalOcean Spaces, Bunny Storage, other S3-compatible: **available but untested with real accounts** (marked "Not yet tested" in Site settings). Anyone who tries one and runs into trouble can [open an issue](https://github.com/rgblack316/podcast-feed-import-and-host/issues) describing the problem for us to investigate, or submit a pull request with a fix.
 - [ ] Optional: copy files to the provider directly from the old host, without staging on this server first (saves disk space during large imports)
 
 Background: Cloudflare's terms restrict serving video, or a disproportionate amount of large files, through its CDN and Tunnel hostnames on Free, Pro and Business plans ([policy](https://developers.cloudflare.com/fundamentals/reference/policies-compliances/delivering-videos-with-cloudflare/)), and every uncached download through the tunnel uses the home connection's upload bandwidth.

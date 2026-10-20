@@ -2848,7 +2848,9 @@ function storagePanel(storage) {
       },
     });
     return h('label', { class: `provider ${p.id === chosen ? 'chosen' : ''}` }, input,
-      h('span', null, h('b', null, p.name, p.id === cur.provider ? h('span', { class: 'hint' }, ' (current)') : null), h('span', { class: 'hint' }, p.blurb)));
+      h('span', null, h('b', null, p.name, p.id === cur.provider ? h('span', { class: 'hint' }, ' (current)') : null,
+        p.id !== 'local' && p.tested === false ? h('span', { class: 'pill untested', title: 'Built to the provider’s documentation but not yet tried with a real account. Report problems on GitHub.' }, 'Not yet tested') : null),
+      h('span', { class: 'hint' }, p.blurb)));
   }));
 
   const drawFields = () => {

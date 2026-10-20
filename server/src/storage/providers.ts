@@ -29,6 +29,8 @@ export interface ProviderDef {
   /** Hint for the public address field. */
   publicUrlHint: string;
   publicUrlPlaceholder: string;
+  /** Used with a real account in production. The others are built to each provider's docs but untested. */
+  tested: boolean;
 }
 
 const opts = (list: [string, string][]) => list.map(([value, label]) => ({ value, label }));
@@ -66,6 +68,7 @@ const bucketField: FieldDef = { key: 'bucket', label: 'Bucket name', type: 'text
 export const PROVIDERS: ProviderDef[] = [
   {
     id: 'r2',
+    tested: true,
     name: 'Cloudflare R2',
     blurb: 'No download (egress) fees. Connect a custom domain to the bucket for public access.',
     docsUrl: 'https://developers.cloudflare.com/r2/get-started/s3/',
@@ -79,6 +82,7 @@ export const PROVIDERS: ProviderDef[] = [
   },
   {
     id: 'b2',
+    tested: false,
     name: 'Backblaze B2',
     blurb: 'Low-cost storage. The bucket must be set to Public.',
     docsUrl: 'https://www.backblaze.com/apidocs/introduction-to-the-s3-compatible-api',
@@ -92,6 +96,7 @@ export const PROVIDERS: ProviderDef[] = [
   },
   {
     id: 's3',
+    tested: false,
     name: 'Amazon S3',
     blurb: 'Use CloudFront (or a public bucket policy) to make files public.',
     docsUrl: 'https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html',
@@ -105,6 +110,7 @@ export const PROVIDERS: ProviderDef[] = [
   },
   {
     id: 'wasabi',
+    tested: false,
     name: 'Wasabi',
     blurb: 'Flat-rate storage. Make the bucket public or put a CDN in front.',
     docsUrl: 'https://docs.wasabi.com/docs/what-are-the-service-urls-for-wasabis-different-storage-regions',
@@ -119,6 +125,7 @@ export const PROVIDERS: ProviderDef[] = [
   },
   {
     id: 'spaces',
+    tested: false,
     name: 'DigitalOcean Spaces',
     blurb: 'Includes a built-in CDN. Files are private by default, so each upload is marked public.',
     docsUrl: 'https://docs.digitalocean.com/products/spaces/reference/aws-sdks/',
@@ -132,6 +139,7 @@ export const PROVIDERS: ProviderDef[] = [
   },
   {
     id: 'bunny',
+    tested: false,
     name: 'Bunny Storage',
     blurb: 'Storage zone plus a pull zone (CDN). Uses Bunny’s own API.',
     docsUrl: 'https://docs.bunny.net/reference/storage-api',
@@ -145,6 +153,7 @@ export const PROVIDERS: ProviderDef[] = [
   },
   {
     id: 'other',
+    tested: false,
     name: 'Other S3-compatible',
     blurb: 'MinIO, Linode/Akamai, Scaleway, IDrive e2, and others that speak the S3 API.',
     docsUrl: 'https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-authenticating-requests.html',

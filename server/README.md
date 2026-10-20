@@ -70,6 +70,8 @@ Under **Site settings → Media storage**, admins choose where episode files, ar
 | Bunny Storage | Storage zone name, its **password**, main region | The linked pull zone, `https://<zone>.b-cdn.net` |
 | Other S3-compatible | Endpoint, region, keys, bucket, path-style option | Whatever the provider gives |
 
+**Tested so far:** Cloudflare R2 is in production use. The other providers (Backblaze B2, Amazon S3, Wasabi, DigitalOcean Spaces, Bunny Storage and other S3-compatible services) are built to each provider's documentation and pass the automated tests against a simulated server, but haven't been tried with real accounts yet. They're marked **Not yet tested** in Site settings. If you try one and hit a problem, please [open an issue](https://github.com/rgblack316/podcast-feed-import-and-host/issues) with what happened (the Test connection results help), or send a pull request with a fix.
+
 - **Test connection** uploads a small file, reads it back, downloads it from the public address (as podcast apps will), and deletes it. Each step shows a pass or fail with an explanation.
 - **Saving** runs the same test first and changes nothing if it fails. Secrets are never sent back to the browser; leave the field blank to keep the saved one.
 - **Switching with media already stored** starts a background move. Every file is copied to the new storage while the current one keeps serving, and imports pause meanwhile. Once every file has moved, links are rewritten and the switch happens. If any file fails, nothing switches and you can save again to retry. Moving off this server deletes the local copies afterwards; moving between providers leaves the old bucket untouched.
