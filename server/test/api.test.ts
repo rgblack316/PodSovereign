@@ -243,12 +243,12 @@ describe('stats prefixes and the public feed', () => {
     const st = await alice.get(`/api/podcasts/${alicePodcast}/podping`);
     assert.equal(st.status, 200);
     assert.equal(st.json.enabled, false);
-    assert.equal(st.json.serverEnabled, false, 'no PODPING_TOKEN in this test server');
+    assert.equal(st.json.serverEnabled, true, 'the Podcast Index hub needs no key');
     assert.equal((await bob.put(`/api/podcasts/${alicePodcast}/podping`, { enabled: true })).status, 404);
     assert.equal((await alice.put(`/api/podcasts/${alicePodcast}/podping`, { enabled: 'yes' })).status, 400);
     const on = await alice.put(`/api/podcasts/${alicePodcast}/podping`, { enabled: true });
     assert.equal(on.json.enabled, true);
-    assert.ok(!(await anon.get(`/${slug}/feed.xml`)).text.includes('podcast:podping'), 'tag needs the server token too');
+    assert.ok((await anon.get(`/${slug}/feed.xml`)).text.includes('<podcast:podping usesPodping="true"/>'));
     await alice.put(`/api/podcasts/${alicePodcast}/podping`, { enabled: false });
   });
 
@@ -320,7 +320,7 @@ describe('dashboard support', () => {
     assert.ok(p.media.done > 0);
     assert.equal(p.media.failed, 0);
     assert.equal(p.episodeCount, 2);
-    assert.deepEqual(p.podping, { serverEnabled: false, enabled: false });
+    assert.deepEqual(p.podping, { serverEnabled: true, enabled: false });
     assert.equal(p.redirect.status, null);
     const list = (await alice.get('/api/podcasts')).json.podcasts[0];
     assert.equal(list.imported, true);

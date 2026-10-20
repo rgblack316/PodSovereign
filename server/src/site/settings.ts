@@ -7,7 +7,8 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { Config } from '../config.js';
+import { PODPING_MODES, type Config, type PodpingMode } from '../config.js';
+import { podpingMethod } from '../podping/podping.js';
 import { maybeOne, type Db, type Queryable } from '../db/db.js';
 import { storeFor } from '../storage/store.js';
 import { mediaPrefix } from '../urls.js';
@@ -20,6 +21,7 @@ interface Row {
   media_base_url: string | null;
   allow_registration: boolean | null;
   podping_token: string | null;
+  podping_mode: PodpingMode | null;
   logo_file: string | null;
   logo_type: string | null;
   favicon_file: string | null;
@@ -69,6 +71,7 @@ export function applyRow(config: Config, row: Row): void {
   };
   config.allowRegistration = row.allow_registration ?? env.allowRegistration;
   config.podpingToken = row.podping_token || env.podpingToken;
+  config.podpingMode = row.podping_mode ?? env.podpingMode ?? 'auto';
   config.cookieSecure = env.cookieSecure ?? config.publicBaseUrl.startsWith('https://');
   config.previousHosts = row.previous_hosts ?? [];
   config.requireVerification = row.require_verification ?? true;
@@ -107,6 +110,8 @@ export async function siteSettingsView(db: Db, config: Config) {
     allowRegistration: config.allowRegistration,
     podpingKeySet: !!config.podpingToken,
     podpingKeyFromEnv: !row.podping_token && !!config.envDefaults.podpingToken,
+    podpingMode: config.podpingMode,
+    podpingMethod: podpingMethod(config),
     storageProvider: row.storage_provider,
     requireVerification: config.requireVerification,
     mail: {
@@ -157,6 +162,8 @@ export interface SettingsInput {
   allowRegistration?: unknown;
   /** New key; '' or null removes the saved key; undefined leaves it unchanged. */
   podpingKey?: unknown;
+  /** auto | hub | cloud | off */
+  podpingMode?: unknown;
   requireVerification?: unknown;
   /** Email server, or null to remove it. A blank password keeps the saved one. */
   smtp?: unknown;
@@ -207,6 +214,10 @@ export async function saveSiteSettings(db: Db, config: Config, input: SettingsIn
     const key = (input.podpingKey as string | null)?.trim() || null;
     if (key && key.length > 500) throw new SettingsError('Podping key is too long');
     set('podping_token', key);
+  }
+  if (input.podpingMode !== undefined) {
+    if (!PODPING_MODES.includes(input.podpingMode as PodpingMode)) throw new SettingsError(`Podping method must be one of ${PODPING_MODES.join(', ')}`);
+    set('podping_mode', input.podpingMode);
   }
   if (input.requireVerification !== undefined) {
     if (typeof input.requireVerification !== 'boolean') throw new SettingsError('requireVerification must be true or false');

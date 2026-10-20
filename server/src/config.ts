@@ -22,9 +22,16 @@ export interface Config {
   maxMediaBytes: number;
   downloadConcurrency: number;
   sessionDays: number;
-  /** podping.cloud authorization token from Podcast Index. Unset = Podping off. */
+  /**
+   * How Podping is sent. auto: podping.cloud when a key is set, otherwise the
+   * Podcast Index hub (no key needed). hub / cloud force one; off sends nothing.
+   */
+  podpingMode: PodpingMode;
+  /** podping.cloud authorization token from Podcast Index (only for the podping.cloud method). */
   podpingToken: string | null;
   podpingUrl: string;
+  /** Podcast Index's open hub: GET <url>?url=<feed>&podping=1 */
+  podpingHubUrl: string;
   /** Wait this long before sending, so a burst of edits becomes one ping. */
   podpingDelaySec: number;
   /** Name shown in the dashboard (Site settings). */
@@ -56,9 +63,15 @@ export interface Config {
     mediaBaseUrl: string | null;
     allowRegistration: boolean;
     podpingToken: string | null;
+    podpingMode: PodpingMode;
     cookieSecure: boolean | null;
   };
 }
+
+export type PodpingMode = 'auto' | 'hub' | 'cloud' | 'off';
+export const PODPING_MODES: readonly PodpingMode[] = ['auto', 'hub', 'cloud', 'off'];
+const podpingModeFrom = (v: string | undefined): PodpingMode =>
+  PODPING_MODES.includes(v?.trim().toLowerCase() as PodpingMode) ? (v!.trim().toLowerCase() as PodpingMode) : 'auto';
 
 const bool = (v: string | undefined, d: boolean) => (v === undefined ? d : /^(1|true|yes)$/i.test(v));
 const num = (v: string | undefined, d: number) => (v && !Number.isNaN(Number(v)) ? Number(v) : d);
@@ -83,6 +96,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     sessionDays: num(env.SESSION_DAYS, 30),
     podpingToken: env.PODPING_TOKEN?.trim() || null,
     podpingUrl: env.PODPING_URL ?? 'https://podping.cloud/',
+    podpingHubUrl: env.PODPING_HUB_URL ?? 'https://hub.podcastindex.org/pubnotify',
+    podpingMode: podpingModeFrom(env.PODPING_MODE),
     podpingDelaySec: num(env.PODPING_DELAY_SEC, 30),
     siteName: env.SITE_NAME?.trim() || 'FeedHost',
     siteDir: env.SITE_DIR ?? '/var/lib/feedhost/site',
@@ -99,6 +114,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       mediaBaseUrl,
       allowRegistration: bool(env.ALLOW_REGISTRATION, false),
       podpingToken: env.PODPING_TOKEN?.trim() || null,
+      podpingMode: podpingModeFrom(env.PODPING_MODE),
       cookieSecure,
     },
   };

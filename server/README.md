@@ -128,7 +128,9 @@ Migrations run automatically on startup. The **first account registered becomes 
 | `ALLOW_PRIVATE_NETWORKS` | off | Allow imports from local or private addresses (dev only) |
 | `SITE_NAME` | `FeedHost` | Starting site name (Site settings overrides it) |
 | `SITE_DIR` | `/var/lib/feedhost/site` | Where the uploaded logo and favicon are stored |
-| `PODPING_TOKEN` | not set (off) | podping.cloud authorization key from Podcast Index. Setting it turns Podping on |
+| `PODPING_MODE` | `auto` | `auto` (podping.cloud when a key is set, otherwise the Podcast Index hub), `hub`, `cloud` or `off`. Site settings override it |
+| `PODPING_TOKEN` | not set | podping.cloud authorization key from Podcast Index (only for the podping.cloud method) |
+| `PODPING_HUB_URL` | `https://hub.podcastindex.org/pubnotify` | The Podcast Index hub endpoint |
 | `PODPING_DELAY_SEC` | `30` | Wait before sending, so a burst of edits becomes one ping |
 
 ### Public URLs
@@ -144,12 +146,14 @@ Media:  https://podcasts.johnscreekstudios.com/<show>/media/<type>/<file>
 
 When a feed changes, the server announces it through [Podping](https://podping.org), so apps and Podcast Index refresh it within seconds instead of waiting for their next check.
 
-- **Turn it on for the server** by setting `PODPING_TOKEN`. podping.cloud requires a key from Dave Jones at Podcast Index; ask at podcastindex.org.
+- **How it's sent** (Site settings → Podping):
+  - **Podcast Index hub** (default, no key): `GET https://hub.podcastindex.org/pubnotify?url=<feed>&podping=1`. Podcast Index polls the feed immediately and sends the podping on your behalf.
+  - **podping.cloud with a key** (from Podcast Index, info@podcastindex.org): sends the podping directly, with its reason (`update`, `live`, `liveEnd`) and medium. Used automatically when a key is saved.
+  - **Off.**
 - **Each show has its own switch, off after import.** Nothing is announced while the podcaster moves media and sets up the 301 redirect at the old host. Turning the switch on (`PUT /api/podcasts/:id/podping {"enabled": true}`) announces the feed once. Turning it off cancels any pings still waiting.
-- **When it pings (switch on):** when a scheduled episode's publish time arrives, and when stats prefixes change (every media URL changes). Imports never ping.
+- **When it pings (switch on):** when an episode is published or a scheduled one's time arrives; when a public episode is edited, unpublished or deleted; when show details or stats prefixes change; when a live show starts or ends. Imports never ping.
 - **What else it does:** a burst of changes is sent as one ping, and failures are retried with backoff (30s, 1m, 2m, 4m, 8m) before giving up. Feeds include `<podcast:podping usesPodping="true"/>` only while it's on for both the server and the show; the old host's tag is dropped on import.
 - **Status:** `GET /api/podcasts/:id/podping` shows recent pings.
-- **To confirm once you have a key:** the key is sent in the `Authorization` header. Check with Podcast Index that this is still what podping.cloud expects.
 
 ## Live shows (`podcast:liveItem`)
 

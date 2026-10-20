@@ -180,7 +180,7 @@ function showLights(p) {
     );
   }
 
-  if (!p.podping.serverEnabled) lights.push({ cls: '', text: 'Podping not set up' });
+  if (!p.podping.serverEnabled) lights.push({ cls: '', text: 'Podping off for this site' });
   else lights.push(p.podping.enabled ? { cls: 'on', text: 'Podping on' } : { cls: '', text: 'Podping off' });
 
   if (p.live.now) lights.push({ cls: 'live', text: 'On air' });
@@ -724,7 +724,7 @@ async function tabOverview(p, canEdit, reload) {
             h('h3', null, 'Turn on Podping'),
             h('p', { class: 'muted' }, p.podping.serverEnabled
               ? 'Once the redirect is in place, Podping tells apps the moment you publish.'
-              : 'Podping isn’t set up on this server yet. The administrator needs to add a Podping key.'),
+              : 'Podping is turned off for this site. An administrator can turn it on in Site settings.'),
             h('a', { class: 'btn', href: `#/show/${p.id}/podping` }, 'Podping settings'))))));
   }
 
@@ -1993,7 +1993,7 @@ async function tabPodping(p, canEdit, reload) {
     h('section', { class: 'panel' },
       h('h2', null, 'Podping'),
       h('p', { class: 'muted' }, 'Podping tells podcast apps and Podcast Index the moment your feed changes, so new episodes show up in seconds instead of hours.'),
-      !st.serverEnabled ? h('p', { class: 'error' }, 'Podping isn’t set up on this server. The administrator needs to add a Podping key (PODPING_TOKEN).') : null,
+      !st.serverEnabled ? h('p', { class: 'error' }, 'Podping is turned off for this site. An administrator can turn it on in Site settings.') : null,
       h('label', { class: 'switch' }, toggle, st.enabled ? 'Podping is on for this show' : 'Podping is off for this show'),
       h('p', { class: 'hint', style: 'margin-top:12px' }, 'Imported shows start with Podping off. Turn it on after your old host redirects to this feed; turning it on announces the feed once.')),
     st.pings.length ? h('section', { class: 'panel', style: 'padding:0' }, h('div', { class: 'table-wrap' }, h('table', null,
@@ -2609,19 +2609,33 @@ async function viewSite() {
     },
   });
 
-  // Podping key
+  // Podping: how notifications go out
   const keyErr = formError();
   const key = h('input', { type: 'password', autocomplete: 'off', placeholder: s.podpingKeySet ? 'A key is saved. Enter a new one to replace it.' : 'Paste your podping.cloud key' });
+  let mode = s.podpingMode === 'auto' ? (s.podpingKeySet ? 'cloud' : 'hub') : s.podpingMode;
+  const keyField = h('div', { style: 'margin-top:8px' }, field('podping.cloud key', key),
+    h('p', { class: 'hint', style: 'margin-top:-8px' }, s.podpingKeySet
+      ? (s.podpingKeyFromEnv ? 'A key is set on the server (PODPING_TOKEN).' : 'A key is saved.')
+      : 'Ask Podcast Index (info@podcastindex.org) for a podping.cloud key.'));
+  const choice = (value, labelText, small, extra) => {
+    const r = h('input', { type: 'radio', name: 'podping-mode', checked: mode === value });
+    r.addEventListener('change', () => { mode = value; keyField.hidden = mode !== 'cloud'; });
+    return h('label', { class: 'choice' }, r, h('span', null, labelText, h('small', null, small), extra ?? null));
+  };
+  keyField.hidden = mode !== 'cloud';
+  const methodText = { hub: 'Sending through the Podcast Index hub', cloud: 'Sending through podping.cloud' };
   const keyForm = h('form', {
     class: 'panel',
     onsubmit: (ev) => {
       ev.preventDefault();
       keyErr.hidden = true;
-      if (!key.value.trim()) return showError(keyErr, 'Paste the key first.');
+      if (mode === 'cloud' && !s.podpingKeySet && !key.value.trim()) return showError(keyErr, 'Paste the podping.cloud key first.');
       busy(keyForm, async () => {
         try {
-          await api('PUT', '/api/admin/site', { podpingKey: key.value });
-          toast('Podping key saved');
+          const body = { podpingMode: mode };
+          if (mode === 'cloud' && key.value.trim()) body.podpingKey = key.value;
+          await api('PUT', '/api/admin/site', body);
+          toast(mode === 'off' ? 'Podping turned off' : 'Podping settings saved');
           render();
         } catch (e) {
           showError(keyErr, e);
@@ -2629,21 +2643,23 @@ async function viewSite() {
       });
     },
   },
-  h('h2', null, 'Podping key'),
-  h('p', { class: 'muted' }, 'Podping needs a key for podping.cloud from Podcast Index (podcastindex.org). Each show then has its own Podping switch.'),
-  h('p', null, h('span', { class: `light ${s.podpingKeySet ? 'on' : ''}` },
-    s.podpingKeySet ? (s.podpingKeyFromEnv ? 'Key set on the server (PODPING_TOKEN)' : 'Key saved') : 'No key yet')),
-  field('Key', key),
+  h('h2', null, 'Podping'),
+  h('p', { class: 'muted' }, 'Podping tells podcast apps and Podcast Index the moment a feed changes, so new episodes show up in minutes instead of hours. Each show also has its own Podping switch.'),
+  h('p', null, h('span', { class: `light ${s.podpingMethod ? 'on' : ''}` }, s.podpingMethod ? methodText[s.podpingMethod] : 'Podping is off for this site')),
+  h('div', { class: 'choices' },
+    choice('hub', 'Podcast Index hub (recommended)', 'No key needed. Podcast Index checks the feed right away and sends the podping for you.'),
+    choice('cloud', 'podping.cloud with a key', 'Sends podpings directly, including separate “live” and “live ended” alerts for live shows.', keyField),
+    choice('off', 'Off', 'No notifications. Apps find changes on their own schedule.')),
   keyErr,
   h('div', { class: 'actions' },
-    h('button', { class: 'primary', type: 'submit' }, 'Save Podping key'),
+    h('button', { class: 'primary', type: 'submit' }, 'Save Podping settings'),
     s.podpingKeySet && !s.podpingKeyFromEnv ? h('button', {
       type: 'button',
       class: 'quiet',
       onclick: async () => {
-        if (!confirm('Remove the Podping key? Pings stop for every show.')) return;
-        await api('PUT', '/api/admin/site', { podpingKey: null });
-        toast('Podping key removed');
+        if (!confirm('Remove the podping.cloud key?')) return;
+        await api('PUT', '/api/admin/site', { podpingKey: null, ...(mode === 'cloud' ? { podpingMode: 'hub' } : {}) });
+        toast('Key removed');
         render();
       },
     }, 'Remove key') : null));

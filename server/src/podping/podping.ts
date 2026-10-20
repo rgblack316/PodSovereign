@@ -1,8 +1,14 @@
 /**
  * Podping (https://podping.org): when a feed changes, announce it on the Hive
  * blockchain so podcast apps and Podcast Index refresh it within seconds
- * instead of waiting for their next poll. Sent through the hosted
- * podping.cloud service, which needs an authorization token from Podcast Index.
+ * instead of waiting for their next poll. Two ways to send:
+ *
+ *   hub    Podcast Index's open hub, no key: GET https://hub.podcastindex.org/pubnotify?url=<feed>&podping=1
+ *          Podcast Index polls the feed right away and sends the podping for us.
+ *   cloud  podping.cloud with an authorization token from Podcast Index; carries the
+ *          reason (update / live / liveEnd) and medium.
+ *
+ * The site setting picks one (auto = cloud when a key is saved, otherwise hub).
  *
  * Changes are queued, and several changes to one feed in quick succession
  * collapse into a single ping.
@@ -17,7 +23,16 @@ export type PingReason = 'update' | 'live' | 'liveEnd';
 const MEDIUMS = new Set(['podcast', 'music', 'video', 'film', 'audiobook', 'newsletter', 'blog']);
 const MAX_ATTEMPTS = 6;
 
-export const podpingEnabled = (config: Config) => !!config.podpingToken;
+/** Which way pings go out right now, or null when Podping is off for the site. */
+export function podpingMethod(config: Config): 'hub' | 'cloud' | null {
+  const mode = config.podpingMode ?? 'auto';
+  if (mode === 'off') return null;
+  if (mode === 'hub') return 'hub';
+  if (mode === 'cloud') return config.podpingToken ? 'cloud' : null;
+  return config.podpingToken ? 'cloud' : 'hub';
+}
+
+export const podpingEnabled = (config: Config) => podpingMethod(config) !== null;
 
 export function podpingMedium(podcastMedium: string | null | undefined): string {
   const m = (podcastMedium ?? '').trim().toLowerCase();
@@ -84,7 +99,8 @@ export async function sendDuePings(
   config: Config,
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ sent: number; failed: number }> {
-  if (!podpingEnabled(config)) return { sent: 0, failed: 0 };
+  const method = podpingMethod(config);
+  if (!method) return { sent: 0, failed: 0 };
   const { rows } = await db.query<QueueRow>(
     `SELECT id, feed_url, reason, medium, attempts FROM podping_queue
       WHERE status = 'pending' AND next_try_at <= now() ORDER BY next_try_at LIMIT 50`,
@@ -92,16 +108,35 @@ export async function sendDuePings(
   let sent = 0;
   let failed = 0;
   for (const p of rows) {
-    const url = new URL(config.podpingUrl);
-    url.searchParams.set('url', p.feed_url);
-    url.searchParams.set('reason', p.reason);
-    url.searchParams.set('medium', podpingMedium(p.medium));
     try {
-      const res = await fetchImpl(url, {
-        headers: { Authorization: config.podpingToken!, 'User-Agent': 'FeedHost/0.1 (+podping)' },
-        signal: AbortSignal.timeout(15_000),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}${res.status === 401 ? ' (check PODPING_TOKEN)' : ''}`);
+      if (method === 'cloud') {
+        const url = new URL(config.podpingUrl);
+        url.searchParams.set('url', p.feed_url);
+        url.searchParams.set('reason', p.reason);
+        url.searchParams.set('medium', podpingMedium(p.medium));
+        const res = await fetchImpl(url, {
+          headers: { Authorization: config.podpingToken!, 'User-Agent': 'FeedHost/0.1 (+podping)' },
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}${res.status === 401 ? ' (check the Podping key)' : ''}`);
+      } else {
+        // The hub reads the feed itself, so the reason and medium come from the feed.
+        const url = new URL(config.podpingHubUrl);
+        url.searchParams.set('url', p.feed_url);
+        url.searchParams.set('podping', '1');
+        const res = await fetchImpl(url, { headers: { 'User-Agent': 'FeedHost/0.1 (+podping)' }, signal: AbortSignal.timeout(15_000) });
+        const body = await res.text().catch(() => '');
+        if (!res.ok) throw new Error(`Podcast Index hub: HTTP ${res.status}`);
+        let json: { status?: unknown; description?: unknown } | null = null;
+        try {
+          json = JSON.parse(body);
+        } catch {
+          /* not JSON: a 2xx is success */
+        }
+        if (json && (json.status === false || json.status === 'false')) {
+          throw new Error(`Podcast Index hub: ${typeof json.description === 'string' ? json.description : 'refused'}`);
+        }
+      }
       await db.query(`UPDATE podping_queue SET status = 'sent', sent_at = now(), attempts = attempts + 1, last_error = NULL WHERE id = $1`, [p.id]);
       sent++;
     } catch (e) {
