@@ -246,6 +246,7 @@ interface PodcastRow {
   podcast_locked: boolean | null;
   podcast_locked_owner: string | null;
   podcast_medium: string | null;
+  hide_owner_email: boolean;
   extra_namespaces: Record<string, string>;
   feed_cache_xml: string | null;
   feed_cache_etag: string | null;
@@ -307,14 +308,16 @@ export async function loadFeed(q: Queryable, podcastId: string): Promise<Feed | 
     itunesType: p.itunes_type,
     itunesExplicit: p.itunes_explicit,
     itunesOwnerName: p.itunes_owner_name,
-    itunesOwnerEmail: p.itunes_owner_email,
+    // Hidden: the email is left out of the feed entirely (the owner's name stays).
+    itunesOwnerEmail: p.hide_owner_email ? null : p.itunes_owner_email,
     itunesCategories: p.itunes_categories ?? [],
     itunesBlock: p.itunes_block,
     itunesComplete: p.itunes_complete,
     itunesNewFeedUrl: p.itunes_new_feed_url,
     podcastGuid: p.podcast_guid,
     podcastLocked: p.podcast_locked,
-    podcastLockedOwner: p.podcast_locked_owner,
+    // The lock names the show's owner email (an older saved lock email wins), unless the email is hidden.
+    podcastLockedOwner: p.podcast_locked === null || p.hide_owner_email ? null : p.podcast_locked_owner || p.itunes_owner_email,
     podcastMedium: p.podcast_medium,
     extra: byEpisode.get(null) ?? [],
   };

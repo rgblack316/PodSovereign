@@ -66,6 +66,7 @@ interface Row {
   podcast_locked: boolean | null;
   podcast_locked_owner: string | null;
   podcast_medium: string | null;
+  hide_owner_email: boolean;
   extra_namespaces: Record<string, string> | null;
 }
 
@@ -101,6 +102,7 @@ export async function getShow(q: Queryable, podcastId: string) {
     author: r.itunes_author,
     ownerName: r.itunes_owner_name,
     ownerEmail: r.itunes_owner_email,
+    hideOwnerEmail: r.hide_owner_email,
     categories: r.itunes_categories ?? [],
     explicit: r.itunes_explicit,
     type: r.itunes_type,
@@ -159,6 +161,7 @@ export interface ShowInput {
   author?: unknown;
   ownerName?: unknown;
   ownerEmail?: unknown;
+  hideOwnerEmail?: unknown;
   categories?: unknown;
   explicit?: unknown;
   type?: unknown;
@@ -213,6 +216,7 @@ export async function updateShow(q: Queryable, config: Config, podcastId: string
   if (has('author')) n.itunes_author = text(input.author, 'Author', { max: 1000 });
   if (has('ownerName')) n.itunes_owner_name = text(input.ownerName, 'Owner name', { max: 1000 });
   if (has('ownerEmail')) n.itunes_owner_email = email(input.ownerEmail, 'Owner email');
+  if (has('hideOwnerEmail')) n.hide_owner_email = bool(input.hideOwnerEmail, 'Hide owner email');
   if (has('categories')) n.itunes_categories = categories(input.categories);
   if (has('explicit')) n.itunes_explicit = bool(input.explicit, 'Explicit');
   if (has('type')) n.itunes_type = oneOf(input.type, 'Show type', ['episodic', 'serial'] as const);
@@ -221,6 +225,8 @@ export async function updateShow(q: Queryable, config: Config, podcastId: string
   if (has('newFeedUrl')) n.itunes_new_feed_url = httpUrl(input.newFeedUrl, 'New feed address');
   if (has('locked')) n.podcast_locked = optionalBool(input.locked, 'Locked');
   if (has('lockedOwner')) n.podcast_locked_owner = email(input.lockedOwner, 'Lock owner email');
+  // A lock email that's just the owner email is redundant: the lock follows the owner email anyway.
+  if (n.podcast_locked_owner && n.podcast_locked_owner === r.itunes_owner_email) n.podcast_locked_owner = null;
   if (has('medium')) n.podcast_medium = oneOf(input.medium, 'Medium', MEDIUMS);
 
   await q.query(
@@ -228,13 +234,14 @@ export async function updateShow(q: Queryable, config: Config, podcastId: string
             itunes_author = $8, itunes_owner_name = $9, itunes_owner_email = $10, itunes_categories = $11,
             itunes_explicit = $12, itunes_type = $13, itunes_complete = $14, itunes_block = $15,
             itunes_new_feed_url = $16, podcast_locked = $17, podcast_locked_owner = $18, podcast_medium = $19,
-            updated_at = now()
+            hide_owner_email = $20, updated_at = now()
       WHERE id = $1`,
     [
       podcastId, n.title, n.description, n.link, n.language, n.copyright, n.image_url,
       n.itunes_author, n.itunes_owner_name, n.itunes_owner_email, JSON.stringify(n.itunes_categories ?? []),
       n.itunes_explicit, n.itunes_type, n.itunes_complete, n.itunes_block,
       n.itunes_new_feed_url, n.podcast_locked, n.podcast_locked_owner, n.podcast_medium,
+      n.hide_owner_email,
     ],
   );
 

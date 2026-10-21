@@ -2055,7 +2055,13 @@ async function tabDetails(p, canEdit, reload) {
   medium.value = s.medium ?? '';
   const locked = h('select', null, h('option', { value: '' }, 'Not set'), h('option', { value: 'true' }, 'Locked: other hosts may not import this feed'), h('option', { value: 'false' }, 'Unlocked'));
   locked.value = s.locked === null ? '' : String(s.locked);
-  const lockedOwner = h('input', { type: 'email', value: s.lockedOwner ?? '', placeholder: 'Defaults to the owner email' });
+  const hideEmail = h('input', { type: 'checkbox', role: 'switch', checked: s.hideOwnerEmail });
+  // An older lock email (usually from the previous host) that differs from the owner email.
+  let clearLockOwner = false;
+  const oldLockOwner = s.lockedOwner && s.lockedOwner !== s.ownerEmail
+    ? h('p', { class: 'hint' }, `The lock names ${s.lockedOwner}, saved from before. `,
+      h('a', { href: '#', onclick: (e) => { e.preventDefault(); clearLockOwner = true; e.target.parentElement.textContent = 'The lock will name the owner email when you save.'; } }, 'Use the owner email instead'))
+    : null;
   const complete = h('input', { type: 'checkbox', checked: s.complete });
   const block = h('input', { type: 'checkbox', checked: s.block });
   const newFeed = h('input', { type: 'url', value: s.newFeedUrl ?? '', placeholder: 'Only when moving this show to another host' });
@@ -2094,9 +2100,10 @@ async function tabDetails(p, canEdit, reload) {
             categories: cats.map((c) => c.get()).filter(Boolean),
             ownerName: ownerName.value, ownerEmail: ownerEmail.value, link: link.value || null, copyright: copyright.value,
             type: type.value, explicit: explicit.checked, medium: medium.value || null,
-            locked: locked.value === '' ? null : locked.value === 'true', lockedOwner: lockedOwner.value || null,
+            locked: locked.value === '' ? null : locked.value === 'true', hideOwnerEmail: hideEmail.checked,
             complete: complete.checked, block: block.checked, newFeedUrl: newFeed.value || null, otherTags: other.value,
           };
+          if (clearLockOwner) body.lockedOwner = null;
           if (image !== undefined) body.image = image;
           if (peopleChanged) {
             if (people.some((x) => !x.name.trim())) throw new Error('Every person needs a name.');
@@ -2129,6 +2136,8 @@ async function tabDetails(p, canEdit, reload) {
       h('div', { class: 'row' }, field('Author', author), h('div', { class: 'field' }, h('label', { for: (lang.id = 'show-lang') }, 'Language'), lang, langList)),
       h('div', { class: 'row' }, field('Category', cats[0].el), field('Second category', cats[1].el), field('Third category', cats[2].el)),
       h('div', { class: 'row' }, field('Owner name', ownerName), field('Owner email', ownerEmail)),
+      h('label', { class: 'switch', style: 'margin:4px 0 4px' }, hideEmail, 'Hide owner email in the feed'),
+      h('p', { class: 'hint', style: 'margin-bottom:16px' }, 'Keeps the email out of your public feed, away from spam. Apple, Spotify and other hosts email this address to confirm you own the show, so turn hiding off while you claim the show somewhere or move it to another host.'),
       h('div', { class: 'row' }, field('Website', link), field('Copyright', copyright)),
       h('div', { class: 'row' }, field('Show type', type), h('div', { class: 'field' }, h('label', { class: 'check' }, explicit, 'Explicit content')))),
     h('section', { class: 'panel' },
@@ -2158,7 +2167,8 @@ async function tabDetails(p, canEdit, reload) {
     h('section', { class: 'panel' }, h('details', { open: s.otherTags ? true : null },
       h('summary', null, 'More tags and options'),
       h('div', { style: 'margin-top:16px' },
-        h('div', { class: 'row' }, field('Medium', medium), field('Locked', locked), field('Lock owner email', lockedOwner)),
+        h('div', { class: 'row' }, field('Medium', medium), field('Locked', locked, 'The lock names the owner email, unless it’s hidden.')),
+        oldLockOwner,
         h('label', { class: 'check' }, complete, 'This show is finished: no more episodes'),
         h('label', { class: 'check', style: 'margin-top:8px' }, block, 'Hide this show from Apple Podcasts'),
         h('div', { class: 'field', style: 'margin-top:16px' },

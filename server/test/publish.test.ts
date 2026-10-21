@@ -471,6 +471,31 @@ describe('episodes', () => {
     assert.match(after, /podcast:value/);
   });
 
+  test('owner email: the lock names it, and hiding it keeps it out of the feed', async () => {
+    let r = await alice.put(`/api/podcasts/${show}/details`, { ownerName: 'Alice Grower', ownerEmail: 'alice@garden.example', locked: true });
+    assert.equal(r.status, 200, r.text);
+    let channel = (await feed()).split('<item>')[0]!;
+    assert.match(channel, /<itunes:email>alice@garden.example<\/itunes:email>/);
+    assert.match(channel, /<podcast:locked owner="alice@garden.example">yes<\/podcast:locked>/, 'the lock follows the owner email');
+
+    r = await alice.put(`/api/podcasts/${show}/details`, { hideOwnerEmail: true });
+    assert.equal(r.json.show.hideOwnerEmail, true);
+    assert.equal(r.json.show.ownerEmail, 'alice@garden.example', 'still saved, just not published');
+    channel = (await feed()).split('<item>')[0]!;
+    assert.doesNotMatch(channel, /alice@garden.example/);
+    assert.match(channel, /<itunes:owner>\s*<itunes:name>Alice Grower<\/itunes:name>\s*<\/itunes:owner>/);
+    assert.match(channel, /<podcast:locked>yes<\/podcast:locked>/);
+
+    // A lock email saved from an old host keeps working until it's cleared.
+    await db.query(`UPDATE podcasts SET podcast_locked_owner = 'old@oldhost.example' WHERE id = $1`, [show]);
+    r = await alice.put(`/api/podcasts/${show}/details`, { hideOwnerEmail: false });
+    assert.equal(r.json.show.lockedOwner, 'old@oldhost.example');
+    assert.match((await feed()).split('<item>')[0]!, /<podcast:locked owner="old@oldhost.example">yes<\/podcast:locked>/);
+    r = await alice.put(`/api/podcasts/${show}/details`, { lockedOwner: null, locked: null });
+    assert.equal(r.json.show.lockedOwner, null);
+    assert.doesNotMatch((await feed()).split('<item>')[0]!, /podcast:locked/, 'not set: no lock tag at all');
+  });
+
   test('those fields are checked before saving', async () => {
     const bad: [Record<string, unknown>, RegExp][] = [
       [{ value: [{ type: 'lightning', method: 'keysend', recipients: [] }] }, /at least one recipient/],
