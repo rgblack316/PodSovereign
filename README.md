@@ -82,7 +82,9 @@ Backup files are named `podsovereign-db-<date>-<time>.sql.gz` (UTC), plus `.enc`
    `cd /opt/podsovereign && gunzip -c backup.sql.gz | sudo docker compose exec -T db psql -U feedhost -d feedhost`
 3. `sudo docker compose restart app`
 
-Keep a copy of `/opt/podsovereign/.env` too; it holds the database password and your settings.
+Keep copies of `/opt/podsovereign/.env` (the database password and settings) and `/opt/podsovereign/data/secret.key` too.
+
+**Saved passwords and API keys** (storage keys, the SMTP password, the Resend key, the backup passphrase) are encrypted in the database with the key in `data/secret.key`, which the app creates on first start. A database backup on its own can't reveal them. To restore onto another server, copy `secret.key` into its `data/` folder before starting the app; without it everything else restores, but you'll need to enter those keys again in Site settings. (Advanced: set `SECRET_KEY` in `.env` to keep the key there instead; it must stay the same once set.)
 
 ## Day to day (in `/opt/podsovereign`)
 

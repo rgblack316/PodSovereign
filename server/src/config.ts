@@ -1,3 +1,4 @@
+import path from 'node:path';
 export interface Config {
   port: number;
   /** Interface to listen on. 127.0.0.1 = reachable only through the tunnel / local proxy. */
@@ -42,6 +43,8 @@ export interface Config {
   mail: import('./mail/mailer.js').MailSettings | null;
   /** Resend API base URL (overridable for tests). */
   resendApiUrl: string;
+  /** Key that encrypts saved secrets: SECRET_KEY, else this file (created on first start). */
+  secretKeyFile: string;
   /** OpenStreetMap place search used by the Location lookup. */
   nominatimUrl: string;
   /** Hostnames this site used before a base-URL change; requests for them are 301-redirected. */
@@ -89,6 +92,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     requireVerification: true,
     mail: null,
     resendApiUrl: env.RESEND_API_URL ?? 'https://api.resend.com',
+    secretKeyFile: env.SECRET_KEY_FILE ?? path.join(path.dirname(env.MEDIA_DIR ?? '/var/lib/podsovereign/media'), 'secret.key'),
     nominatimUrl: env.NOMINATIM_URL ?? 'https://nominatim.openstreetmap.org/',
     previousHosts: [],
     envDefaults: {

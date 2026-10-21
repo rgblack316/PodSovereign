@@ -7,6 +7,10 @@ import type { Config } from '../../src/config.js';
 import type { Db } from '../../src/db/db.js';
 import { migrate } from '../../src/db/migrate.js';
 import { freshDatabase } from './pgwire.js';
+import { setSecretKey } from '../../src/crypto/secrets.js';
+
+// Every test encrypts saved secrets with this key, as the server does with its own.
+setSecretKey('test-secret-key-0123456789abcdef0123456789abcdef');
 
 export const FIXTURE = readFileSync(new URL('../fixtures/full-feed.xml', import.meta.url), 'utf8');
 const SCRATCH = fileURLToPath(new URL('../../.scratch/', import.meta.url));
@@ -53,6 +57,7 @@ export function testConfig(over: Partial<Config> = {}): Config {
     mail: null,
     resendApiUrl: 'http://127.0.0.1:1',
     nominatimUrl: 'http://127.0.0.1:1/',
+    secretKeyFile: '',
     previousHosts: [],
     ...over,
   };

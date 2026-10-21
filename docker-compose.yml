@@ -39,6 +39,8 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
       SITE_NAME: ${SITE_NAME:-PodSovereign}
       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
+      # Optional. Without it, the key that encrypts saved passwords and API keys is kept in data/secret.key.
+      SECRET_KEY: ${SECRET_KEY:-}
     volumes:
       # Copied media and the uploaded logo/favicon (on the host, easy to back up).
       - ${FEEDHOST_DATA_DIR:-./data}:/data

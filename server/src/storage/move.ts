@@ -16,6 +16,7 @@ import { maybeOne, one, type Db } from '../db/db.js';
 import { loadSiteSettings, mediaBaseFor, rewriteChapterFiles, rewriteMediaBase } from '../site/settings.js';
 import { providerById, type StorageSettings } from './providers.js';
 import { createStore, type StorageState } from './store.js';
+import { seal, sealState, unsealState } from '../crypto/secrets.js';
 
 export class MoveError extends Error {}
 
@@ -61,7 +62,7 @@ export async function changeStorage(db: Db, config: Config, to: StorageState, us
     await db.tx(async (q) => {
       await q.query(
         `UPDATE site_settings SET storage_provider = $1, storage_settings = $2, storage_secret = $3, updated_at = now() WHERE id`,
-        [to.provider, JSON.stringify(to.settings), to.secret],
+        [to.provider, JSON.stringify(to.settings), seal(to.secret)],
       );
       if (newBase !== oldBase) {
         await rewriteMediaBase(q, oldBase, newBase);
@@ -78,7 +79,7 @@ export async function changeStorage(db: Db, config: Config, to: StorageState, us
   const move = await one<MoveRow>(
     db,
     `INSERT INTO storage_moves (from_state, to_state, requested_by) VALUES ($1, $2, $3) RETURNING *`,
-    [JSON.stringify(from), JSON.stringify(to), userId],
+    [JSON.stringify(sealState(from)), JSON.stringify(sealState(to)), userId],
   );
   return { switched: false, move };
 }
@@ -108,8 +109,8 @@ interface FileRow {
 
 export async function runMove(deps: { db: Db; config: Config; log?: (m: string) => void }, move: MoveRow): Promise<void> {
   const { db, config } = deps;
-  const from = move.from_state;
-  const to = move.to_state;
+  const from = unsealState(move.from_state, 'the old media storage key');
+  const to = unsealState(move.to_state, 'the new media storage key');
   config.storageMoveFrom = from;
   const target = createStore(config, to);
   const source = createStore(config, from);
@@ -166,7 +167,7 @@ export async function runMove(deps: { db: Db; config: Config; log?: (m: string) 
     await db.tx(async (q) => {
       await q.query(
         `UPDATE site_settings SET storage_provider = $1, storage_settings = $2, storage_secret = $3, updated_at = now() WHERE id`,
-        [to.provider, JSON.stringify(to.settings), to.secret],
+        [to.provider, JSON.stringify(to.settings), seal(to.secret)],
       );
       if (newBase !== oldBase) await rewriteMediaBase(q, oldBase, newBase);
       await q.query(`UPDATE podcasts SET feed_cache_xml = NULL, feed_cache_etag = NULL`);
@@ -185,6 +186,12 @@ export async function runMove(deps: { db: Db; config: Config; log?: (m: string) 
     deps.log?.(`storage move ${move.id} failed: ${(e as Error).message}`);
   } finally {
     config.storageMoveFrom = null;
+    // The keys aren't needed once the move is over.
+    await db.query(
+      `UPDATE storage_moves SET from_state = jsonb_set(from_state::jsonb, '{secret}', 'null')::json,
+                                to_state = jsonb_set(to_state::jsonb, '{secret}', 'null')::json WHERE id = $1`,
+      [move.id],
+    ).catch(() => {});
   }
 }
 

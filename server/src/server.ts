@@ -12,6 +12,7 @@ import { startImportWorker } from './import/importer.js';
 import { cleanupUploads } from './media/uploads.js';
 import { startBackupWorker } from './backup/backups.js';
 import { startPodpingWorker } from './podping/podping.js';
+import { encryptStoredSecrets, loadSecretKey } from './crypto/secrets.js';
 
 const log = (m: string) => console.log(`${new Date().toISOString()} ${m}`);
 
@@ -19,6 +20,9 @@ async function main() {
   const config = loadConfig();
   const db = createPgDb(config.databaseUrl);
   await migrate(db, log);
+  // Saved passwords and API keys are encrypted with a key kept outside the database.
+  await loadSecretKey(process.env.SECRET_KEY, config.secretKeyFile, log);
+  await encryptStoredSecrets(db, log);
   // Admin-panel site settings override the environment.
   await loadSiteSettings(db, config);
 

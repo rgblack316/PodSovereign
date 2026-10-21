@@ -47,15 +47,14 @@ PodSovereign doesn't stream today. Live shows point at an outside stream (Icecas
 **Hosting caveat:** Cloudflare's terms prohibit streaming video through its CDN and Tunnel hostnames on Free, Pro and Business plans, and restrict large-file traffic. A streaming server would need a different path, such as a separate DNS-only subdomain, Cloudflare Stream, or another provider.
 
 ## Security and running costs
-- [ ] Encrypt saved secrets at rest: storage provider keys, SMTP password, Resend key (today they're stored in the database as-is)
 - [ ] Storage limits per account or per show, with a usage display
-- [ ] Self-host the dashboard font instead of loading it from Google Fonts
 
 ## Installs and updates
 - [ ] Commit a `package-lock.json` so every Docker build uses the same dependency versions
 - [ ] Publish a prebuilt app image on GitHub Container Registry, so installs and updates skip the local build (seconds instead of minutes)
 
 ## Recently completed
+- Saved passwords and API keys encrypted in the database; the dashboard font is served from your own server (no Google Fonts)
 - Database backups from the admin panel: instant download, scheduled backups by email or to any storage provider, optional encryption
 - Forms for value, funding, podroll, update frequency, license and text records; people and locations
 - Show page tabs: Overview (hides 7 days after setup), Show details, Episodes (with live shows), Settings (Podping, stats prefixes, team)

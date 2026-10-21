@@ -41,6 +41,7 @@ import { lookupFeed } from '../publish/tag-fields.js';
 import { BackupError, backupView, finishRun, runBackup, saveBackupSettings, startRun, testBucket } from '../backup/backups.js';
 import { backupFileName, dumpStream, encryptStream, pgDumpVersion } from '../backup/dump.js';
 import { changeStorage, latestMove, MoveError } from '../storage/move.js';
+import { unseal } from '../crypto/secrets.js';
 import { PROVIDERS, StorageConfigError, validateSettings, type StorageSettings } from '../storage/providers.js';
 import { localPath, storeFor, testConnection, type StorageState } from '../storage/store.js';
 import {
@@ -880,7 +881,7 @@ export function createApp(deps: AppDeps) {
   router.get('/api/admin/backups/download', async (ctx) => {
     const admin = await requireAdmin(ctx);
     const passphrase = ctx.url.searchParams.get('encrypt') === '1'
-      ? (await maybeOne<{ p: string | null }>(db, `SELECT backup_passphrase AS p FROM site_settings WHERE id`))?.p ?? null
+      ? unseal((await maybeOne<{ p: string | null }>(db, `SELECT backup_passphrase AS p FROM site_settings WHERE id`))?.p ?? null, 'the backup passphrase')
       : null;
     if (ctx.url.searchParams.get('encrypt') === '1' && !passphrase) throw new HttpError(400, 'Set a backup passphrase first');
     const fileName = backupFileName(new Date(), !!passphrase);

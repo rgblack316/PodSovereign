@@ -11,6 +11,7 @@ const TYPES: Record<string, string> = {
   svg: 'image/svg+xml',
   png: 'image/png',
   ico: 'image/x-icon',
+  woff2: 'font/woff2',
 };
 
 /** Dashboard files, read once at startup. Only these exact names can be served. */
@@ -21,14 +22,14 @@ for (const f of readdirSync(WEB_DIR)) {
 }
 
 /**
- * Content Security Policy: only our own scripts and styles (plus Google Fonts);
+ * Content Security Policy: only our own scripts, styles and fonts (nothing from Google or other CDNs);
  * images and audio previews may come from anywhere over https, since files can be hosted elsewhere.
  */
 const CSP = [
   "default-src 'self'",
   "script-src 'self'",
-  "style-src 'self' https://fonts.googleapis.com",
-  "font-src https://fonts.gstatic.com",
+  "style-src 'self'",
+  "font-src 'self'",
   "img-src 'self' https: data:",
   "media-src 'self' https:",
   "connect-src 'self'",
@@ -44,7 +45,7 @@ export async function serveStatic(ctx: Ctx, name: string): Promise<void> {
     'Content-Type': f.type,
     'Content-Security-Policy': CSP,
     'X-Frame-Options': 'DENY',
-    'Cache-Control': name === 'index.html' ? 'no-cache' : 'public, max-age=300',
+    'Cache-Control': name === 'index.html' ? 'no-cache' : name.endsWith('.woff2') ? 'public, max-age=604800' : 'public, max-age=300',
   });
   ctx.res.end(ctx.req.method === 'HEAD' ? undefined : f.body);
 }

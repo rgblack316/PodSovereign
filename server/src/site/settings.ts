@@ -9,6 +9,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Config } from '../config.js';
 import { maybeOne, type Db, type Queryable } from '../db/db.js';
+import { seal, unseal } from '../crypto/secrets.js';
 import { storeFor } from '../storage/store.js';
 import { mediaPrefix } from '../urls.js';
 
@@ -64,16 +65,17 @@ export function applyRow(config: Config, row: Row): void {
   config.storage = {
     provider: row.storage_provider || 'local',
     settings: row.storage_settings ?? {},
-    secret: row.storage_secret,
+    secret: unseal(row.storage_secret, 'the media storage key'),
   };
   config.allowRegistration = row.allow_registration ?? env.allowRegistration;
   config.cookieSecure = env.cookieSecure ?? config.publicBaseUrl.startsWith('https://');
   config.previousHosts = row.previous_hosts ?? [];
   config.requireVerification = row.require_verification ?? true;
+  const resendKey = unseal(row.resend_api_key, 'the Resend API key');
   config.mail =
     row.mail_provider === 'resend'
-      ? row.resend_api_key && row.smtp_from
-        ? { provider: 'resend', apiKey: row.resend_api_key, from: row.smtp_from, apiUrl: config.resendApiUrl }
+      ? resendKey && row.smtp_from
+        ? { provider: 'resend', apiKey: resendKey, from: row.smtp_from, apiUrl: config.resendApiUrl }
         : null
       : row.smtp_host && row.smtp_from
         ? {
@@ -83,7 +85,7 @@ export function applyRow(config: Config, row: Row): void {
               port: row.smtp_port ?? (row.smtp_security === 'tls' ? 465 : 587),
               security: row.smtp_security ?? 'starttls',
               user: row.smtp_user,
-              password: row.smtp_password,
+              password: unseal(row.smtp_password, 'the SMTP password'),
               from: row.smtp_from,
             },
           }
@@ -210,7 +212,7 @@ export async function saveSiteSettings(db: Db, config: Config, input: SettingsIn
       const row = await getRow(db);
       if (key && !/^re_[A-Za-z0-9_-]{8,}$/.test(key)) throw new SettingsError('A Resend API key starts with re_');
       if (!key && !row.resend_api_key) throw new SettingsError('Enter your Resend API key');
-      if (key) set('resend_api_key', key);
+      if (key) set('resend_api_key', seal(key));
       set('smtp_from', from);
       set('mail_provider', 'resend');
     }
@@ -226,7 +228,7 @@ export async function saveSiteSettings(db: Db, config: Config, input: SettingsIn
       set('smtp_port', m.port);
       set('smtp_security', m.security);
       set('smtp_user', m.user);
-      if (m.password !== undefined) set('smtp_password', m.password);
+      if (m.password !== undefined) set('smtp_password', seal(m.password));
       set('smtp_from', m.from);
     }
   }

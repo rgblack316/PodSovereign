@@ -3291,7 +3291,7 @@ function backupsPanel(b) {
     runMsg,
     h('h3', { class: 'table-title', style: 'padding-left:0' }, 'Recent backups'),
     history,
-    h('p', { class: 'hint', style: 'margin-top:12px' }, 'To restore, see “Backups and restore” in the README.'),
+    h('p', { class: 'hint', style: 'margin-top:12px' }, 'To restore, see “Backups and restore” in the README. Saved passwords and API keys in a backup are encrypted with data/secret.key, so keep a copy of that file too.'),
   ].filter(Boolean));
   return panel;
 }

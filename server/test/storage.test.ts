@@ -333,6 +333,8 @@ describe('end to end: settings, imports to remote storage, moving media', () => 
   });
 
   test('the move copies every file, switches over, rewrites links and frees local space', async () => {
+    const queued = (await db.query<{ to_state: { secret: string } }>(`SELECT to_state FROM storage_moves WHERE status = 'queued'`)).rows[0]!;
+    assert.match(queued.to_state.secret, /^enc:v1:/, 'the queued move keeps the new key encrypted');
     const move = (await claimMove(db))!;
     await runMove({ db, config }, move);
     const st = (await api('GET', '/api/admin/storage')).json;
@@ -342,6 +344,9 @@ describe('end to end: settings, imports to remote storage, moving media', () => 
     assert.equal(st.current.provider, 'other');
     assert.equal(st.current.secretSet, true);
     assert.ok(!JSON.stringify(st).includes(S3_CREDS.secret), 'secret never sent back');
+    const done = (await db.query<{ from_state: { secret: unknown }; to_state: { secret: unknown } }>(`SELECT from_state, to_state FROM storage_moves WHERE id = $1`, [move.id])).rows[0]!;
+    assert.equal(done.to_state.secret, null, 'a finished move forgets the keys');
+    assert.match((await db.query<{ s: string }>(`SELECT storage_secret AS s FROM site_settings WHERE id`)).rows[0]!.s, /^enc:v1:/);
 
     const { rows } = await db.query<{ storage_provider: string; storage_path: string | null; storage_key: string }>(
       `SELECT storage_provider, storage_path, storage_key FROM media_files WHERE status = 'done'`,

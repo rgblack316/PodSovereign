@@ -9,6 +9,7 @@ import { sendEmail } from '../mail/mailer.js';
 import { PROVIDERS, providerById, toClient, type FieldDef, type RemoteClient, type StorageSettings } from '../storage/providers.js';
 import { S3Client } from '../storage/s3.js';
 import { backupFileName, dumpBuffer, encryptOpenSsl } from './dump.js';
+import { seal, unseal } from '../crypto/secrets.js';
 
 export class BackupError extends Error {
   constructor(message: string, readonly status = 400) {
@@ -36,10 +37,16 @@ interface Row {
   backup_next_at: Date | null;
 }
 
-const getRow = (q: Queryable) =>
-  one<Row>(q, `SELECT backup_frequency, backup_hour, backup_weekday, backup_timezone, backup_email, backup_email_to,
+const getRow = async (q: Queryable): Promise<Row> => {
+  const r = await one<Row>(q, `SELECT backup_frequency, backup_hour, backup_weekday, backup_timezone, backup_email, backup_email_to,
                       backup_storage_provider, backup_storage, backup_storage_secret, backup_keep, backup_passphrase, backup_next_at
                  FROM site_settings WHERE id`);
+  return {
+    ...r,
+    backup_storage_secret: unseal(r.backup_storage_secret, 'the backup storage key'),
+    backup_passphrase: unseal(r.backup_passphrase, 'the backup passphrase'),
+  };
+};
 
 /** Provider fields that apply to backups: everything except making files public. */
 const backupFields = (fields: FieldDef[]) => fields.filter((f) => f.key !== 'publicRead');
@@ -235,7 +242,7 @@ export async function saveBackupSettings(db: Db, input: BackupInput, now = new D
               backup_email = $5, backup_email_to = $6, backup_storage_provider = $7, backup_storage = $8, backup_storage_secret = $9,
               backup_keep = $10, backup_passphrase = $11, backup_next_at = $12, updated_at = now() WHERE id`,
       [n.backup_frequency, n.backup_hour, n.backup_weekday, n.backup_timezone, n.backup_email, n.backup_email_to,
-        n.backup_storage_provider, JSON.stringify(n.backup_storage ?? {}), n.backup_storage_secret, n.backup_keep, n.backup_passphrase, next?.toISOString() ?? null],
+        n.backup_storage_provider, JSON.stringify(n.backup_storage ?? {}), seal(n.backup_storage_secret), n.backup_keep, seal(n.backup_passphrase), next?.toISOString() ?? null],
     );
   });
 }
@@ -339,7 +346,7 @@ export async function runBackup(db: Db, config: Config, trigger: 'manual' | 'sch
                 '',
                 encrypted
                   ? 'It is encrypted with your backup passphrase. To decrypt it:\n  openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -in FILE.enc -out FILE'
-                  : 'It isn’t encrypted. It contains your shows, accounts (passwords are hashed) and saved service keys, so keep it somewhere private.',
+                  : 'It isn’t encrypted. It contains your shows and accounts (passwords are hashed; saved service keys are encrypted), so keep it somewhere private.',
                 '',
                 'To restore it, see "Backups and restore" in the README.',
                 '',
