@@ -1,25 +1,33 @@
 # podcast-feed-import-and-host
 
-Self-hosted podcast feed host. It imports an existing podcast RSS feed (or starts a new show), replicates it with full iTunes and Podcasting 2.0 tag support, and serves it from your own server (Ubuntu Server). Each podcaster has their own login and can only see their own shows.
+Self-hosted podcast hosting. Import an existing podcast's RSS feed, or start a new show, and serve it from your own server with full iTunes and Podcasting 2.0 tag support. Each podcaster has their own login and sees only their own shows and the shows they've been added to.
 
 Clone it and run your own: the site's name, logo, favicon and web address are all set from the admin panel.
 
-## Status
+## Features
 
-- [x] Feed parser and builder (lossless round trip of all tags)
-- [x] Stats prefixes (OP3, Podtrac, Podscribe, Magellan AI, Blubrry, custom), with detection on import
-- [x] PostgreSQL schema
-- [x] Import worker (media download and URL rewrite, resumable, SSRF-guarded)
-- [x] Accounts, sessions and per-user access: show teams (owner, editors, viewers, ownership hand-over), admin account management and deletion
-- [x] JSON API and public feed endpoint
-- [x] Podping through the Podcast Index hub, no key needed (per-show switch, off after import)
-- [x] Live show (`podcast:liveItem`) management: pending → live → ended, with live and liveEnd Podpings
-- [x] Media storage on this server or a provider, with connection test and background moves. Cloudflare R2 is in production use; B2, S3, Wasabi, Spaces, Bunny and other S3-compatible are available but untested (issues and pull requests welcome)
-- [x] Admin Site settings: name, logo, favicon, web and media address (stored links rewritten, old hostname redirected), sign-ups
-- [x] Web dashboard: shows, move checklist with 301 check, import progress, stats prefixes, Podping, live shows, people
-- [x] Ownership verification on import: podcast:txt tag or a code emailed to the feed's owner (via Resend or SMTP), admin skip
-- [x] Publishing: start new shows, publish/schedule/edit episodes, resumable uploads (audio, art, transcripts, chapters), show details with an Apple/Spotify checklist
-- [x] Docker Compose deployment with one-line install and update scripts (optional Cloudflare Tunnel container)
+**Moving a show here**
+- Import from any RSS feed, with ownership verification (a `podcast:txt` tag or a code emailed to the feed's owner; admins can skip it)
+- Every file is copied: audio, video, artwork, transcripts, chapters, people images, and images inside show notes and chapter files
+- Lossless: every tag round-trips, including ones the app doesn't know
+- A move checklist: media copied, a check that the old host's 301 redirect is in place, then Podping
+
+**Publishing**
+- Start new shows; publish, schedule or draft episodes; edit any episode, imported or new
+- Resumable uploads for audio, video, artwork, transcripts and chapters (large files are fine, even through Cloudflare Tunnel)
+- Episode length and artwork size read from the files; an Apple Podcasts / Spotify readiness checklist
+- Forms for Podcasting 2.0 tags: people, locations (with map lookup), value for value (Lightning splits, per show or episode), support links, recommended shows (podroll), schedule, license, text records. Anything else is editable as XML
+- Live shows (`podcast:liveItem`): schedule, go live, end
+- Stats prefixes (OP3, Podtrac, Podscribe, Magellan AI, Blubrry, custom), detected on import
+- Podping through the Podcast Index hub (no key needed), with a switch per show
+
+**Running it**
+- Show teams: owner, editors and viewers; hand ownership over
+- Admin panel: site name, logo, favicon, web and media address (links rewritten and old addresses redirected), sign-ups, email (Resend or SMTP), people and administrators
+- Media on this server or a storage provider: Cloudflare R2 is in production use; Backblaze B2, Amazon S3, Wasabi, DigitalOcean Spaces, Bunny and other S3-compatible services are available but untested (see [Reporting problems](#reporting-problems))
+- Docker Compose, a one-line installer, an update script with automatic database backups, and an optional Cloudflare Tunnel container
+
+Built with Node.js 22 and PostgreSQL 16; the dashboard is plain JavaScript with no build step.
 
 ## Install
 
@@ -76,10 +84,17 @@ cd /opt/feedhost && sudo docker compose exec app node --import tsx src/cli/reset
 
 With no email it resets the only admin account (with more than one, it lists the accounts so you can name one). It prints a new random password and signs that account out everywhere. Sign in with it, then choose your own under **Account**.
 
-## URLs
+## Addresses
 
-Public URLs: `https://podcasts.johnscreekstudios.com/<show>/feed.xml`, with media under `/<show>/media/`, served through a Cloudflare Tunnel.
+Each show's feed is at `https://<your web address>/<show>/feed.xml`, with its media under `/<show>/media/` (or at your storage provider's address). For example, `https://podcasts.johnscreekstudios.com/<show>/feed.xml`, served through a Cloudflare Tunnel with media on Cloudflare R2.
 
-The first install builds the app image on your server; it downloads Node and npm packages at that point.
+The first install builds the app image on your server, downloading Node.js and npm packages at that point.
 
-See [`server/README.md`](server/README.md) for setup, including the Cloudflare Tunnel guide, and [`ROADMAP.md`](ROADMAP.md) for what's next, including the CDN revisit.
+## More
+
+- [`server/README.md`](server/README.md): settings, the Cloudflare Tunnel guide, media storage providers, publishing, Podping, the API and how it all works
+- [`ROADMAP.md`](ROADMAP.md): what's planned next
+
+## Reporting problems
+
+Found a bug, or tried a storage provider that doesn't work? Please [open an issue](https://github.com/rgblack316/podcast-feed-import-and-host/issues) describing what happened, or send a pull request with a fix.

@@ -33,7 +33,7 @@ Admins can change these from the dashboard. Saved values override the environmen
 | Site name | Shown on the sign-in page, in the sidebar and in browser tabs (default "FeedHost") |
 | Logo · Favicon | PNG, JPEG, WebP or SVG (favicon: PNG, SVG or ICO), up to 1 MB. Stored in `SITE_DIR`. Uploaded SVGs are served sandboxed |
 | Web address | The public address, e.g. `https://podcasts.johnscreekstudios.com`. Must be a bare address (no path) |
-| Media address | Optional. Episode files are served from here instead (for a CDN later) |
+| Media address | Optional. Episode files are served from here instead (a CDN in front of this server). With a storage provider, its public address is used |
 | Sign-ups | Whether anyone can create an account |
 
 ## Ownership verification
@@ -86,13 +86,13 @@ Files are laid out by their URL path everywhere: `<show>/media/<type>/<file>`, o
 
 The dashboard is served at `/`. It's plain JavaScript and CSS in `web/`, with no build step.
 
-- **Shows:** each show opens with a status strip: feed live, media copied, old feed redirecting here, Podping, and on air.
-- **Finish moving this show:** a checklist that confirms the media is copied, checks for you whether the old host's 301 redirect is in place (and whether it's permanent), and walks you to turning on Podping.
-- **Episodes:** publish new episodes and edit any episode, imported or new (see [Publishing](#publishing)).
-- **Show details:** artwork, title, description, categories, owner and every other channel tag, with a checklist of what Apple Podcasts and Spotify still need.
-- **Tabs: Overview, Show details, Episodes, Settings.** Overview (the move checklist, or a new show's directory checklist) hides 7 days after every step is done, with a notice saying when; it comes back if a step stops being done. Episodes also holds the live shows (scheduled or on-air ones at the top). Settings holds Podping, Stats prefixes (checkboxes, ID fields where needed, order arrows, link preview), Team, the feed address and show facts, and Delete.
+- **Each show** opens with a status strip (feed live, media copied, old feed redirecting here, Podping, on air) and four tabs:
+  - **Overview:** while a show is being set up. For an import, the move checklist: media copied, a check that the old host's 301 redirect is in place (and permanent), then Podping. For a new show, what Apple Podcasts and Spotify still need. It hides 7 days after every step is done, with a notice saying when, and comes back if a step stops being done.
+  - **Show details:** artwork, title, description, categories, owner, people, locations, value for value, support links, recommended shows, schedule, license and every other channel tag.
+  - **Episodes:** the episode list (10, 25, 50 or all per page) and the live shows (scheduled or on-air ones at the top). Publish new episodes and edit any episode, imported or new (see [Publishing](#publishing)).
+  - **Settings:** Podping, stats prefixes (checkboxes, ID fields where needed, order arrows, link preview), the team, the feed address and show facts, and (owners) deleting the show.
+- **Team:** the owner adds people by email as **editors** (episodes, show details, prefixes, Podping, live shows) or **viewers** (read only), changes roles, removes people, or hands ownership to a team member (staying on as an editor). Members can leave a show.
 - **Import a show,** with live progress and the import notes, or **Start a new show** from scratch.
-- **Team** tab on each show: the owner adds people by email as **editors** (episodes, show details, prefixes, Podping, live) or **viewers** (read only), changes roles, removes people, or hands ownership to a team member (staying on as an editor). Members can leave a show.
 - **Account** (change password) and **People** (admins): add accounts, see each account's shows and roles, make or remove administrators (there's always at least one), and delete accounts. Deleting an account that owns shows asks whether to give those shows to someone else or delete them.
 
 Security: the pages are served with a strict Content Security Policy (scripts only from this server), all feed content is shown as plain text, and every change goes through the same API checks as before.
@@ -287,7 +287,7 @@ If you don't have access to a podcast, you get **404**, so the existence of othe
 ## Tests
 
 ```bash
-npm test     # 144 tests: feed engine, import worker, API and isolation
+npm test     # about 200 tests: feed engine, import, publishing, uploads, API, access, storage, Podping
 ```
 
 `npm run demo` starts a throwaway demo (two imported shows, one on air) at `http://127.0.0.1:8099`, signed in as `randy@johnscreekstudios.com` with the password `demo password 123`. It uses the same local test database as the tests below.
@@ -308,7 +308,11 @@ The import and API tests need a local PostgreSQL that allows trust auth for the 
 | Media storage | `src/storage/`: local disk, S3-compatible (SigV4) and Bunny clients, connection test, background moves |
 | Site settings | `src/site/`: branding, web and media address (with link rewrite and old-host redirects), sign-ups |
 | Podping | `src/podping/`: change queue, Podcast Index hub notifier, scheduled-episode announcer |
-| Live | `src/live/`: `podcast:liveItem` create, edit, status changes (with live and liveEnd pings) |
+| Live | `src/live/`: `podcast:liveItem` create, edit, status changes (each announced through Podping) |
+| Publishing | `src/publish/`: new shows, show details, episodes, Podcasting 2.0 tag forms (`tag-fields.ts`), people, locations, categories |
+| Uploads | `src/media/`: chunked resumable uploads, length and image-size detection, cleanup of unused files |
+| Teams | `src/db/team.ts`: show members and roles, ownership hand-over, deleting accounts |
+| Tools | `src/cli/`: `reset-password.ts` (forgotten passwords), `preview.ts` (try the parser on any feed) |
 
 ### Import, step by step
 1. Fetch the feed. Redirects are followed, and private and internal addresses are blocked, even through DNS tricks.
