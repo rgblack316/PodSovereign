@@ -359,6 +359,7 @@ describe('end to end: settings, imports to remote storage, moving media', () => 
     assert.ok(feed.items[0]!.enclosureUrl!.startsWith(`${s3.publicUrl}/local-show/media/audio/`));
     const xml = await (await fetch(`${base}/local-show/feed.xml`)).text();
     assert.ok(xml.includes(`url="${s3.publicUrl}/local-show/media/audio/`));
+    assert.equal((await api('GET', `/api/podcasts/${local}`)).json.podcast.mediaUrl, `${s3.publicUrl}/local-show/media/`, 'show facts list the storage address');
 
     const chapterKey = rows.find((r) => r.storage_key.includes('/chapters/'))!.storage_key;
     const chapters = JSON.parse(s3.objects.get(chapterKey)!.body.toString());

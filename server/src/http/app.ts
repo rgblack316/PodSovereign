@@ -26,7 +26,7 @@ import { cancelImport, checkCode, checkFeed, markVerified, sendCode, VERIFY_EXPI
 import { MailError, sendEmail } from '../mail/mailer.js';
 import { createLiveItem, deleteLiveItem, listLiveItems, LiveError, setLiveStatus, updateLiveItem } from '../live/live.js';
 import { latestPings, queuePing, setShowPodping } from '../podping/podping.js';
-import { feedPath } from '../urls.js';
+import { feedPath, mediaPrefix } from '../urls.js';
 import { checkRedirect, saveRedirectResult } from './redirect-check.js';
 import { addMember, deleteUser, listTeam, removeMember, setAdmin, setRole, TeamError } from '../db/team.js';
 import { serveStatic } from './static.js';
@@ -309,6 +309,8 @@ export function createApp(deps: AppDeps) {
       status: p.status,
       role,
       feedUrl: feedUrl(p.slug),
+      // Where episode files are served from: the CDN or storage provider's address when one is set.
+      mediaUrl: config.mediaBaseUrl + mediaPrefix(p.slug),
       setup: {
         done: setupDone,
         completedAt,

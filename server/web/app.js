@@ -2262,7 +2262,7 @@ async function tabPrefixes(p, canEdit, reload) {
     api('GET', `/api/podcasts/${p.id}/prefixes`),
     api('GET', `/api/podcasts/${p.id}/episodes`),
   ]);
-  const sample = eps.episodes.find((e) => e.enclosure_url)?.enclosure_url ?? `${state.setup.publicBaseUrl}/${p.slug}/media/audio/episode.mp3`;
+  const sample = eps.episodes.find((e) => e.enclosure_url)?.enclosure_url ?? `${p.mediaUrl}audio/episode.mp3`;
 
   // Working copy: every service appears once (custom may appear several times).
   let rows = cfg.services.filter((s) => s.key !== 'custom').map((s) => {
@@ -2695,7 +2695,7 @@ async function feedAndDelete(p) {
       h('p', { class: 'muted' }, 'The feed address can’t be changed once a show is listed, because podcast apps and directories keep it.'),
       h('dl', { class: 'facts' },
         h('dt', null, 'Feed'), h('dd', null, p.feedUrl),
-        h('dt', null, 'Media'), h('dd', null, `${state.setup.publicBaseUrl}/${p.slug}/media/`),
+        h('dt', null, 'Media'), h('dd', null, p.mediaUrl),
         h('dt', null, 'Podcast GUID'), h('dd', null, p.podcastGuid ?? '—'),
         h('dt', null, 'Episodes'), h('dd', null, p.episodeCount),
         p.sourceFeedUrl ? [h('dt', null, 'Imported from'), h('dd', null, p.sourceFeedUrl)] : null,
