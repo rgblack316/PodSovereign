@@ -81,10 +81,20 @@ OLD="$(git rev-parse --short HEAD)"
 NEW="$(git rev-parse --short "origin/$BRANCH")"
 COUNT="$(git rev-list --count "HEAD..origin/$BRANCH")"
 
+# The version the app is actually running (it can lag behind the download if a rebuild failed).
+RUNNING="$(curl -fsS "http://127.0.0.1:$PORT/healthz" 2>/dev/null | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')"
+behind() { [ -z "$RUNNING" ] || { case "$OLD" in "$RUNNING"*) false ;; *) case "$RUNNING" in "$OLD"*) false ;; *) true ;; esac ;; esac; }; }
+
 if [ "$COUNT" -eq 0 ]; then
-  ok "Already up to date (version $OLD)"
-  [ -n "$CHECK" ] && exit 0
-  [ -n "$FORCE" ] || { printf '%sUse --force to rebuild and restart anyway.%s\n' "$dim" "$reset"; exit 0; }
+  if behind; then
+    warn "The download is at version $OLD, but the app is running ${RUNNING:-an unknown version} (a previous update didn't finish rebuilding)."
+    [ -n "$CHECK" ] && exit 0
+    FORCE=1
+  else
+    ok "Already up to date (version $OLD)"
+    [ -n "$CHECK" ] && exit 0
+    [ -n "$FORCE" ] || { printf '%sUse --force to rebuild and restart anyway.%s\n' "$dim" "$reset"; exit 0; }
+  fi
 else
   printf '\n%s%s new change(s)%s, %s → %s:\n' "$bold" "$COUNT" "$reset" "$OLD" "$NEW"
   git --no-pager log --no-merges --format='  • %s' "HEAD..origin/$BRANCH" | head -n 30
@@ -132,7 +142,8 @@ VERSION="$(git rev-parse --short HEAD)"
 env_set FEEDHOST_VERSION "$VERSION"
 
 say "Rebuilding the app…"
-docker compose build --pull app
+docker compose build --pull app \
+  || die "The rebuild failed (the messages above say why), so the app is still running the previous version. Send those messages along when reporting it; running the update again will retry the rebuild."
 say "Restarting…"
 docker compose up -d --remove-orphans
 

@@ -8,6 +8,7 @@ ENV NODE_ENV=production \
 
 # pg_dump for backups from the admin panel. Version 16 matches the database (postgres:16 in docker-compose.yml);
 # Debian's own client is older and refuses to dump a newer server, so it comes from the PostgreSQL repository.
+# (Slim images leave out the man-page folders, and the client's install step fails without them.)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl \
  && install -d /usr/share/postgresql-common/pgdg \
@@ -15,6 +16,7 @@ RUN apt-get update \
  && . /etc/os-release \
  && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
  && apt-get update \
+ && mkdir -p /usr/share/man/man1 /usr/share/man/man7 \
  && apt-get install -y --no-install-recommends postgresql-client-16 \
  && apt-get purge -y curl && apt-get autoremove -y \
  && rm -rf /var/lib/apt/lists/*
