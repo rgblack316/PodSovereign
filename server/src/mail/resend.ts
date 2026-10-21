@@ -31,8 +31,11 @@ export async function sendViaResend(cfg: ResendConfig, mail: Mail): Promise<{ id
         // A retried request never sends the email twice.
         'Idempotency-Key': randomUUID(),
       },
-      body: JSON.stringify({ from: cfg.from, to: [mail.to], subject: mail.subject, text: mail.text }),
-      signal: AbortSignal.timeout(20_000),
+      body: JSON.stringify({
+        from: cfg.from, to: [mail.to], subject: mail.subject, text: mail.text,
+        ...(mail.attachments?.length ? { attachments: mail.attachments.map((a) => ({ filename: a.filename, content: a.content.toString('base64') })) } : {}),
+      }),
+      signal: AbortSignal.timeout(mail.attachments?.length ? 120_000 : 20_000),
     });
   } catch (e) {
     throw new ResendError(`Couldn't reach Resend: ${(e as Error).message}`, 0);

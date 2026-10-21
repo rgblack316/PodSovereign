@@ -2878,7 +2878,7 @@ async function refreshSetup() {
 }
 
 async function viewSite() {
-  const [{ settings: s }, storage] = await Promise.all([api('GET', '/api/admin/site'), api('GET', '/api/admin/storage')]);
+  const [{ settings: s }, storage, backups] = await Promise.all([api('GET', '/api/admin/site'), api('GET', '/api/admin/storage'), api('GET', '/api/admin/backups')]);
   const remoteStorage = storage.current.provider !== 'local';
 
   // Branding: name + logo + favicon
@@ -3035,10 +3035,260 @@ async function viewSite() {
     addrForm,
     storagePanel(storage),
     verifyPanel(s),
+    backupsPanel(backups),
     h('section', { class: 'panel' },
       h('h2', null, 'Sign-ups'),
       h('label', { class: 'switch', style: 'margin-top:12px' }, reg, 'Anyone can create an account'),
       h('p', { class: 'hint', style: 'margin-top:8px' }, 'When off, only admins can add podcasters (under People).')));
+}
+
+// ───────────── backups ─────────────
+
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const hourLabel = (hr) => new Date(2000, 0, 1, hr).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+
+function backupsPanel(b) {
+  const panel = h('section', { class: 'panel', id: 'backups' });
+  const reload = async () => {
+    const fresh = await api('GET', '/api/admin/backups');
+    panel.replaceWith(backupsPanel(fresh));
+  };
+
+  // ── Download now
+  const dlErr = formError();
+  const encrypt = h('input', { type: 'checkbox', checked: b.passphraseSet, disabled: !b.passphraseSet });
+  const dlBtn = h('button', {
+    type: 'button',
+    class: 'primary',
+    disabled: !b.pgDump,
+    onclick: async () => {
+      dlErr.hidden = true;
+      dlBtn.disabled = true;
+      const label = dlBtn.textContent;
+      dlBtn.textContent = 'Creating backup…';
+      try {
+        const res = await fetch(`/api/admin/backups/download${encrypt.checked ? '?encrypt=1' : ''}`, { credentials: 'same-origin' });
+        if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `Backup failed (${res.status})`);
+        const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? 'podsovereign-backup.sql.gz';
+        const url = URL.createObjectURL(await res.blob());
+        const a = h('a', { href: url, download: name });
+        document.body.append(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        toast('Backup downloaded');
+        reload();
+      } catch (e) {
+        showError(dlErr, e);
+      }
+      dlBtn.textContent = label;
+      dlBtn.disabled = false;
+    },
+  }, 'Download a backup now');
+
+  // ── Schedule
+  const sch = b.schedule;
+  const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  const freq = h('select', null, h('option', { value: 'off' }, 'Off'), h('option', { value: 'daily' }, 'Every day'), h('option', { value: 'weekly' }, 'Once a week'));
+  freq.value = sch.frequency;
+  const weekday = h('select', null, WEEKDAYS.map((d, i) => h('option', { value: i }, d)));
+  weekday.value = String(sch.weekday);
+  const hour = h('select', null, Array.from({ length: 24 }, (_, i) => h('option', { value: i }, hourLabel(i))));
+  hour.value = String(sch.hour);
+  const zones = typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : [];
+  const tzValue = sch.frequency === 'off' && sch.timezone === 'UTC' ? browserTz : sch.timezone;
+  const tz = h('select', null, [...new Set(['UTC', tzValue, browserTz, ...zones])].map((z) => h('option', { value: z }, z.replace(/_/g, ' '))));
+  tz.value = tzValue;
+  const weekdayField = field('Day', weekday);
+  const whenFields = h('div', { class: 'fields-grid' }, weekdayField, field('Time', hour), field('Time zone', tz));
+  const syncFreq = () => {
+    whenFields.hidden = freq.value === 'off';
+    weekdayField.hidden = freq.value !== 'weekly';
+  };
+  freq.addEventListener('change', syncFreq);
+  syncFreq();
+
+  // ── Email
+  const em = b.email;
+  const emailOn = h('input', { type: 'checkbox', role: 'switch', checked: em.enabled });
+  const emailTo = h('input', { type: 'email', value: em.to ?? '', placeholder: em.admins.join(', ') || 'admin@example.com' });
+  const emailBox = h('div', null,
+    field('Send to', emailTo, 'Leave blank to send to every administrator. Backups over 18 MB are too big for email; use R2 for those.'),
+    em.mailConfigured ? null : h('p', { class: 'warn-note' }, 'Email isn’t set up yet. Add it under “Email for verification codes” above.'));
+  const syncEmail = () => { emailBox.hidden = !emailOn.checked; };
+  emailOn.addEventListener('change', syncEmail);
+  syncEmail();
+
+  // ── R2
+  const r2 = b.r2;
+  const r2On = h('input', { type: 'checkbox', role: 'switch', checked: r2.ready || !!r2.bucket });
+  const acct = h('input', { type: 'text', value: r2.accountId, placeholder: '32-character account ID', autocomplete: 'off', spellcheck: 'false' });
+  const keyId = h('input', { type: 'text', value: r2.accessKeyId, autocomplete: 'off', spellcheck: 'false' });
+  const secret = h('input', { type: 'password', autocomplete: 'new-password', placeholder: r2.secretSet ? 'Saved. Leave blank to keep it.' : '' });
+  const bucket = h('input', { type: 'text', value: r2.bucket, placeholder: 'podsovereign-backups', autocomplete: 'off', spellcheck: 'false' });
+  const prefix = h('input', { type: 'text', value: r2.prefix, autocomplete: 'off', spellcheck: 'false' });
+  const keep = h('input', { type: 'text', inputmode: 'numeric', value: b.keep });
+  const testMsg = h('p', { class: 'hint', role: 'status' });
+  const testBtn = h('button', {
+    type: 'button',
+    disabled: !r2.ready,
+    onclick: async () => {
+      testBtn.disabled = true;
+      testMsg.className = 'hint';
+      testMsg.textContent = 'Testing…';
+      try {
+        const t = await api('POST', '/api/admin/backups/test-bucket');
+        testMsg.className = t.ok ? 'hint' : 'error';
+        testMsg.textContent = t.ok ? 'Connected. PodSovereign can write to, read from and clean up the bucket.' : t.error;
+      } catch (e) {
+        testMsg.className = 'error';
+        testMsg.textContent = e.message;
+      }
+      testBtn.disabled = false;
+    },
+  }, 'Test bucket');
+  const r2Box = h('div', null,
+    h('p', { class: 'hint' }, 'Use a separate bucket from your media, kept private. In Cloudflare, create an R2 API token with Object Read & Write on that bucket.'),
+    h('div', { class: 'fields-grid' },
+      field('Account ID', acct), field('Bucket', bucket), field('Access key ID', keyId), field('Secret access key', secret),
+      field('Folder', prefix), field('Backups to keep', keep, 'Older ones in the folder are deleted.')),
+    r2.ready ? null : h('p', { class: 'hint' }, 'Save, then test the bucket.'),
+    h('div', { class: 'row' }, testBtn, r2.ready ? h('button', {
+      type: 'button',
+      class: 'quiet',
+      onclick: async () => {
+        if (!confirm('Remove the R2 bucket settings? Backups already in the bucket stay there.')) return;
+        try {
+          await api('PUT', '/api/admin/backups', { r2: null });
+          toast('R2 settings removed');
+          reload();
+        } catch (e) {
+          toast(e.message);
+        }
+      },
+    }, 'Remove bucket') : null),
+    testMsg);
+  const syncR2 = () => { r2Box.hidden = !r2On.checked; };
+  r2On.addEventListener('change', syncR2);
+  syncR2();
+
+  // ── Passphrase
+  const pass = h('input', { type: 'password', autocomplete: 'new-password', placeholder: b.passphraseSet ? 'Saved. Leave blank to keep it.' : 'At least 12 characters' });
+
+  const err = formError();
+  const form = h('form', {
+    onsubmit: (ev) => {
+      ev.preventDefault();
+      err.hidden = true;
+      const body = {
+        frequency: freq.value,
+        hour: Number(hour.value),
+        weekday: Number(weekday.value),
+        timezone: tz.value,
+        email: emailOn.checked,
+        emailTo: emailTo.value,
+        keep: Number(keep.value),
+      };
+      if (r2On.checked) body.r2 = { accountId: acct.value, accessKeyId: keyId.value, secret: secret.value || undefined, bucket: bucket.value, prefix: prefix.value };
+      else if (r2.ready || r2.bucket) body.r2 = null;
+      if (pass.value) body.passphrase = pass.value;
+      busy(form, async () => {
+        try {
+          await api('PUT', '/api/admin/backups', body);
+          toast('Backup settings saved');
+          reload();
+        } catch (e) {
+          showError(err, e);
+        }
+      });
+    },
+  },
+  h('h3', null, 'Automatic backups'),
+  h('p', { class: 'hint' }, 'Sends a copy of the database off this server on a schedule.'),
+  h('div', { class: 'fields-grid' }, field('How often', freq)),
+  whenFields,
+  h('label', { class: 'switch', style: 'margin:16px 0 8px' }, emailOn, 'Email backups'),
+  emailBox,
+  h('label', { class: 'switch', style: 'margin:16px 0 8px' }, r2On, 'Upload backups to Cloudflare R2'),
+  r2Box,
+  h('h3', { style: 'margin-top:24px' }, 'Encryption'),
+  h('p', { class: 'hint' }, 'Recommended. With a passphrase, emailed and uploaded backups are encrypted, and downloads can be. Store it somewhere safe: without it, an encrypted backup can’t be restored.'),
+  h('div', { class: 'fields-grid' }, field('Passphrase', pass)),
+  b.passphraseSet ? h('p', { class: 'hint' }, h('a', {
+    href: '#',
+    onclick: async (e) => {
+      e.preventDefault();
+      if (!confirm('Remove the passphrase? Future backups won’t be encrypted.')) return;
+      await api('PUT', '/api/admin/backups', { passphrase: '' });
+      toast('Passphrase removed');
+      reload();
+    },
+  }, 'Remove the passphrase')) : null,
+  err,
+  h('div', { class: 'actions' }, h('button', { class: 'primary', type: 'submit' }, 'Save backup settings')));
+
+  // ── Back up now (to the saved destinations)
+  const runMsg = h('p', { class: 'hint', role: 'status' });
+  const canSend = (em.enabled && em.mailConfigured) || r2.ready;
+  const runBtn = h('button', {
+    type: 'button',
+    disabled: !canSend || !b.pgDump,
+    onclick: async () => {
+      runBtn.disabled = true;
+      runMsg.className = 'hint';
+      runMsg.textContent = 'Backing up…';
+      try {
+        const r = await api('POST', '/api/admin/backups/run');
+        toast(r.run.status === 'done' ? 'Backup sent' : 'Backup failed');
+        panel.replaceWith(backupsPanel(r));
+      } catch (e) {
+        runMsg.className = 'error';
+        runMsg.textContent = e.message;
+        runBtn.disabled = false;
+      }
+    },
+  }, 'Send a backup now');
+
+  // ── History
+  const trig = { download: 'Downloaded', manual: 'Sent now', scheduled: 'Scheduled' };
+  const where = (run) => {
+    if (run.status === 'running') return 'In progress…';
+    if (run.trigger === 'download') return run.status === 'done' ? 'Your browser' : run.error;
+    const parts = (run.results ?? []).map((x) => `${x.to === 'r2' ? 'R2' : 'Email'}: ${x.ok ? 'sent' : x.detail}`);
+    return parts.length ? parts.join('; ') : run.error ?? '';
+  };
+  const history = b.runs.length
+    ? h('div', { class: 'table-wrap' }, h('table', null,
+      h('thead', null, h('tr', null, h('th', null, 'When'), h('th', null, 'How'), h('th', null, 'Size'), h('th', null, 'Result'))),
+      h('tbody', null, b.runs.map((run) => h('tr', null,
+        h('td', null, fmtDate(run.createdAt, true)),
+        h('td', null, trig[run.trigger] ?? run.trigger, run.encrypted ? h('span', { class: 'pill' }, 'encrypted') : null),
+        h('td', null, run.bytes ? fmtBytes(run.bytes) : '—'),
+        h('td', null, h('span', { class: `light ${run.status === 'done' ? 'on' : run.status === 'failed' ? 'bad' : 'warn'}` }, where(run))))))))
+    : h('p', { class: 'hint' }, 'No backups yet.');
+
+  const nextLine = sch.frequency !== 'off' && sch.nextAt
+    ? h('p', { class: 'hint', style: 'margin-top:8px' }, h('span', { class: 'light on' }, `Next automatic backup: ${fmtDate(sch.nextAt, true)}`))
+    : null;
+
+  panel.replaceChildren(...[
+    h('h2', null, 'Backups'),
+    h('p', { class: 'muted' }, 'A backup is a copy of the database: shows, episodes, tags, accounts and settings. Media files aren’t included; they stay in your media storage.'),
+    b.pgDump ? null : h('p', { class: 'warn-note' }, 'The backup tool (pg_dump) isn’t installed in this app. Run update.sh to rebuild it.'),
+    h('div', { class: 'row', style: 'margin:12px 0 4px' }, dlBtn,
+      h('label', { class: 'check' }, encrypt, b.passphraseSet ? 'Encrypt with the backup passphrase' : 'Encrypt (set a passphrase below first)')),
+    dlErr,
+    nextLine,
+    h('hr', { class: 'sep' }),
+    form,
+    h('hr', { class: 'sep' }),
+    h('div', { class: 'row' }, runBtn, h('span', { class: 'hint' }, canSend ? 'Sends one to the saved destinations right away.' : 'Save a destination first.')),
+    runMsg,
+    h('h3', { class: 'table-title', style: 'padding-left:0' }, 'Recent backups'),
+    history,
+    h('p', { class: 'hint', style: 'margin-top:12px' }, 'To restore, see “Backups and restore” in the README.'),
+  ].filter(Boolean));
+  return panel;
 }
 
 // ───────────── ownership verification + email ─────────────

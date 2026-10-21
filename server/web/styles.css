@@ -591,3 +591,8 @@ details.more > summary { font-weight: 500; color: var(--ink-2); }
   .live-list .btns { justify-content: flex-start; }
   .live-list > li.is-live { margin-inline: calc(-1 * var(--s4)); padding-inline: var(--s4); }
 }
+
+/* Backups */
+hr.sep { border: 0; border-top: 1px solid var(--rule); margin: var(--s5) 0; }
+#backups .pill { margin-left: 6px; }
+#backups td .light { white-space: normal; }

@@ -23,10 +23,17 @@ export interface SmtpConfig {
   timeoutMs?: number;
 }
 
+export interface Attachment {
+  filename: string;
+  contentType: string;
+  content: Buffer;
+}
+
 export interface Mail {
   to: string;
   subject: string;
   text: string;
+  attachments?: Attachment[];
 }
 
 export class SmtpError extends Error {}
@@ -157,19 +164,32 @@ export async function sendMail(cfg: SmtpConfig, mail: Mail): Promise<void> {
     await c.cmd(`RCPT TO:<${mail.to}>`, [250, 251], 'the recipient address');
     await c.cmd('DATA', [354]);
     const domain = fromAddr.split('@')[1];
-    const body = Buffer.from(mail.text.replace(/\r?\n/g, '\r\n'), 'utf8').toString('base64').replace(/.{76}/g, '$&\r\n');
-    const message = [
+    const wrap = (b: Buffer) => b.toString('base64').replace(/.{76}/g, '$&\r\n');
+    const body = wrap(Buffer.from(mail.text.replace(/\r?\n/g, '\r\n'), 'utf8'));
+    const headers = [
       `From: ${formatFrom(cfg.from)}`,
       `To: <${mail.to}>`,
       `Subject: ${encodeHeader(mail.subject)}`,
       `Date: ${new Date().toUTCString()}`,
       `Message-ID: <${randomBytes(12).toString('hex')}@${domain}>`,
       'MIME-Version: 1.0',
-      'Content-Type: text/plain; charset=utf-8',
-      'Content-Transfer-Encoding: base64',
-      '',
-      body,
-    ].join('\r\n');
+    ];
+    let message: string;
+    if (!mail.attachments?.length) {
+      message = [...headers, 'Content-Type: text/plain; charset=utf-8', 'Content-Transfer-Encoding: base64', '', body].join('\r\n');
+    } else {
+      const boundary = `ps-${randomBytes(12).toString('hex')}`;
+      const parts = [
+        `--${boundary}`, 'Content-Type: text/plain; charset=utf-8', 'Content-Transfer-Encoding: base64', '', body,
+        ...mail.attachments.flatMap((a) => {
+          const name = a.filename.replace(/["\r\n\\]/g, '_');
+          return [`--${boundary}`, `Content-Type: ${a.contentType}; name="${name}"`, 'Content-Transfer-Encoding: base64',
+            `Content-Disposition: attachment; filename="${name}"`, '', wrap(a.content)];
+        }),
+        `--${boundary}--`,
+      ];
+      message = [...headers, `Content-Type: multipart/mixed; boundary="${boundary}"`, '', ...parts].join('\r\n');
+    }
     // base64 never starts a line with ".", so no dot-stuffing is needed.
     await c.cmd(`${message}\r\n.`, [250], 'the message');
     await c.cmd('QUIT', [221]).catch(() => {});

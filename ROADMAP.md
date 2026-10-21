@@ -56,6 +56,7 @@ PodSovereign doesn't stream today. Live shows point at an outside stream (Icecas
 - [ ] Publish a prebuilt app image on GitHub Container Registry, so installs and updates skip the local build (seconds instead of minutes)
 
 ## Recently completed
+- Database backups from the admin panel: instant download, scheduled email and R2 backups, optional encryption
 - Forms for value, funding, podroll, update frequency, license and text records; people and locations
 - Show page tabs: Overview (hides 7 days after setup), Show details, Episodes (with live shows), Settings (Podping, stats prefixes, team)
 - Episode list paging (10, 25, 50 or all)

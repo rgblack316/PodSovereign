@@ -10,6 +10,7 @@ import { createPgDb } from './db/pg.js';
 import { createApp } from './http/app.js';
 import { startImportWorker } from './import/importer.js';
 import { cleanupUploads } from './media/uploads.js';
+import { startBackupWorker } from './backup/backups.js';
 import { startPodpingWorker } from './podping/podping.js';
 
 const log = (m: string) => console.log(`${new Date().toISOString()} ${m}`);
@@ -23,6 +24,7 @@ async function main() {
 
   const worker = process.env.DISABLE_WORKER === '1' ? null : startImportWorker({ db, config, log });
   const podping = startPodpingWorker({ db, config, log });
+  const backups = startBackupWorker({ db, config, log });
   // Abandoned uploads and uploaded files never saved into an episode.
   const housekeeping = setInterval(() => void cleanupUploads(db, config, log).catch((e) => log(`cleanup: ${e.message}`)), 3600_000);
   const server = http.createServer(createApp({ db, config, log }));
@@ -35,6 +37,7 @@ async function main() {
     log(`${sig} received, shutting down`);
     server.close();
     clearInterval(housekeeping);
+    backups.stop();
     await worker?.stop();
     await podping.stop();
     await db.close();

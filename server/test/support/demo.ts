@@ -32,6 +32,7 @@ const port = Number(process.env.DEMO_PORT ?? 8099);
 const db = await setupDb('feedhost_demo');
 const host = await startOldHost();
 const config = testConfig({
+  databaseUrl: `postgresql://postgres@/feedhost_demo?host=${encodeURIComponent('/var/run/postgresql')}`,
   ...(process.env.NOMINATIM_URL ? { nominatimUrl: process.env.NOMINATIM_URL } : {}),
   mediaDir: await tempDir('demo-media'),
   siteDir: await tempDir('demo-site'),

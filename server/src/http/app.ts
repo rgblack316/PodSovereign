@@ -38,6 +38,8 @@ import { createShow, getShow, updateShow } from '../publish/show.js';
 import { APPLE_CATEGORIES, MEDIUMS } from '../publish/categories.js';
 import { lookupPlace } from '../publish/location.js';
 import { lookupFeed } from '../publish/tag-fields.js';
+import { BackupError, backupView, finishRun, runBackup, saveBackupSettings, startRun, testBucket } from '../backup/backups.js';
+import { backupFileName, dumpStream, encryptStream, pgDumpVersion } from '../backup/dump.js';
 import { changeStorage, latestMove, MoveError } from '../storage/move.js';
 import { PROVIDERS, StorageConfigError, validateSettings, type StorageSettings } from '../storage/providers.js';
 import { localPath, storeFor, testConnection, type StorageState } from '../storage/store.js';
@@ -846,6 +848,67 @@ export function createApp(deps: AppDeps) {
     });
   }
 
+  // ───────────── backups (admin) ─────────────
+
+  const backupState = async () => ({ ...(await backupView(db, config)), pgDump: await pgDumpVersion() });
+
+  router.get('/api/admin/backups', async (ctx) => {
+    await requireAdmin(ctx);
+    sendJson(ctx.res, 200, await backupState());
+  });
+
+  router.put('/api/admin/backups', async (ctx) => {
+    await requireAdmin(ctx);
+    await saveBackupSettings(db, await readJson(ctx.req));
+    sendJson(ctx.res, 200, await backupState());
+  });
+
+  router.post('/api/admin/backups/test-bucket', async (ctx) => {
+    await requireAdmin(ctx);
+    sendJson(ctx.res, 200, await testBucket(db));
+  });
+
+  /** Back up now and send it wherever automatic backups go. */
+  router.post('/api/admin/backups/run', async (ctx) => {
+    const admin = await requireAdmin(ctx);
+    const run = await runBackup(db, config, 'manual', admin.id);
+    sendJson(ctx.res, 200, { run, ...(await backupState()) });
+  });
+
+  /** Stream a fresh backup to the browser. ?encrypt=1 encrypts it with the backup passphrase. */
+  router.get('/api/admin/backups/download', async (ctx) => {
+    const admin = await requireAdmin(ctx);
+    const passphrase = ctx.url.searchParams.get('encrypt') === '1'
+      ? (await maybeOne<{ p: string | null }>(db, `SELECT backup_passphrase AS p FROM site_settings WHERE id`))?.p ?? null
+      : null;
+    if (ctx.url.searchParams.get('encrypt') === '1' && !passphrase) throw new HttpError(400, 'Set a backup passphrase first');
+    const fileName = backupFileName(new Date(), !!passphrase);
+    const runId = await startRun(db, 'download', admin.id, fileName, !!passphrase);
+    let source: NodeJS.ReadableStream = dumpStream(config.databaseUrl);
+    if (passphrase) source = (source as import('node:stream').Readable).pipe(encryptStream(passphrase));
+    let bytes = 0;
+    try {
+      for await (const chunk of source) {
+        // Headers wait for the first bytes, so a failure to start is a clear error, not a broken file.
+        if (!ctx.res.headersSent) {
+          ctx.res.writeHead(200, {
+            'Content-Type': passphrase ? 'application/octet-stream' : 'application/gzip',
+            'Content-Disposition': `attachment; filename="${fileName}"`,
+            'Cache-Control': 'no-store',
+          });
+        }
+        bytes += (chunk as Buffer).length;
+        if (!ctx.res.write(chunk)) await new Promise((r) => ctx.res.once('drain', r));
+      }
+      ctx.res.end();
+      await finishRun(db, runId, { status: 'done', bytes, results: [{ to: 'download', ok: true, detail: `Downloaded by ${admin.email}` }] });
+    } catch (e) {
+      await finishRun(db, runId, { status: 'failed', bytes, error: (e as Error).message });
+      if (ctx.res.headersSent) return void ctx.res.destroy();
+      throw new HttpError(500, (e as Error).message);
+    }
+  });
+
   // ───────────── media storage (admin) ─────────────
 
   /** Form input → storage state; a blank secret keeps the saved one when the provider is unchanged. */
@@ -952,7 +1015,7 @@ export function createApp(deps: AppDeps) {
         return;
       }
       if (e instanceof HttpError) return sendJson(res, e.status, { error: e.message }, e.headers);
-      if (e instanceof AuthError || e instanceof LiveError || e instanceof VerifyError || e instanceof PublishError || e instanceof TeamError) return sendJson(res, e.status, { error: e.message });
+      if (e instanceof AuthError || e instanceof LiveError || e instanceof VerifyError || e instanceof PublishError || e instanceof TeamError || e instanceof BackupError) return sendJson(res, e.status, { error: e.message });
       if (e instanceof UploadError) return sendJson(res, e.status, { error: e.message, ...e.extra });
       if (e instanceof ImportError || e instanceof PrefixError || e instanceof SettingsError || e instanceof StorageConfigError || e instanceof MoveError) {
         return sendJson(res, 400, { error: e.message });

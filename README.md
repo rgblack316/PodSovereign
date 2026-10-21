@@ -27,6 +27,7 @@ Clone it and run your own: the site's name, logo, favicon and web address are al
 - Show teams: owner, editors and viewers; hand ownership over
 - Admin panel: site name, logo, favicon, web and media address (links rewritten and old addresses redirected), sign-ups, email (Resend or SMTP), people and administrators
 - Media on this server or a storage provider: Cloudflare R2 is in production use; Backblaze B2, Amazon S3, Wasabi, DigitalOcean Spaces, Bunny and other S3-compatible services are available but untested (see [Reporting problems](#reporting-problems))
+- Database backups from the admin panel: download one right away, or send them automatically (daily or weekly) by email and/or to a Cloudflare R2 bucket, optionally encrypted
 - Docker Compose, a one-line installer, an update script with automatic database backups, and an optional Cloudflare Tunnel container
 
 Built with Node.js 22 and PostgreSQL 16; the dashboard is plain JavaScript with no build step.
@@ -62,11 +63,26 @@ It shows what's new, backs up the database to `backups/` (the last 10 are kept),
 
 ## Backups and restore
 
-- **Media and logos:** `/opt/podsovereign/data` (when stored on this server).
-- **Database:** `update.sh` makes a backup each time. To make one by hand:
-  `cd /opt/podsovereign && sudo docker compose exec -T db pg_dump -U feedhost -d feedhost --clean --if-exists | gzip > backups/manual.sql.gz`
-- **Restore:** `gunzip -c backups/<file>.sql.gz | sudo docker compose exec -T db psql -U feedhost -d feedhost`
-- Keep a copy of `/opt/podsovereign/.env` too; it holds the database password.
+A backup is the database: shows, episodes, tags, accounts and settings. Media files aren't in it; they stay in your media storage (`/opt/podsovereign/data` when stored on this server, or your R2 bucket).
+
+**From the admin panel** (Site settings → Backups):
+- **Download a backup now** builds a fresh one and saves it to your computer.
+- **Automatic backups** run daily or weekly at the time and time zone you pick, and go to email (every administrator, or one address you choose; up to 18 MB), to a Cloudflare R2 bucket (the newest 14 are kept by default), or both. Use a separate, private bucket from your media. **Send a backup now** tests your settings. Recent results show under the settings.
+- **Encryption:** set a passphrase (at least 12 characters) and emailed and uploaded backups are encrypted; downloads can be too. Keep the passphrase somewhere safe: without it, an encrypted backup can't be restored.
+
+Backup files are named `podsovereign-db-<date>-<time>.sql.gz` (UTC), plus `.enc` when encrypted.
+
+**From the server:** `update.sh` saves one to `backups/` before every update. To make one by hand:
+`cd /opt/podsovereign && sudo docker compose exec -T db pg_dump -U feedhost -d feedhost --clean --if-exists | gzip > backups/manual.sql.gz`
+
+**Restore** (this replaces what's in the database now):
+1. If the backup is encrypted, decrypt it first (it asks for the passphrase):
+   `openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -in podsovereign-db-….sql.gz.enc -out backup.sql.gz`
+2. Copy the `.sql.gz` to the server, then:
+   `cd /opt/podsovereign && gunzip -c backup.sql.gz | sudo docker compose exec -T db psql -U feedhost -d feedhost`
+3. `sudo docker compose restart app`
+
+Keep a copy of `/opt/podsovereign/.env` too; it holds the database password and your settings.
 
 ## Day to day (in `/opt/podsovereign`)
 
