@@ -1,4 +1,4 @@
-/* FeedHost dashboard — "console" theme.
+/* PodSovereign dashboard — "console" theme.
    One family (Archivo); its width axis does the work: expanded for show titles,
    normal for everything else. Colour is mostly neutral; the signal lights carry state. */
 
@@ -568,6 +568,12 @@ details.more { margin-top: var(--s2); }
 details.more > summary { font-weight: 500; color: var(--ink-2); }
 .remote b { overflow-wrap: anywhere; }
 .plain-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+
+/* Product name and tagline */
+.tagline { font-size: var(--t-md); font-weight: 600; font-variation-settings: "wdth" 112; color: var(--fader); margin: calc(-1 * var(--s5)) 0 var(--s5); }
+.product { margin: var(--s3) 8px 0; font-size: 0.75rem; line-height: 1.4; color: var(--ink-3); display: grid; }
+.product b { font-weight: 650; color: var(--ink-2); }
+.auth-product { margin: var(--s6) 0 0; text-align: left; }
 
 /* ───────── Small screens ───────── */
 

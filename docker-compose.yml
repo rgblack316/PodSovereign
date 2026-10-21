@@ -1,4 +1,4 @@
-# FeedHost: PostgreSQL + the app, and optionally a Cloudflare Tunnel.
+# PodSovereign: PostgreSQL + the app, and optionally a Cloudflare Tunnel.
 # Settings come from .env (created by install.sh; see .env.example).
 #
 #   docker compose up -d          start
@@ -28,7 +28,7 @@ services:
       context: ./server
       args:
         FEEDHOST_VERSION: ${FEEDHOST_VERSION:-dev}
-    image: feedhost-app:latest
+    image: podsovereign-app:latest
     restart: unless-stopped
     depends_on:
       db:
@@ -37,7 +37,7 @@ services:
       DATABASE_URL: postgres://feedhost:${POSTGRES_PASSWORD}@db:5432/feedhost
       # Starting values; Site settings in the dashboard override them.
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
-      SITE_NAME: ${SITE_NAME:-FeedHost}
+      SITE_NAME: ${SITE_NAME:-PodSovereign}
       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
     volumes:
       # Copied media and the uploaded logo/favicon (on the host, easy to back up).

@@ -1,6 +1,6 @@
 /**
  * Entry point: runs migrations, starts the import worker and the HTTP server.
- *   DATABASE_URL=postgres://... PUBLIC_BASE_URL=https://feeds.example.com MEDIA_DIR=/var/lib/feedhost/media node --import tsx src/server.ts
+ *   DATABASE_URL=postgres://... PUBLIC_BASE_URL=https://feeds.example.com MEDIA_DIR=/var/lib/podsovereign/media node --import tsx src/server.ts
  */
 import http from 'node:http';
 import { loadConfig } from './config.js';
@@ -28,7 +28,7 @@ async function main() {
   const server = http.createServer(createApp({ db, config, log }));
   server.requestTimeout = 120_000;
   server.listen(config.port, config.host, () =>
-    log(`FeedHost listening on ${config.host}:${config.port} (public URL ${config.publicBaseUrl})`),
+    log(`PodSovereign listening on ${config.host}:${config.port} (public URL ${config.publicBaseUrl})`),
   );
 
   const shutdown = async (sig: string) => {

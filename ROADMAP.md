@@ -2,7 +2,7 @@
 
 What's planned next, roughly in order. For what's already built, see the feature list in the [README](README.md).
 
-Found a bug or want to help? [Open an issue](https://github.com/rgblack316/podcast-feed-import-and-host/issues) or send a pull request.
+Found a bug or want to help? [Open an issue](https://github.com/rgblack316/podsovereign/issues) or send a pull request.
 
 ## Next up: OP3 stats on the show dashboard
 
@@ -17,7 +17,7 @@ Shown only for shows that have **OP3** ticked as a stats prefix (Settings → St
 
 Built: choose where media lives under Site settings → Media storage.
 - [x] Cloudflare R2: in production use for John's Creek Studios
-- [ ] Backblaze B2, Amazon S3, Wasabi, DigitalOcean Spaces, Bunny Storage and other S3-compatible services: **available but untested with real accounts** (marked "Not yet tested" in Site settings). If you try one and run into trouble, please [open an issue](https://github.com/rgblack316/podcast-feed-import-and-host/issues) describing the problem (the Test connection results help) for us to investigate, or submit a pull request with a fix.
+- [ ] Backblaze B2, Amazon S3, Wasabi, DigitalOcean Spaces, Bunny Storage and other S3-compatible services: **available but untested with real accounts** (marked "Not yet tested" in Site settings). If you try one and run into trouble, please [open an issue](https://github.com/rgblack316/podsovereign/issues) describing the problem (the Test connection results help) for us to investigate, or submit a pull request with a fix.
 - [ ] Optional: copy files to the provider directly from the old host during an import, without staging them on this server first (saves disk space on large imports)
 
 Background: Cloudflare's terms restrict serving video, or a disproportionate amount of large files, through its CDN and Tunnel hostnames on Free, Pro and Business plans ([policy](https://developers.cloudflare.com/fundamentals/reference/policies-compliances/delivering-videos-with-cloudflare/)), and every uncached download through the tunnel uses the home connection's upload bandwidth. That's why media is best served from a storage provider such as R2.
@@ -39,7 +39,7 @@ Built: schedule, start and end live shows from the Episodes tab; each change is 
 
 ### Possible future upgrade: built-in streaming server
 
-FeedHost doesn't stream today. Live shows point at an outside stream (Icecast, YouTube, Twitch and so on). A built-in option could include:
+PodSovereign doesn't stream today. Live shows point at an outside stream (Icecast, YouTube, Twitch and so on). A built-in option could include:
 - An audio streaming server (Icecast, or MediaMTX for audio and video), with a stream key for each show
 - Starting the stream from an encoder (OBS, Audio Hijack, Butt) sets the live show to **live** automatically, and back to **ended** when it stops
 - Recording the stream, then publishing the recording as an episode

@@ -427,7 +427,7 @@ describe('episodes', () => {
       assert.equal(r.status, 200, r.text);
       assert.deepEqual(r.json.places, [{ name: 'Austin', label: 'Austin, Travis County, Texas, United States', geo: 'geo:30.2711286,-97.7436995', osm: 'R113314', country: 'US' }]);
       assert.match(seen[0]!, /^\/search\?q=Austin%2C\+TX&format=jsonv2/);
-      assert.match(seen[0]!, /FeedHost\/0.1/);
+      assert.match(seen[0]!, /PodSovereign\/0.1/);
       assert.equal((await alice.get('/api/places?q=')).status, 400);
     } finally {
       osm.close();

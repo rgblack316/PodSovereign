@@ -27,7 +27,7 @@ const MAX_ATTEMPTS = 5;
 const RESEND_AFTER_SEC = 60;
 export const VERIFY_EXPIRES_DAYS = 7;
 
-export const newToken = () => `feedhost-verify-${randomBytes(12).toString('base64url')}`;
+export const newToken = () => `podsovereign-verify-${randomBytes(12).toString('base64url')}`;
 
 /** The token in <podcast:txt>, the description, or <itunes:summary>. */
 export function feedHasToken(feed: Feed, token: string): boolean {

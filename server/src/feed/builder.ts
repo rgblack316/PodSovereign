@@ -43,7 +43,7 @@ export function buildFeed(feed: Feed, opts: BuildOptions = {}): string {
   if (opts.selfUrl) push(I2, `<atom:link${attrString({ href: opts.selfUrl, rel: 'self', type: 'application/rss+xml' })}/>`);
   if (opts.hubUrl) push(I2, `<atom:link${attrString({ href: opts.hubUrl, rel: 'hub' })}/>`);
   push(I2, el('lastBuildDate', now.toUTCString()));
-  push(I2, el('generator', opts.generator ?? 'FeedHost'));
+  push(I2, el('generator', opts.generator ?? 'PodSovereign'));
   if (c.imageUrl) {
     lines.push(`${I2}<image>`);
     push(I3, el('url', c.imageUrl));

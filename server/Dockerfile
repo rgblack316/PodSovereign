@@ -1,4 +1,4 @@
-# FeedHost app image. Built by docker compose (see ../docker-compose.yml).
+# PodSovereign app image. Built by docker compose (see ../docker-compose.yml).
 FROM node:22-slim
 
 ENV NODE_ENV=production \

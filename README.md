@@ -1,4 +1,6 @@
-# podcast-feed-import-and-host
+# PodSovereign
+
+**Your podcast. Your platform. Your rules.**
 
 Self-hosted podcast hosting. Import an existing podcast's RSS feed, or start a new show, and serve it from your own server with full iTunes and Podcasting 2.0 tag support. Each podcaster has their own login and sees only their own shows and the shows they've been added to.
 
@@ -29,40 +31,44 @@ Clone it and run your own: the site's name, logo, favicon and web address are al
 
 Built with Node.js 22 and PostgreSQL 16; the dashboard is plain JavaScript with no build step.
 
+PodSovereign was called FeedHost early on. A few internal names still use `feedhost` (the Docker project, the database, and the `FEEDHOST_*` settings in `.env`) so existing installs keep working through updates; leave them as they are.
+
 ## Install
 
 On a fresh Ubuntu Server (22.04 or newer) or Debian machine, paste this into the terminal:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rgblack316/podcast-feed-import-and-host/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/rgblack316/podsovereign/main/install.sh | sudo bash
 ```
 
-It installs Docker if needed, downloads FeedHost to `/opt/feedhost`, asks for your web address, port and (optionally) a Cloudflare Tunnel token, generates a database password and starts everything. Then open the site and create the first account; it becomes the admin.
+It installs Docker if needed, downloads PodSovereign to `/opt/podsovereign`, asks for your web address, port and (optionally) a Cloudflare Tunnel token, generates a database password and starts everything. Then open the site and create the first account; it becomes the admin.
 
 For an unattended install, give the answers up front:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rgblack316/podcast-feed-import-and-host/main/install.sh \
-  | sudo FEEDHOST_NONINTERACTIVE=1 FEEDHOST_URL=https://podcasts.example.com FEEDHOST_TUNNEL_TOKEN=eyJ... bash
+curl -fsSL https://raw.githubusercontent.com/rgblack316/podsovereign/main/install.sh \
+  | sudo PODSOVEREIGN_NONINTERACTIVE=1 PODSOVEREIGN_URL=https://podcasts.example.com PODSOVEREIGN_TUNNEL_TOKEN=eyJ... bash
 ```
 
 ## Update
 
+Installs from before the rename to PodSovereign live in `/opt/feedhost` instead of `/opt/podsovereign`; use that folder in the commands below. Everything else is the same, and updating keeps all your shows and settings.
+
 ```bash
-cd /opt/feedhost && sudo ./update.sh
+cd /opt/podsovereign && sudo ./update.sh
 ```
 
 It shows what's new, backs up the database to `backups/` (the last 10 are kept), downloads the new version, rebuilds and restarts. Database changes apply automatically on start. `upgrade.sh` does the same thing. Options: `--check` (only show what's new), `--yes` (don't ask), `--no-backup`, `--force` (rebuild even if nothing changed). If the app doesn't come back, the script prints the exact commands to return to the previous version.
 
 ## Backups and restore
 
-- **Media and logos:** `/opt/feedhost/data` (when stored on this server).
+- **Media and logos:** `/opt/podsovereign/data` (when stored on this server).
 - **Database:** `update.sh` makes a backup each time. To make one by hand:
-  `cd /opt/feedhost && sudo docker compose exec -T db pg_dump -U feedhost -d feedhost --clean --if-exists | gzip > backups/manual.sql.gz`
+  `cd /opt/podsovereign && sudo docker compose exec -T db pg_dump -U feedhost -d feedhost --clean --if-exists | gzip > backups/manual.sql.gz`
 - **Restore:** `gunzip -c backups/<file>.sql.gz | sudo docker compose exec -T db psql -U feedhost -d feedhost`
-- Keep a copy of `/opt/feedhost/.env` too; it holds the database password.
+- Keep a copy of `/opt/podsovereign/.env` too; it holds the database password.
 
-## Day to day (in `/opt/feedhost`)
+## Day to day (in `/opt/podsovereign`)
 
 | | |
 |---|---|
@@ -79,7 +85,7 @@ The app listens only on `127.0.0.1` (port 8080 by default). A Cloudflare Tunnel 
 Passwords are stored as one-way hashes, so they can't be looked up, only replaced. On the server:
 
 ```bash
-cd /opt/feedhost && sudo docker compose exec app node --import tsx src/cli/reset-password.ts
+cd /opt/podsovereign && sudo docker compose exec app node --import tsx src/cli/reset-password.ts
 ```
 
 With no email it resets the only admin account (with more than one, it lists the accounts so you can name one). It prints a new random password and signs that account out everywhere. Sign in with it, then choose your own under **Account**.
@@ -97,4 +103,4 @@ The first install builds the app image on your server, downloading Node.js and n
 
 ## Reporting problems
 
-Found a bug, or tried a storage provider that doesn't work? Please [open an issue](https://github.com/rgblack316/podcast-feed-import-and-host/issues) describing what happened, or send a pull request with a fix.
+Found a bug, or tried a storage provider that doesn't work? Please [open an issue](https://github.com/rgblack316/podsovereign/issues) describing what happened, or send a pull request with a fix.

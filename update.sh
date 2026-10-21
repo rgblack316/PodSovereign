@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Update FeedHost to the latest version.
+# Update PodSovereign to the latest version.
 #
-#   cd /opt/feedhost && sudo ./update.sh
+#   cd /opt/podsovereign && sudo ./update.sh     (installs from before the rename: /opt/feedhost)
 #
 # Backs up the database, downloads the new version, rebuilds the app and
 # restarts it. Database changes are applied automatically when the app starts.
@@ -37,14 +37,14 @@ DIR="${FEEDHOST_DIR:-$(cd "$(dirname "${FEEDHOST_UPDATE_ORIGIN:-$0}")" && pwd)}"
 
 # git pull may rewrite this very file while bash is reading it, so run from a copy.
 if [ -z "${FEEDHOST_UPDATE_REEXEC:-}" ]; then
-  tmp="$(mktemp "${TMPDIR:-/tmp}/feedhost-update.XXXXXX")"
+  tmp="$(mktemp "${TMPDIR:-/tmp}/podsovereign-update.XXXXXX")"
   cp "$0" "$tmp"
   FEEDHOST_UPDATE_REEXEC="$tmp" FEEDHOST_DIR="$DIR" exec bash "$tmp" "$@"
 fi
 trap 'rm -f "$FEEDHOST_UPDATE_REEXEC"' EXIT
 
 cd "$DIR"
-[ -f docker-compose.yml ] && [ -d .git ] || die "$DIR doesn't look like a FeedHost install (no docker-compose.yml or .git)."
+[ -f docker-compose.yml ] && [ -d .git ] || die "$DIR doesn't look like a PodSovereign install (no docker-compose.yml or .git)."
 [ -f .env ] || die "No .env in $DIR. Run install.sh first."
 if [ "$(id -u)" -ne 0 ] && ! docker info >/dev/null 2>&1; then
   die "Can't reach Docker. Run with sudo:  sudo ./update.sh"
@@ -63,6 +63,15 @@ wait_healthy() {
 }
 
 # ───────────── what's new ─────────────
+
+# The repository was renamed from podcast-feed-import-and-host to podsovereign. GitHub redirects
+# the old address, but point straight at the new one once it answers.
+ORIGIN="$(git remote get-url origin 2>/dev/null || true)"
+case "$ORIGIN" in
+  *podcast-feed-import-and-host*)
+    NEW_ORIGIN="${ORIGIN/podcast-feed-import-and-host/podsovereign}"
+    if git ls-remote -q "$NEW_ORIGIN" HEAD >/dev/null 2>&1; then git remote set-url origin "$NEW_ORIGIN"; fi ;;
+esac
 
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 [ "$BRANCH" != HEAD ] || die "The download isn't on a branch (detached HEAD). Run: git checkout main"
@@ -85,7 +94,7 @@ fi
 
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   git status --short --untracked-files=no
-  die "Files that came with FeedHost were edited (listed above). Undo them with 'git checkout -- <file>' (or 'git stash'), then run the update again. Your settings in .env are not affected."
+  die "Files that came with PodSovereign were edited (listed above). Undo them with 'git checkout -- <file>' (or 'git stash'), then run the update again. Your settings in .env are not affected."
 fi
 
 if [ -z "$YES" ] && { : < /dev/tty; } 2>/dev/null; then
@@ -128,11 +137,11 @@ say "Restarting…"
 docker compose up -d --remove-orphans
 
 if wait_healthy; then
-  ok "FeedHost is running version $VERSION"
+  ok "PodSovereign is running version $VERSION"
   docker image prune -f >/dev/null 2>&1 || true
 else
   docker compose logs --tail 40 app || true
-  warn "FeedHost didn't come back after the update. The log above should say why."
+  warn "PodSovereign didn't come back after the update. The log above should say why."
   cat >&2 <<EOF
 
   To go back to the previous version ($OLD):

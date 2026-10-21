@@ -96,7 +96,7 @@ export async function lookupPlace(config: Config, query: unknown, fetchImpl: typ
   let rows: unknown;
   try {
     const res = await fetchImpl(url, {
-      headers: { 'User-Agent': `FeedHost/0.1 (+${config.publicBaseUrl})`, Accept: 'application/json', 'Accept-Language': 'en' },
+      headers: { 'User-Agent': `PodSovereign/0.1 (+${config.publicBaseUrl})`, Accept: 'application/json', 'Accept-Language': 'en' },
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);

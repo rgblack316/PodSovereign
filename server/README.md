@@ -1,4 +1,6 @@
-# FeedHost server
+# PodSovereign server
+
+*Your podcast. Your platform. Your rules.*
 
 The app that imports a podcast feed, stores it in PostgreSQL, copies its media, and serves it again. It supports the full iTunes and Podcasting 2.0 tag sets, with per-user logins.
 
@@ -12,7 +14,7 @@ curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt install -y nodejs postgresql
 sudo -u postgres createuser feedhost -P        # choose a password
 sudo -u postgres createdb -O feedhost feedhost
-sudo mkdir -p /var/lib/feedhost/media && sudo chown "$USER" /var/lib/feedhost/media
+sudo mkdir -p /var/lib/podsovereign/media && sudo chown "$USER" /var/lib/podsovereign/media
 
 npm install
 DATABASE_URL=postgres://feedhost:PASSWORD@localhost/feedhost \
@@ -30,7 +32,7 @@ Admins can change these from the dashboard. Saved values override the environmen
 
 | Setting | Notes |
 |---|---|
-| Site name | Shown on the sign-in page, in the sidebar and in browser tabs (default "FeedHost") |
+| Site name | Shown on the sign-in page, in the sidebar and in browser tabs (default "PodSovereign") |
 | Logo · Favicon | PNG, JPEG, WebP or SVG (favicon: PNG, SVG or ICO), up to 1 MB. Stored in `SITE_DIR`. Uploaded SVGs are served sandboxed |
 | Web address | The public address, e.g. `https://podcasts.johnscreekstudios.com`. Must be a bare address (no path) |
 | Media address | Optional. Episode files are served from here instead (a CDN in front of this server). With a storage provider, its public address is used |
@@ -40,7 +42,7 @@ Admins can change these from the dashboard. Saved values override the environmen
 
 So nobody can import a show they don't own, each import pauses after reading the feed. It shows a preview and waits until the person importing proves the show is theirs. **Nothing is saved or copied until then.** Either way works:
 
-- **A tag in the feed.** Add `<podcast:txt purpose="verify">feedhost-verify-…</podcast:txt>` (the Podcasting 2.0 verification tag) to the feed at the current host, then click **Check my feed now**. Hosts without custom tags: paste the code into the show description instead. The tag can be removed after the import.
+- **A tag in the feed.** Add `<podcast:txt purpose="verify">podsovereign-verify-…</podcast:txt>` (the Podcasting 2.0 verification tag) to the feed at the current host, then click **Check my feed now**. Hosts without custom tags: paste the code into the show description instead. The tag can be removed after the import.
 - **An emailed code.** A 6-digit code goes to the owner address in the feed (`<itunes:owner>`, or `<managingEditor>`), never to the person importing. Codes last 30 minutes, are stored only as a hash, allow 5 tries, and can be resent once a minute, up to 5 times.
 
 Admins can **skip** verification for shows they manage. Unfinished verifications expire after 7 days, and cancelling is always possible. **Site settings → Ownership verification** turns the requirement on or off (on by default) and sets how email is sent, through **Resend** or an **SMTP server**:
@@ -70,7 +72,7 @@ Under **Site settings → Media storage**, admins choose where episode files, ar
 | Bunny Storage | Storage zone name, its **password**, main region | The linked pull zone, `https://<zone>.b-cdn.net` |
 | Other S3-compatible | Endpoint, region, keys, bucket, path-style option | Whatever the provider gives |
 
-**Tested so far:** Cloudflare R2 is in production use. The other providers (Backblaze B2, Amazon S3, Wasabi, DigitalOcean Spaces, Bunny Storage and other S3-compatible services) are built to each provider's documentation and pass the automated tests against a simulated server, but haven't been tried with real accounts yet. They're marked **Not yet tested** in Site settings. If you try one and hit a problem, please [open an issue](https://github.com/rgblack316/podcast-feed-import-and-host/issues) with what happened (the Test connection results help), or send a pull request with a fix.
+**Tested so far:** Cloudflare R2 is in production use. The other providers (Backblaze B2, Amazon S3, Wasabi, DigitalOcean Spaces, Bunny Storage and other S3-compatible services) are built to each provider's documentation and pass the automated tests against a simulated server, but haven't been tried with real accounts yet. They're marked **Not yet tested** in Site settings. If you try one and hit a problem, please [open an issue](https://github.com/rgblack316/podsovereign/issues) with what happened (the Test connection results help), or send a pull request with a fix.
 
 - **Test connection** uploads a small file, reads it back, downloads it from the public address (as podcast apps will), and deletes it. Each step shows a pass or fail with an explanation.
 - **Saving** runs the same test first and changes nothing if it fails. Secrets are never sent back to the browser; leave the field blank to keep the saved one.
@@ -127,15 +129,15 @@ Migrations run automatically on startup. The **first account registered becomes 
 | `DATABASE_URL` | `postgres://feedhost@localhost/feedhost` | PostgreSQL connection |
 | `PUBLIC_BASE_URL` | `http://localhost:8080` | Public address of the site and feeds (Site settings overrides it) |
 | `MEDIA_BASE_URL` | same as `PUBLIC_BASE_URL` | Address used in media URLs. Set a CDN address here later (see [ROADMAP](../ROADMAP.md)) |
-| `MEDIA_DIR` | `/var/lib/feedhost/media` | Where copied media is stored |
+| `MEDIA_DIR` | `/var/lib/podsovereign/media` | Where copied media is stored |
 | `HOST` / `PORT` | `127.0.0.1` / `8080` | Listen address. Local-only by default, so it's reachable only through the tunnel |
 | `ALLOW_REGISTRATION` | off | Let anyone sign up |
 | `COOKIE_SECURE` | on if the public URL is https | Secure session cookies |
 | `MAX_MEDIA_BYTES` | 4 GB | Per-file download limit |
 | `DOWNLOAD_CONCURRENCY` | 3 | Parallel media downloads per import |
 | `ALLOW_PRIVATE_NETWORKS` | off | Allow imports from local or private addresses (dev only) |
-| `SITE_NAME` | `FeedHost` | Starting site name (Site settings overrides it) |
-| `SITE_DIR` | `/var/lib/feedhost/site` | Where the uploaded logo and favicon are stored |
+| `SITE_NAME` | `PodSovereign` | Starting site name (Site settings overrides it) |
+| `SITE_DIR` | `/var/lib/podsovereign/site` | Where the uploaded logo and favicon are stored |
 | `PODPING_HUB_URL` | `https://hub.podcastindex.org/pubnotify` | The Podcast Index hub endpoint |
 | `PODPING_DELAY_SEC` | `30` | Wait before sending, so a burst of edits becomes one ping |
 
@@ -169,8 +171,8 @@ Each show can announce live broadcasts in its feed. Apps that support Podcasting
   - Ending notifies the hub and records the real end time.
   - Removing a live item that's still live counts as ending it.
   - Pings follow the show's Podping switch.
-- **Imported live items** can be edited the same way. Tags inside them that FeedHost doesn't manage, such as `podcast:chat` or `podcast:value`, are kept as they are. The live item's GUID never changes.
-- **FeedHost doesn't stream.** The stream URL points at your own streaming service, such as Icecast or a YouTube or Twitch live page. A built-in streaming server is on the [roadmap](../ROADMAP.md) as a possible future upgrade.
+- **Imported live items** can be edited the same way. Tags inside them that PodSovereign doesn't manage, such as `podcast:chat` or `podcast:value`, are kept as they are. The live item's GUID never changes.
+- **PodSovereign doesn't stream.** The stream URL points at your own streaming service, such as Icecast or a YouTube or Twitch live page. A built-in streaming server is on the [roadmap](../ROADMAP.md) as a possible future upgrade.
 
 Example:
 ```bash
@@ -187,7 +189,7 @@ POST /api/podcasts/<id>/live/<liveId>/status   {"status": "ended"}
 
 The app runs on your machine and Cloudflare forwards `https://podcasts.johnscreekstudios.com` to it, so there are no open ports and no certificates to manage.
 
-**With Docker (simplest).** In Cloudflare Zero Trust → Networks → Tunnels, create a tunnel and copy its token. Give it to the installer, or add it to `/opt/feedhost/.env` later:
+**With Docker (simplest).** In Cloudflare Zero Trust → Networks → Tunnels, create a tunnel and copy its token. Give it to the installer, or add it to `/opt/podsovereign/.env` later:
 
 ```
 CLOUDFLARE_TUNNEL_TOKEN=eyJ...

@@ -15,7 +15,7 @@ const MAX_BYTES = 25 * 1024 * 1024;
 async function load(src: string): Promise<string> {
   if (!/^https?:\/\//i.test(src)) return readFile(src, 'utf8');
   const res = await fetch(src, {
-    headers: { 'User-Agent': 'FeedHost/0.1 (feed import)', Accept: 'application/rss+xml, application/xml, text/xml' },
+    headers: { 'User-Agent': 'PodSovereign/0.1 (feed import)', Accept: 'application/rss+xml, application/xml, text/xml' },
     redirect: 'follow',
     signal: AbortSignal.timeout(30_000),
   });

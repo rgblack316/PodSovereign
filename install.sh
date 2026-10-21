@@ -1,26 +1,37 @@
 #!/usr/bin/env bash
-# FeedHost installer for Ubuntu (22.04, 24.04, 26.04) and Debian.
+# PodSovereign installer for Ubuntu (22.04, 24.04, 26.04) and Debian.
 #
-#   curl -fsSL https://raw.githubusercontent.com/rgblack316/podcast-feed-import-and-host/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/rgblack316/podsovereign/main/install.sh | sudo bash
 #
-# It installs Docker (if needed), downloads FeedHost to /opt/feedhost, asks a
-# few questions, and starts it. Answers can also be given as environment
+# Your podcast. Your platform. Your rules.
+#
+# It installs Docker (if needed), downloads PodSovereign to /opt/podsovereign,
+# asks a few questions, and starts it. Answers can also be given as environment
 # variables for an unattended install:
 #
-#   FEEDHOST_URL=https://podcasts.example.com   public web address
-#   FEEDHOST_PORT=8080                         local port (127.0.0.1 only)
-#   FEEDHOST_TUNNEL_TOKEN=eyJ...               Cloudflare Tunnel token (optional)
-#   FEEDHOST_DIR=/opt/feedhost                 where to install
-#   FEEDHOST_BRANCH=main                       git branch to install
-#   FEEDHOST_NONINTERACTIVE=1                  never prompt; use the values above or defaults
+#   PODSOVEREIGN_URL=https://podcasts.example.com   public web address
+#   PODSOVEREIGN_PORT=8080                         local port (127.0.0.1 only)
+#   PODSOVEREIGN_TUNNEL_TOKEN=eyJ...               Cloudflare Tunnel token (optional)
+#   PODSOVEREIGN_DIR=/opt/podsovereign             where to install
+#   PODSOVEREIGN_BRANCH=main                       git branch to install
+#   PODSOVEREIGN_NONINTERACTIVE=1                  never prompt; use the values above or defaults
 #
-# Running it again on a server that already has FeedHost runs the updater instead.
+# The older FEEDHOST_* names still work. Running it again on a server that
+# already has PodSovereign (including an older /opt/feedhost install) runs the updater instead.
 
 set -Eeuo pipefail
 
-REPO_URL="${FEEDHOST_REPO:-https://github.com/rgblack316/podcast-feed-import-and-host.git}"
+# PODSOVEREIGN_* settings; FEEDHOST_* (the app's earlier name) are still accepted.
+for v in URL PORT TUNNEL_TOKEN DIR BRANCH NONINTERACTIVE REPO; do
+  new="PODSOVEREIGN_$v"; old="FEEDHOST_$v"
+  if [ -n "${!new+set}" ]; then printf -v "$old" '%s' "${!new}"; export "$old"; fi
+done
+
+REPO_URL="${FEEDHOST_REPO:-https://github.com/rgblack316/podsovereign.git}"
 BRANCH="${FEEDHOST_BRANCH:-main}"
-DIR="${FEEDHOST_DIR:-/opt/feedhost}"
+if [ -n "${FEEDHOST_DIR:-}" ]; then DIR="$FEEDHOST_DIR"
+elif [ -f /opt/feedhost/.env ]; then DIR=/opt/feedhost   # installed before the rename
+else DIR=/opt/podsovereign; fi
 
 bold=$'\033[1m'; dim=$'\033[2m'; red=$'\033[31m'; green=$'\033[32m'; reset=$'\033[0m'
 [ -t 1 ] || { bold=''; dim=''; red=''; green=''; reset=''; }
@@ -60,11 +71,11 @@ DOCKER_DISTRO=debian
 case "${ID:-} ${ID_LIKE:-}" in *ubuntu*) DOCKER_DISTRO=ubuntu ;; esac
 
 if [ -f "$DIR/.env" ] && [ -x "$DIR/update.sh" ]; then
-  say "FeedHost is already installed in $DIR, so updating it instead."
+  say "PodSovereign is already installed in $DIR, so updating it instead."
   exec "$DIR/update.sh" "$@"
 fi
 
-printf '\n%sFeedHost installer%s\n%s%s%s\n\n' "$bold" "$reset" "$dim" "Installs into $DIR from $REPO_URL ($BRANCH)" "$reset"
+printf '\n%sPodSovereign installer%s\n%sYour podcast. Your platform. Your rules.%s\n%s%s%s\n\n' "$bold" "$reset" "$dim" "$reset" "$dim" "Installs into $DIR from $REPO_URL ($BRANCH)" "$reset"
 
 # ───────────── packages ─────────────
 
@@ -110,9 +121,9 @@ if [ -d "$DIR/.git" ]; then
   git -C "$DIR" checkout -q "$BRANCH"
   git -C "$DIR" merge -q --ff-only "origin/$BRANCH"
 elif [ -e "$DIR" ] && [ -n "$(ls -A "$DIR" 2>/dev/null)" ]; then
-  die "$DIR already exists and isn't a FeedHost download. Move it aside, or set FEEDHOST_DIR to another folder."
+  die "$DIR already exists and isn't a PodSovereign download. Move it aside, or set PODSOVEREIGN_DIR to another folder."
 else
-  say "Downloading FeedHost to $DIR…"
+  say "Downloading PodSovereign to $DIR…"
   git clone -q --branch "$BRANCH" "$REPO_URL" "$DIR"
 fi
 cd "$DIR"
@@ -129,7 +140,7 @@ while :; do
   FEEDHOST_URL="${FEEDHOST_URL%/}"
   if [[ "$FEEDHOST_URL" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then break; fi
   warn "Enter just the address, starting with https:// and without a path (you entered: $FEEDHOST_URL)"
-  if ! can_prompt; then die "FEEDHOST_URL must look like https://podcasts.example.com"; fi
+  if ! can_prompt; then die "PODSOVEREIGN_URL must look like https://podcasts.example.com"; fi
   FEEDHOST_URL=''
 done
 
@@ -137,7 +148,7 @@ while :; do
   ask FEEDHOST_PORT "Local port for the app (only reachable from this server)" "8080"
   if [[ "$FEEDHOST_PORT" =~ ^[0-9]+$ ]] && [ "$FEEDHOST_PORT" -ge 1 ] && [ "$FEEDHOST_PORT" -le 65535 ]; then break; fi
   warn "The port must be a number between 1 and 65535"
-  if ! can_prompt; then die "FEEDHOST_PORT must be a number"; fi
+  if ! can_prompt; then die "PODSOVEREIGN_PORT must be a number"; fi
   FEEDHOST_PORT=''
 done
 
@@ -155,14 +166,15 @@ DB_PASSWORD="$(openssl rand -hex 24)"
 PROFILES=''
 [ -n "$FEEDHOST_TUNNEL_TOKEN" ] && PROFILES='tunnel'
 cat > .env <<EOF
-# FeedHost settings, written by install.sh on $(date -u +%Y-%m-%d). Keep this file private.
+# PodSovereign settings, written by install.sh on $(date -u +%Y-%m-%d). Keep this file private.
+# (The FEEDHOST_* names below are internal and kept from the app's earlier name; don't rename them.)
 POSTGRES_PASSWORD=$DB_PASSWORD
 PUBLIC_BASE_URL=$FEEDHOST_URL
 FEEDHOST_PORT=$FEEDHOST_PORT
 FEEDHOST_DATA_DIR=./data
 CLOUDFLARE_TUNNEL_TOKEN=$FEEDHOST_TUNNEL_TOKEN
 COMPOSE_PROFILES=$PROFILES
-SITE_NAME=FeedHost
+SITE_NAME=PodSovereign
 ALLOW_REGISTRATION=false
 FEEDHOST_VERSION=$VERSION
 EOF
@@ -174,27 +186,27 @@ ok "Settings saved (database password generated)"
 
 # ───────────── start ─────────────
 
-say "Building and starting FeedHost (the first build takes a few minutes)…"
+say "Building and starting PodSovereign (the first build takes a few minutes)…"
 docker compose up -d --build
 
-say "Waiting for FeedHost to answer…"
+say "Waiting for PodSovereign to answer…"
 for _ in $(seq 1 90); do
   if curl -fsS "http://127.0.0.1:$FEEDHOST_PORT/healthz" >/dev/null 2>&1; then
-    ok "FeedHost is running (version $VERSION)"
+    ok "PodSovereign is running (version $VERSION)"
     break
   fi
   sleep 2
 done
 if ! curl -fsS "http://127.0.0.1:$FEEDHOST_PORT/healthz" >/dev/null 2>&1; then
   docker compose logs --tail 40 app || true
-  die "FeedHost didn't start. The log above should say why. After fixing it, run: cd $DIR && docker compose up -d"
+  die "PodSovereign didn't start. The log above should say why. After fixing it, run: cd $DIR && docker compose up -d"
 fi
 
 # ───────────── next steps ─────────────
 
 cat <<EOF
 
-${green}${bold}FeedHost is installed.${reset}
+${green}${bold}PodSovereign is installed.${reset} Your podcast. Your platform. Your rules.
 
   ${bold}Next:${reset}
 EOF
@@ -211,7 +223,7 @@ else
      then browse to ${bold}http://localhost:$FEEDHOST_PORT${reset}
   2. Create the first account (it becomes the admin).
   3. To go public, set up a Cloudflare Tunnel to http://127.0.0.1:$FEEDHOST_PORT
-     (see "Cloudflare Tunnel" in the README), or re-run with FEEDHOST_TUNNEL_TOKEN.
+     (see "Cloudflare Tunnel" in the README), or re-run with PODSOVEREIGN_TUNNEL_TOKEN.
 EOF
 fi
 cat <<EOF

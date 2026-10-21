@@ -14,7 +14,7 @@ import { FIXTURE, fixtureOn, setupDb, startOldHost, tempDir, testConfig } from '
 
 describe('helpers', () => {
   test('finds the token in podcast:txt, the description or itunes:summary', () => {
-    const t = 'feedhost-verify-abc123';
+    const t = 'podsovereign-verify-abc123';
     const withTxt = parseFeed(FIXTURE.replace('<podcast:medium>', `<podcast:txt purpose="verify">${t}</podcast:txt>\n<podcast:medium>`)).feed;
     assert.equal(feedHasToken(withTxt, t), true);
     const inDesc = parseFeed(FIXTURE.replace('A show about', `${t} A show about`)).feed;
@@ -152,7 +152,7 @@ describe('verification flow', () => {
     assert.equal(job.preview.title, 'The Test Show & Friends');
     assert.equal(job.preview.episodes, 2);
     assert.equal(job.preview.ownerEmail, 'o••••@example.com');
-    assert.match(job.verification.token, /^feedhost-verify-[\w-]{16}$/);
+    assert.match(job.verification.token, /^podsovereign-verify-[\w-]{16}$/);
     assert.equal(job.verification.tag, `<podcast:txt purpose="verify">${job.verification.token}</podcast:txt>`);
     assert.equal(job.verification.canEmail, false);
     assert.equal(job.verification.emailReason, 'not_configured');

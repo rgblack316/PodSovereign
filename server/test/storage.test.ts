@@ -212,7 +212,7 @@ describe('connection test', () => {
     const r = await testConnection(config, s3State());
     assert.equal(r.ok, true, JSON.stringify(r.steps));
     assert.deepEqual(r.steps.map((s) => s.step), ['Upload a test file', 'Read it back', 'Download it from the public address', 'Delete the test file']);
-    assert.ok(![...s3.objects.keys()].some((k) => k.startsWith('_feedhost-test/')));
+    assert.ok(![...s3.objects.keys()].some((k) => k.startsWith('_podsovereign-test/')));
   });
 
   test('a wrong public address is caught (podcast apps couldn’t download)', async () => {

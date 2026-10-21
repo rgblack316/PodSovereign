@@ -1,4 +1,4 @@
-// FeedHost dashboard. Plain ES modules, no build step.
+// PodSovereign dashboard. Plain ES modules, no build step.
 // All data is inserted as text (never innerHTML), so feed content can't inject markup.
 
 const $app = document.getElementById('app');
@@ -145,7 +145,12 @@ function field(labelText, input, hint) {
 
 // ───────────── branding ─────────────
 
-const siteName = () => state.setup?.siteName || 'FeedHost';
+const PRODUCT = 'PodSovereign';
+const TAGLINE = 'Your podcast. Your platform. Your rules.';
+const siteName = () => state.setup?.siteName || PRODUCT;
+/** "PodSovereign · Your podcast. Your platform. Your rules." (says "Powered by" when the site has its own name). */
+const productLine = (cls = 'product') => h('p', { class: cls },
+  h('b', null, siteName() === PRODUCT ? PRODUCT : `Powered by ${PRODUCT}`), h('span', null, TAGLINE));
 const brandMark = () => h('img', { class: 'logo', src: `/site/logo?v=${state.setup?.siteVersion ?? 0}`, alt: '' });
 
 function applyBranding() {
@@ -300,13 +305,14 @@ function renderAuth(mode) {
   err,
   h('button', { class: 'primary', type: 'submit' }, mode === 'signin' ? 'Sign in' : 'Create account'));
 
-  const heading = mode === 'first' ? 'Set up your podcast host' : mode === 'register' ? 'Create an account' : 'Sign in';
+  const heading = mode === 'first' ? 'Set up PodSovereign' : mode === 'register' ? 'Create an account' : 'Sign in';
   const lead = mode === 'first'
     ? 'Create the first account. It becomes the administrator: you can then name the site, add your logo and set its web address under Site settings.'
     : mode === 'register' ? 'Host your podcast feed and media on this server.' : 'Manage your shows, stats prefixes and live broadcasts.';
 
   $app.replaceChildren(h('div', { class: 'auth' }, h('div', { class: 'auth-box' },
     h('div', { class: 'brand' }, brandMark(), siteName()),
+    siteName() === PRODUCT ? h('p', { class: 'tagline' }, TAGLINE) : null,
     h('h1', null, heading),
     h('p', { class: 'muted' }, lead),
     form,
@@ -314,6 +320,7 @@ function renderAuth(mode) {
       mode === 'signin' ? 'New here? ' : 'Have an account? ',
       h('a', { href: '#', onclick: (e) => { e.preventDefault(); renderAuth(mode === 'signin' ? 'register' : 'signin'); } },
         mode === 'signin' ? 'Create an account' : 'Sign in')) : null,
+    siteName() !== PRODUCT ? productLine('product auth-product') : null,
   )));
   (mode === 'signin' ? email : name).focus();
 }
@@ -351,7 +358,8 @@ function frame(view) {
           location.hash = '';
           renderAuth();
         },
-      }, 'Sign out')));
+      }, 'Sign out'),
+      productLine()));
   return h('div', { class: 'frame' }, rail, h('main', { id: 'main' }, view));
 }
 

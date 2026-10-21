@@ -88,7 +88,7 @@ export async function sendDuePings(
       const url = new URL(config.podpingHubUrl);
       url.searchParams.set('url', p.feed_url);
       url.searchParams.set('podping', '1');
-      const res = await fetchImpl(url, { headers: { 'User-Agent': 'FeedHost/0.1 (+podping)' }, signal: AbortSignal.timeout(15_000) });
+      const res = await fetchImpl(url, { headers: { 'User-Agent': 'PodSovereign/0.1 (+podping)' }, signal: AbortSignal.timeout(15_000) });
       const body = await res.text().catch(() => '');
       if (!res.ok) throw new Error(`Podcast Index hub: HTTP ${res.status}`);
       let json: { status?: unknown; description?: unknown } | null = null;

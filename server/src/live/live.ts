@@ -4,7 +4,7 @@
  * came from an imported feed keeps any extra tags inside it (chat, value,
  * alternateEnclosure…) untouched — only the fields managed here change.
  *
- * FeedHost doesn't stream: the stream URL points at your own streaming server
+ * PodSovereign doesn't stream: the stream URL points at your own streaming server
  * (Icecast, a YouTube or Twitch live page, etc.).
  */
 import { randomUUID } from 'node:crypto';

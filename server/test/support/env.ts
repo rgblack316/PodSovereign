@@ -44,7 +44,7 @@ export function testConfig(over: Partial<Config> = {}): Config {
     sessionDays: 30,
     podpingHubUrl: 'http://127.0.0.1:1/pubnotify',
     podpingDelaySec: 0,
-    siteName: 'FeedHost',
+    siteName: 'PodSovereign',
     siteDir: '',
     siteVersion: 0,
     storage: { provider: 'local', settings: {}, secret: null },

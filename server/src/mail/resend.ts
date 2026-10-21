@@ -27,7 +27,7 @@ export async function sendViaResend(cfg: ResendConfig, mail: Mail): Promise<{ id
       headers: {
         Authorization: `Bearer ${cfg.apiKey}`,
         'Content-Type': 'application/json',
-        'User-Agent': 'FeedHost/0.1',
+        'User-Agent': 'PodSovereign/0.1',
         // A retried request never sends the email twice.
         'Idempotency-Key': randomUUID(),
       },

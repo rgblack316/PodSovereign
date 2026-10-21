@@ -294,7 +294,7 @@ describe('dashboard support', () => {
     assert.equal(s.json.needsFirstAccount, false);
     assert.equal(s.json.registrationOpen, false);
     assert.equal(s.json.publicBaseUrl, 'http://feeds.mine.test');
-    assert.equal(s.json.siteName, 'FeedHost');
+    assert.equal(s.json.siteName, 'PodSovereign');
     const page = await anon.get('/');
     assert.equal(page.status, 200);
     assert.match(page.headers.get('content-type')!, /text\/html/);

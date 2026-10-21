@@ -58,7 +58,7 @@ export function mediaBaseFor(config: Config, row: Pick<Row, 'public_base_url' | 
 /** Copy saved settings onto the live config (blank = environment default). */
 export function applyRow(config: Config, row: Row): void {
   const env = config.envDefaults;
-  config.siteName = row.site_name || process.env.SITE_NAME?.trim() || 'FeedHost';
+  config.siteName = row.site_name || process.env.SITE_NAME?.trim() || 'PodSovereign';
   config.publicBaseUrl = row.public_base_url || env.publicBaseUrl;
   config.mediaBaseUrl = mediaBaseFor(config, row);
   config.storage = {

@@ -1,7 +1,7 @@
 /**
  * Set a new password for an account, from the server's terminal:
  *
- *   cd /opt/feedhost && sudo docker compose exec app node --import tsx src/cli/reset-password.ts [email]
+ *   cd /opt/podsovereign && sudo docker compose exec app node --import tsx src/cli/reset-password.ts [email]
  *
  * Without an email, it resets the only admin (or lists the accounts if there's
  * more than one). Prints a new random password; sign in with it, then change it

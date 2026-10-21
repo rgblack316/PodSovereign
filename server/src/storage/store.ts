@@ -139,8 +139,8 @@ export async function testConnection(config: Config, state: StorageState): Promi
   } catch (e) {
     return { ok: false, steps: [{ step: 'Connect', ok: false, detail: (e as Error).message }] };
   }
-  const key = `_feedhost-test/${Date.now()}-${randomBytes(4).toString('hex')}.txt`;
-  const body = Buffer.from(`FeedHost connection test ${new Date().toISOString()}\n`);
+  const key = `_podsovereign-test/${Date.now()}-${randomBytes(4).toString('hex')}.txt`;
+  const body = Buffer.from(`PodSovereign connection test ${new Date().toISOString()}\n`);
 
   const run = async (step: string, fn: () => Promise<string>) => {
     try {

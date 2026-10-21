@@ -31,7 +31,7 @@ export interface GetOptions {
   accept?: string;
 }
 
-const USER_AGENT = 'FeedHost/0.1 (+self-hosted podcast feed import)';
+const USER_AGENT = 'PodSovereign/0.1 (+self-hosted podcast feed import)';
 
 const blocked = new net.BlockList();
 for (const [net4, bits] of [

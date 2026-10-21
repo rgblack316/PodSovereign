@@ -84,7 +84,7 @@ describe('name, logo and favicon', () => {
     assert.equal((await anon.get('/api/admin/site')).status, 401);
     const r = await admin.get('/api/admin/site');
     assert.equal(r.status, 200);
-    assert.equal(r.json.settings.siteName, 'FeedHost');
+    assert.equal(r.json.settings.siteName, 'PodSovereign');
   });
 
   test('renaming the site', async () => {
