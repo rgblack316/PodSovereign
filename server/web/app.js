@@ -149,8 +149,10 @@ const PRODUCT = 'PodSovereign';
 const TAGLINE = 'Your podcast. Your platform. Your rules.';
 const siteName = () => state.setup?.siteName || PRODUCT;
 /** "PodSovereign · Your podcast. Your platform. Your rules." (says "Powered by" when the site has its own name). */
+const SOURCE_URL = 'https://github.com/rgblack316/podsovereign';
 const productLine = (cls = 'product') => h('p', { class: cls },
-  h('b', null, siteName() === PRODUCT ? PRODUCT : `Powered by ${PRODUCT}`), h('span', null, TAGLINE));
+  h('b', null, siteName() === PRODUCT ? PRODUCT : `Powered by ${PRODUCT}`), h('span', null, TAGLINE),
+  h('a', { class: 'source-link', href: SOURCE_URL, target: '_blank', rel: 'noopener' }, 'Source code (AGPL)'));
 const brandMark = () => h('img', { class: 'logo', src: `/site/logo?v=${state.setup?.siteVersion ?? 0}`, alt: '' });
 
 function applyBranding() {

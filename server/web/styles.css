@@ -593,6 +593,8 @@ details.more > summary { font-weight: 500; color: var(--ink-2); }
 .tagline { font-size: var(--t-md); font-weight: 600; font-variation-settings: "wdth" 112; color: var(--fader); margin: calc(-1 * var(--s5)) 0 var(--s5); }
 .product { margin: var(--s3) 8px 0; font-size: 0.75rem; line-height: 1.4; color: var(--ink-3); display: grid; }
 .product b { font-weight: 650; color: var(--ink-2); }
+.product .source-link { color: var(--ink-3); margin-top: 2px; padding: 0; justify-self: start; font-size: inherit; }
+.product .source-link:hover { color: var(--fader); }
 .auth-product { margin: var(--s6) 0 0; text-align: left; }
 
 /* ───────── Small screens ───────── */

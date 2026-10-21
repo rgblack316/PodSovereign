@@ -2,6 +2,7 @@
   "name": "podsovereign-server",
   "version": "0.1.0",
   "private": true,
+  "license": "AGPL-3.0-or-later",
   "type": "module",
   "description": "Self-hosted podcast feed host: import, replicate and serve RSS with full iTunes + Podcasting 2.0 support",
   "scripts": {

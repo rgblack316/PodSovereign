@@ -122,3 +122,13 @@ The first install builds the app image on your server, downloading Node.js and n
 ## Reporting problems
 
 Found a bug, or tried a storage provider that doesn't work? Please [open an issue](https://github.com/rgblack316/podsovereign/issues) describing what happened, or send a pull request with a fix.
+
+## License
+
+Copyright (C) 2026 Randall Black
+
+PodSovereign is free software: you can redistribute it and/or modify it under the terms of the [GNU Affero General Public License](LICENSE) as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+
+In short: you can use, change and share it freely. If you run a modified version as a service for other people, you must offer them the source code of your version under the same license. The dashboard links to the source for this reason.
+
+The dashboard font, Archivo, is under the SIL Open Font License (`server/web/ARCHIVO-OFL.txt`).
