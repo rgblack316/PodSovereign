@@ -649,3 +649,9 @@ table.op3-episodes th button.sort:focus-visible { outline: 2px solid var(--focus
 .daily-chart .dot { fill: var(--fader); stroke: var(--panel); stroke-width: 2; }
 .chart-tip { position: absolute; top: 0; transform: translateX(-50%); background: var(--ink); color: #fff; font-size: var(--t-sm); padding: 4px 8px; border-radius: var(--r-sm); white-space: nowrap; pointer-events: none; }
 .chart-tip b { font-weight: 650; }
+
+/* Episode artwork thumbnails in the episode list */
+.ep-cell { display: flex; gap: var(--s3); align-items: center; }
+.ep-thumb { flex: 0 0 48px; width: 48px; height: 48px; border-radius: var(--r-sm); object-fit: cover; background: #cfd6d2; display: block; }
+.ep-thumb.empty { background: var(--console); border: 1px dashed var(--rule); }
+@media (max-width: 600px) { .ep-thumb { flex-basis: 36px; width: 36px; height: 36px; } .ep-cell { gap: var(--s2); } }

@@ -51,6 +51,7 @@ const randy = rows[0]!.id;
 
 host.files.set('/old/art-3000.jpg', { type: 'image/jpeg', body: await art('#20343f', '#f2c14e', 'CREEKSIDE') });
 host.files.set('/old/art2.jpg', { type: 'image/jpeg', body: await art('#7a2e3a', '#f6efe6', 'NIGHT SHIFT') });
+host.files.set('/old/ep2.jpg', { type: 'image/jpeg', body: await art('#3d5a40', '#f2e8cf', 'BRIDGE') });
 host.feeds.set('creek', fixtureOn(host.base, (x) => x
   .replace('<title>The Test Show &amp; Friends</title>', '<title>Creekside Conversations</title>')
   .replace('<itunes:author>Randy Example</itunes:author>', '<itunes:author>John’s Creek Studios</itunes:author>')

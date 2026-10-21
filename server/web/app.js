@@ -1148,10 +1148,20 @@ function pageList(current, total) {
   return out;
 }
 
-function episodeRow(p, e, op3) {
+/** A small square of the episode's own artwork (lazy-loaded; the browser shrinks it). */
+function episodeThumb(e) {
+  if (!e.imageUrl) return h('span', { class: 'ep-thumb empty', 'aria-hidden': 'true' });
+  const img = h('img', { class: 'ep-thumb', src: e.imageUrl, alt: '', loading: 'lazy', decoding: 'async', width: 48, height: 48,
+    onerror: () => img.replaceWith(h('span', { class: 'ep-thumb empty', 'aria-hidden': 'true' })) });
+  return img;
+}
+
+function episodeRow(p, e, op3, thumbs) {
   const c = op3?.get(e.guid);
   return h('tr', null,
-    h('td', null,
+    h('td', null, h('div', { class: thumbs ? 'ep-cell' : null },
+      thumbs ? episodeThumb(e) : null,
+      h('div', null,
       h('a', { class: 'ep-title', href: `#/show/${p.id}/episodes/${e.id}` }, e.title || 'Untitled'),
       ' ', episodeState(e),
       h('div', { class: 'hint' }, [
@@ -1161,7 +1171,7 @@ function episodeRow(p, e, op3) {
         e.hasTranscript ? 'Transcript' : null,
         e.hasChapters ? 'Chapters' : null,
         !e.enclosure_url ? 'No audio yet' : null,
-      ].filter(Boolean).join(' · '))),
+      ].filter(Boolean).join(' · '))))),
     h('td', { class: 'nowrap' }, e.status === 'draft' ? '—' : fmtDate(e.pub_date)),
     h('td', { class: 'num' }, fmtDuration(e.itunes_duration)),
     h('td', { class: 'num nowrap' }, e.enclosure_length ? fmtBytes(Number(e.enclosure_length)) : '—'),
@@ -1198,6 +1208,8 @@ async function tabEpisodes(p, canEdit) {
     tbody);
   // OP3 counts load after the list; until then the column is blank (undefined = no column at all).
   let op3 = p.op3 ? null : undefined;
+  // Thumbnails only when at least one episode has its own artwork.
+  const thumbs = episodes.some((e) => e.imageUrl);
   if (p.op3) op3EpisodeCounts(p).then((m) => { if (m) { op3 = m; draw(); } });
 
   function draw(scroll) {
@@ -1206,7 +1218,7 @@ async function tabEpisodes(p, canEdit) {
     pageMemory[p.id] = page;
     const from = size ? (page - 1) * size : 0;
     const shown = size ? episodes.slice(from, from + size) : episodes;
-    tbody.replaceChildren(...shown.map((e) => episodeRow(p, e, op3)));
+    tbody.replaceChildren(...shown.map((e) => episodeRow(p, e, op3, thumbs)));
 
     const n = episodes.length;
     count.textContent = (size && n > size ? `Showing ${from + 1}–${from + shown.length} of ${n} episodes.` : `${n} episode${n === 1 ? '' : 's'}.`) +
