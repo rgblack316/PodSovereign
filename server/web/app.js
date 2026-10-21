@@ -640,6 +640,7 @@ const TABS = [
   ['details', 'Show details'],
   ['episodes', 'Episodes'],
   ['settings', 'Settings'],
+  ['op3', 'OP3 Stats'],
 ];
 /** Old tab addresses → where that content lives now. */
 const MOVED_TABS = { podping: ['settings', 'podping'], prefixes: ['settings', 'prefixes'], team: ['settings', 'team'], live: ['episodes', 'live'] };
@@ -654,7 +655,8 @@ async function viewShow(id, tab, sub) {
   if (MOVED_TABS[tab]) [tab, jumpTo] = MOVED_TABS[tab];
   if (!tab) tab = showOverview ? 'overview' : 'episodes';
 
-  const views = { overview: tabOverview, episodes: tabEpisodes, details: tabDetails, settings: tabSettings };
+  if (tab === 'op3' && !p.op3) tab = 'settings';
+  const views = { overview: tabOverview, episodes: tabEpisodes, details: tabDetails, settings: tabSettings, op3: tabOp3 };
   if (tab === 'episodes' && sub) body.append(await viewEpisode(p, canEdit, sub));
   else body.append(await (views[tab] ?? tabOverview)(p, canEdit, reload));
   if (jumpTo) requestAnimationFrame(() => document.getElementById(`section-${jumpTo}`)?.scrollIntoView({ block: 'start' }));
@@ -671,9 +673,112 @@ async function viewShow(id, tab, sub) {
     h('div', { class: 'lights', role: 'list', 'aria-label': 'Show status' },
       showLights(p).map((l) => h('span', { class: `light ${l.cls}`, role: 'listitem' }, l.text))),
     h('nav', { class: 'tabs', 'aria-label': 'Show sections' },
-      TABS.filter(([k]) => k !== 'overview' || showOverview || tab === 'overview').map(([k, label]) =>
+      TABS.filter(([k]) => (k !== 'overview' || showOverview || tab === 'overview') && (k !== 'op3' || p.op3)).map(([k, label]) =>
         h('a', { href: `#/show/${id}/${k}`, 'aria-current': k === tab ? 'page' : null }, label))),
     body);
+}
+
+// ───────────── OP3 stats ─────────────
+
+const fmtNum = (n) => (n === null || n === undefined ? '—' : Number(n).toLocaleString());
+
+async function tabOp3(p, canEdit, reload, refresh = false) {
+  let s;
+  try {
+    s = await api('GET', `/api/podcasts/${p.id}/op3${refresh ? '?refresh=1' : ''}`);
+  } catch (e) {
+    const box = h('section', { class: 'panel' }, h('h2', null, 'OP3 Stats'));
+    if (e.status === 409) {
+      box.append(h('p', null, 'Stats need an OP3 API token, which an administrator adds once for the whole site.'),
+        state.me.isAdmin ? h('p', null, h('a', { href: '#/site' }, 'Add the token in Site settings')) : h('p', { class: 'hint' }, 'Ask an administrator to add it in Site settings.'));
+    } else if (e.status === 404) {
+      box.append(h('p', null, e.message));
+    } else {
+      box.append(h('p', { class: 'error' }, e.message), h('button', { type: 'button', onclick: reload }, 'Try again'));
+    }
+    return box;
+  }
+
+  const wrap = h('div', { class: 'op3' });
+  const refreshBtn = h('button', {
+    type: 'button',
+    class: 'quiet',
+    onclick: async () => {
+      refreshBtn.disabled = true;
+      refreshBtn.textContent = 'Refreshing…';
+      wrap.replaceWith(await tabOp3(p, canEdit, reload, true));
+    },
+  }, 'Refresh');
+
+  // Headline numbers
+  const tiles = h('div', { class: 'stat-tiles' },
+    [['Downloads, last 30 days', s.monthlyDownloads], ['Weekly average', s.weeklyAvgDownloads], ['Episodes counted', s.episodes.length]]
+      .map(([label, v]) => h('div', { class: 'stat-tile' }, h('span', { class: 'stat-value' }, fmtNum(v)), h('span', { class: 'stat-label' }, label))));
+
+  // Last four weeks (OP3 lists them oldest first)
+  const weeks = s.weeklyDownloads;
+  const maxW = Math.max(1, ...weeks);
+  const weekLabel = (i) => (i === weeks.length - 1 ? 'Last 7 days' : `${(weeks.length - 1 - i) * 7 + 1}–${(weeks.length - i) * 7} days ago`);
+  const weekChart = weeks.length ? h('div', { class: 'week-bars', role: 'img', 'aria-label': `Downloads per week, oldest first: ${weeks.map(fmtNum).join(', ')}` },
+    weeks.map((n, i) => h('div', { class: 'week', title: `${weekLabel(i)}: ${fmtNum(n)} downloads` },
+      h('span', { class: 'week-value' }, fmtNum(n)),
+      h('span', { class: 'week-track' }, h('span', { class: 'week-bar', style: `height:${Math.max(2, (100 * n) / maxW)}%` })),
+      h('span', { class: 'week-label' }, weekLabel(i))))) : h('p', { class: 'hint' }, 'No weekly numbers yet.');
+
+  // Apps
+  const totalApps = s.apps.reduce((a, x) => a + x.downloads, 0) || 1;
+  const topApps = s.apps.slice(0, 8);
+  const otherApps = s.apps.slice(8).reduce((a, x) => a + x.downloads, 0);
+  if (otherApps) topApps.push({ name: 'Other apps', downloads: otherApps });
+  const maxA = Math.max(1, ...topApps.map((a) => a.downloads));
+  const appList = topApps.length ? h('ul', { class: 'hbars' }, topApps.map((a) => h('li', { title: `${a.name}: ${fmtNum(a.downloads)} downloads` },
+    h('span', { class: 'hbar-name' }, a.name),
+    h('span', { class: 'hbar-track' }, h('span', { class: 'hbar', style: `width:${Math.max(1, (100 * a.downloads) / maxA)}%` })),
+    h('span', { class: 'hbar-value' }, `${Math.round((100 * a.downloads) / totalApps)}%`)))) : h('p', { class: 'hint' }, 'No app data yet.');
+
+  // Episodes table, sortable
+  const cols = [
+    ['title', 'Episode'], ['pubdate', 'Published'], ['downloads1', '1 day'], ['downloads7', '7 days'], ['downloads30', '30 days'], ['downloadsAll', 'All time'],
+  ];
+  let sortKey = 'pubdate';
+  let sortDir = -1;
+  let showAll = false;
+  const tableBox = h('div');
+  const drawTable = () => {
+    const rows = [...s.episodes].sort((a, b) => {
+      const x = a[sortKey], y = b[sortKey];
+      if (x === y) return 0;
+      if (x === null || x === undefined) return 1;
+      if (y === null || y === undefined) return -1;
+      return (typeof x === 'string' ? x.localeCompare(y) : x - y) * sortDir;
+    });
+    const shown = showAll ? rows : rows.slice(0, 10);
+    tableBox.replaceChildren(...[
+      h('div', { class: 'table-wrap' }, h('table', { class: 'op3-episodes' },
+        h('thead', null, h('tr', null, cols.map(([k, label]) => h('th', { class: k === 'title' || k === 'pubdate' ? '' : 'num', 'aria-sort': sortKey === k ? (sortDir > 0 ? 'ascending' : 'descending') : null },
+          h('button', { type: 'button', class: 'sort', onclick: () => { if (sortKey === k) sortDir = -sortDir; else { sortKey = k; sortDir = k === 'title' ? 1 : -1; } drawTable(); } },
+            label, sortKey === k ? (sortDir > 0 ? ' ▲' : ' ▼') : ''))))),
+        h('tbody', null, shown.map((e) => h('tr', null,
+          h('td', null, e.title ?? e.itemGuid),
+          h('td', null, fmtDate(e.pubdate)),
+          ['downloads1', 'downloads7', 'downloads30', 'downloadsAll'].map((k) => h('td', { class: 'num' }, fmtNum(e[k])))))))),
+      rows.length > 10 ? h('button', { type: 'button', class: 'quiet', style: 'margin-top:8px', onclick: () => { showAll = !showAll; drawTable(); } }, showAll ? 'Show the first 10' : `Show all ${rows.length} episodes`) : null,
+    ].filter(Boolean));
+  };
+  drawTable();
+
+  wrap.append(
+    h('section', { class: 'panel' },
+      h('div', { class: 'row', style: 'justify-content:space-between;align-items:flex-start' },
+        h('div', null, h('h2', null, 'OP3 Stats'),
+          h('p', { class: 'hint' }, `Downloads made through the OP3 prefix, bots excluded. Updated ${fmtDate(s.asOf ?? s.fetchedAt, true)}. `,
+            h('a', { href: s.statsPageUrl, target: '_blank', rel: 'noopener' }, 'Open on op3.dev'))),
+        refreshBtn),
+      tiles),
+    h('section', { class: 'panel' }, h('h2', null, 'Last four weeks'), weekChart),
+    h('section', { class: 'panel' }, h('h2', null, 'Episodes'), h('p', { class: 'hint' }, 'Downloads in each episode’s first day, week and month, and in total. Select a column to sort.'), tableBox),
+    h('section', { class: 'panel' }, h('h2', null, 'Apps'), h('p', { class: 'hint' }, 'Share of downloads by app over the last three months.'), appList));
+  return wrap;
 }
 
 // Overview: the move checklist + facts
@@ -3048,6 +3153,7 @@ async function viewSite() {
     storagePanel(storage),
     verifyPanel(s),
     backupsPanel(backups),
+    op3Panel(s),
     h('section', { class: 'panel' },
       h('h2', null, 'Sign-ups'),
       h('label', { class: 'switch', style: 'margin-top:12px' }, reg, 'Anyone can create an account'),
@@ -3306,6 +3412,68 @@ function backupsPanel(b) {
     h('p', { class: 'hint', style: 'margin-top:12px' }, 'To restore, see “Backups and restore” in the README. Saved passwords and API keys in a backup are encrypted with data/secret.key, so keep a copy of that file too.'),
   ].filter(Boolean));
   return panel;
+}
+
+// ───────────── OP3 token ─────────────
+
+function op3Panel(s) {
+  const err = formError();
+  const msg = h('p', { class: 'hint', role: 'status' });
+  const token = h('input', { type: 'password', autocomplete: 'off', placeholder: s.op3.tokenSet ? 'Saved. Leave blank to keep it.' : 'Paste your OP3 bearer token' });
+  const form = h('form', {
+    onsubmit: (ev) => {
+      ev.preventDefault();
+      err.hidden = true;
+      if (!token.value.trim()) return showError(err, 'Paste the token first');
+      busy(form, async () => {
+        try {
+          await api('POST', '/api/admin/site/test-op3', { token: token.value });
+          await api('PUT', '/api/admin/site', { op3Token: token.value });
+          toast('OP3 token saved');
+          render();
+        } catch (e) {
+          showError(err, e);
+        }
+      });
+    },
+  },
+  h('div', { class: 'fields-grid' }, field('OP3 API token', token)),
+  err,
+  h('div', { class: 'actions' },
+    h('button', { class: 'primary', type: 'submit' }, 'Check and save token'),
+    s.op3.tokenSet ? h('button', {
+      type: 'button',
+      onclick: async () => {
+        msg.className = 'hint';
+        msg.textContent = 'Checking…';
+        try {
+          await api('POST', '/api/admin/site/test-op3', {});
+          msg.textContent = 'OP3 accepts the saved token.';
+        } catch (e) {
+          msg.className = 'error';
+          msg.textContent = e.message;
+        }
+      },
+    }, 'Check saved token') : null,
+    s.op3.tokenSet ? h('button', {
+      type: 'button',
+      class: 'quiet',
+      onclick: async () => {
+        if (!confirm('Remove the OP3 token? The OP3 Stats tabs will stop showing numbers.')) return;
+        await api('PUT', '/api/admin/site', { op3Token: null });
+        toast('OP3 token removed');
+        render();
+      },
+    }, 'Remove') : null),
+  msg);
+
+  return h('section', { class: 'panel' },
+    h('h2', null, 'OP3 stats'),
+    h('p', { class: 'muted' }, 'Shows that use the OP3 stats prefix get an OP3 Stats tab with downloads, episodes and apps. One token covers every show on this site.'),
+    h('p', { class: 'hint', style: 'margin-bottom:12px' }, s.op3.tokenSet
+      ? h('span', { class: 'light on' }, 'Token saved')
+      : ['Create a token at ', h('a', { href: 'https://op3.dev/api/keys', target: '_blank', rel: 'noopener' }, 'op3.dev/api/keys'), ', then paste it here.']),
+    form);
 }
 
 // ───────────── ownership verification + email ─────────────

@@ -4,14 +4,11 @@ What's planned next, roughly in order. For what's already built, see the feature
 
 Found a bug or want to help? [Open an issue](https://github.com/rgblack316/podsovereign/issues) or send a pull request.
 
-## Next up: OP3 stats on the show dashboard
+## OP3 stats: next steps
 
-Shown only for shows that have **OP3** ticked as a stats prefix (Settings → Stats prefixes). Other shows see nothing new.
-- [ ] A Stats panel on the show page: downloads over time (last 7 / 30 / 90 days), top episodes, and top apps and countries
+Built: an **OP3 Stats** tab on shows that use the OP3 prefix (downloads in the last 30 days, the last four weeks, per-episode downloads and top apps), with the OP3 token in Site settings.
 - [ ] Per-episode download counts in the Episodes list and the episode editor
-- [ ] Find the show on OP3 by its `podcast:guid` (no setup for the podcaster), with a link to its public OP3 stats page
-- [ ] OP3 API key in Site settings (to confirm against OP3's API docs when building), with results cached so the dashboard doesn't call OP3 on every page view
-- [ ] Note in the panel that stats count from when the OP3 prefix was turned on
+- [ ] Daily downloads over longer ranges (90 days, a year) and top countries, from OP3's download records
 
 ## Media storage providers
 
@@ -54,6 +51,7 @@ PodSovereign doesn't stream today. Live shows point at an outside stream (Icecas
 - [ ] Publish a prebuilt app image on GitHub Container Registry, so installs and updates skip the local build (seconds instead of minutes)
 
 ## Recently completed
+- OP3 Stats tab for shows using the OP3 prefix
 - Saved passwords and API keys encrypted in the database; the dashboard font is served from your own server (no Google Fonts)
 - Database backups from the admin panel: instant download, scheduled backups by email or to any storage provider, optional encryption
 - Forms for value, funding, podroll, update frequency, license and text records; people and locations

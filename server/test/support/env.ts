@@ -56,6 +56,8 @@ export function testConfig(over: Partial<Config> = {}): Config {
     requireVerification: false,
     mail: null,
     resendApiUrl: 'http://127.0.0.1:1',
+    op3Token: null,
+    op3ApiUrl: 'http://127.0.0.1:1',
     nominatimUrl: 'http://127.0.0.1:1/',
     secretKeyFile: '',
     previousHosts: [],

@@ -1,0 +1,47 @@
+/** TEST-ONLY fake OP3 API (https://op3.dev/api/docs): one known show. */
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+
+export interface FakeOp3 {
+  apiUrl: string;
+  requests: { path: string; auth: string | undefined }[];
+  /** podcast:guid values the fake knows (all map to `uuid`). */
+  guids: Set<string>;
+  close(): Promise<void>;
+}
+
+export async function startFakeOp3(opts: { token: string; uuid: string; title?: string }): Promise<FakeOp3> {
+  const requests: FakeOp3['requests'] = [];
+  const guids = new Set<string>();
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url!, 'http://x');
+    requests.push({ path: url.pathname + url.search, auth: req.headers.authorization });
+    const json = (status: number, body: unknown) => res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(body));
+    if (req.headers.authorization !== `Bearer ${opts.token}`) return json(401, { error: 'Unauthorized' });
+    const m = /^\/api\/1\/shows\/(.+)$/.exec(url.pathname);
+    if (m) {
+      const key = decodeURIComponent(m[1]!);
+      return guids.has(key) || key === opts.uuid
+        ? json(200, { showUuid: opts.uuid, title: opts.title ?? 'Garden Talk', podcastGuid: [...guids][0], statsPageUrl: `https://op3.dev/show/${opts.uuid}` })
+        : json(404, { error: 'not found' });
+    }
+    if (url.pathname === '/api/1/queries/show-download-counts') {
+      return json(200, { asof: '2026-10-21T20:00:00.000Z', showDownloadCounts: { [url.searchParams.get('showUuid')!]: { monthlyDownloads: 1234, days: '1'.repeat(30), weeklyAvgDownloads: 300, weeklyDownloads: [250, 280, 320, 350], numWeeks: 4 } } });
+    }
+    if (url.pathname === '/api/1/queries/episode-download-counts') {
+      return json(200, { showUuid: opts.uuid, episodes: [
+        { itemGuid: 'ep-2', title: 'Tomatoes', pubdate: '2026-10-14T10:00:00.000Z', downloads1: 90, downloads3: 140, downloads7: 180, downloads30: 220, downloadsAll: 220 },
+        { itemGuid: 'ep-1', title: 'Soil', pubdate: '2026-09-01T10:00:00.000Z', downloads1: 70, downloads3: 110, downloads7: 150, downloads30: 300, downloadsAll: 410 },
+      ] });
+    }
+    if (url.pathname === '/api/1/queries/top-apps-for-show') return json(200, { showUuid: opts.uuid, appDownloads: { Overcast: 120, 'Apple Podcasts': 500, Spotify: 300 } });
+    json(404, { error: 'unknown' });
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  return {
+    apiUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/1`,
+    requests,
+    guids,
+    close: () => new Promise((r) => server.close(() => r())),
+  };
+}

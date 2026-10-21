@@ -9,7 +9,8 @@ import { createApp } from '../../src/http/app.js';
 import { claimNextJob, enqueueImport, runImportJob, startImportWorker } from '../../src/import/importer.js';
 import { startFakeS3 } from './fake-storage.js';
 import { startFakeSmtp } from './fake-smtp.js';
-import { loadSiteSettings } from '../../src/site/settings.js';
+import { startFakeOp3 } from './fake-op3.js';
+import { loadSiteSettings, saveSiteSettings } from '../../src/site/settings.js';
 import { createLiveItem, setLiveStatus } from '../../src/live/live.js';
 import { setShowPodping } from '../../src/podping/podping.js';
 import { hashPassword } from '../../src/auth/passwords.js';
@@ -105,6 +106,14 @@ console.log(`feed to import: ${host.base}/feeds/fresh.xml`);
 const s3 = await startFakeS3({ bucket: 'demo-bucket', accessKeyId: 'DEMOKEY', secret: 'demo-secret', region: 'us-east-1' });
 console.log(`fake S3: endpoint ${s3.endpoint}  bucket demo-bucket  key DEMOKEY / demo-secret  public ${s3.publicUrl}`);
 startImportWorker({ db, config, log: console.log }, 500);
+
+// OP3 stats for Creekside (token "demo-op3-token" is already saved).
+const op3 = await startFakeOp3({ token: 'demo-op3-token', uuid: 'aabbccddeeff00112233445566778899', title: 'Creekside Conversations' });
+config.op3ApiUrl = op3.apiUrl;
+await saveSiteSettings(db, config, { op3Token: 'demo-op3-token' });
+const creekGuid = (await db.query<{ g: string }>(`SELECT podcast_guid AS g FROM podcasts WHERE id = $1`, [creek])).rows[0]!.g;
+op3.guids.add(creekGuid);
+await db.query(`INSERT INTO podcast_prefixes (podcast_id, service_key, enabled, position) VALUES ($1, 'op3', true, 0) ON CONFLICT DO NOTHING`, [creek]);
 
 const server = http.createServer(createApp({ db, config, log: console.log }));
 server.listen(port, '127.0.0.1', () => console.log(`demo ready on http://127.0.0.1:${port}  (randy@johnscreekstudios.com / demo password 123)`));

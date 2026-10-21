@@ -37,6 +37,7 @@ interface Row {
   smtp_from: string | null;
   mail_provider: 'smtp' | 'resend';
   resend_api_key: string | null;
+  op3_token: string | null;
   updated_at: Date;
 }
 
@@ -90,6 +91,7 @@ export function applyRow(config: Config, row: Row): void {
             },
           }
         : null;
+  config.op3Token = unseal(row.op3_token, 'the OP3 API token');
   config.siteVersion = new Date(row.updated_at).getTime();
 }
 
@@ -122,6 +124,7 @@ export async function siteSettingsView(db: Db, config: Config) {
       passwordSet: !!row.smtp_password,
       from: row.smtp_from ?? '',
     },
+    op3: { tokenSet: !!config.op3Token },
     hasLogo: !!row.logo_file,
     hasFavicon: !!row.favicon_file,
     previousHosts: config.previousHosts,
@@ -158,6 +161,8 @@ export interface SettingsInput {
   smtp?: unknown;
   /** Resend: { apiKey?, from }. A blank key keeps the saved one. null removes it. */
   resend?: unknown;
+  /** OP3 API token; '' or null removes it. */
+  op3Token?: unknown;
 }
 
 export interface SaveResult {
@@ -231,6 +236,11 @@ export async function saveSiteSettings(db: Db, config: Config, input: SettingsIn
       if (m.password !== undefined) set('smtp_password', seal(m.password));
       set('smtp_from', m.from);
     }
+  }
+  if (input.op3Token !== undefined) {
+    const t = typeof input.op3Token === 'string' ? input.op3Token.trim() : '';
+    if (t && !/^[A-Za-z0-9._~+/=-]{8,500}$/.test(t)) throw new SettingsError('That doesn’t look like an OP3 API token');
+    set('op3_token', seal(t || null));
   }
   if (!sets.length) return { addressChanged: false, rewrittenShows: 0 };
 

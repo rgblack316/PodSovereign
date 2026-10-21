@@ -618,3 +618,24 @@ details.more > summary { font-weight: 500; color: var(--ink-2); }
 hr.sep { border: 0; border-top: 1px solid var(--rule); margin: var(--s5) 0; }
 #backups .pill { margin-left: 6px; }
 #backups td .light { white-space: normal; }
+
+/* OP3 stats */
+.stat-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--s4); margin-top: var(--s4); }
+.stat-tile { display: grid; gap: 2px; padding: var(--s3) 0; border-top: 2px solid var(--fader); }
+.stat-value { font-size: var(--t-xl); font-weight: 700; font-variation-settings: "wdth" 112; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.stat-label { font-size: var(--t-sm); color: var(--ink-2); }
+.week-bars { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s4); height: 220px; margin-top: var(--s3); }
+.week { display: grid; grid-template-rows: auto 1fr auto; gap: var(--s1); text-align: center; min-width: 0; }
+.week-value { font-weight: 650; font-variant-numeric: tabular-nums; }
+.week-track { display: flex; align-items: flex-end; justify-content: center; border-bottom: 1px solid var(--rule); }
+.week-bar { display: block; width: min(56px, 70%); background: var(--fader); border-radius: 4px 4px 0 0; }
+.week-label { font-size: var(--t-sm); color: var(--ink-2); }
+.hbars { list-style: none; margin: var(--s3) 0 0; padding: 0; display: grid; gap: var(--s2); }
+.hbars li { display: grid; grid-template-columns: minmax(90px, 180px) 1fr 3.5em; gap: var(--s3); align-items: center; font-size: var(--t-sm); }
+.hbar-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hbar-track { height: 12px; }
+.hbar { display: block; height: 100%; background: var(--fader); border-radius: 0 4px 4px 0; }
+.hbar-value { text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+table.op3-episodes .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.op3-episodes th button.sort { all: unset; cursor: pointer; font: inherit; color: inherit; }
+table.op3-episodes th button.sort:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }

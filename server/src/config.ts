@@ -43,6 +43,10 @@ export interface Config {
   mail: import('./mail/mailer.js').MailSettings | null;
   /** Resend API base URL (overridable for tests). */
   resendApiUrl: string;
+  /** OP3 stats API token (Site settings), null = not set up. */
+  op3Token: string | null;
+  /** OP3 API base (overridable for tests). */
+  op3ApiUrl: string;
   /** Key that encrypts saved secrets: SECRET_KEY, else this file (created on first start). */
   secretKeyFile: string;
   /** OpenStreetMap place search used by the Location lookup. */
@@ -92,6 +96,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     requireVerification: true,
     mail: null,
     resendApiUrl: env.RESEND_API_URL ?? 'https://api.resend.com',
+    op3Token: null,
+    op3ApiUrl: env.OP3_API_URL ?? 'https://op3.dev/api/1',
     secretKeyFile: env.SECRET_KEY_FILE ?? path.join(path.dirname(env.MEDIA_DIR ?? '/var/lib/podsovereign/media'), 'secret.key'),
     nominatimUrl: env.NOMINATIM_URL ?? 'https://nominatim.openstreetmap.org/',
     previousHosts: [],
