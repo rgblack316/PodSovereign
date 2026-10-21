@@ -865,7 +865,8 @@ export function createApp(deps: AppDeps) {
 
   router.post('/api/admin/backups/test-bucket', async (ctx) => {
     await requireAdmin(ctx);
-    sendJson(ctx.res, 200, await testBucket(db));
+    const body = (await readJson(ctx.req).catch(() => ({}))) as { storage?: unknown };
+    sendJson(ctx.res, 200, await testBucket(db, body?.storage));
   });
 
   /** Back up now and send it wherever automatic backups go. */

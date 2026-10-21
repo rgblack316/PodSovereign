@@ -15,7 +15,7 @@ export interface FakeS3 {
   endpoint: string;
   publicUrl: string;
   objects: Map<string, { body: Buffer; type: string; acl?: string }>;
-  requests: { method: string; url: string }[];
+  requests: { method: string; url: string; acl?: string }[];
   /** Keys whose upload should fail with 500. */
   failKeys: Set<string>;
   multipartUploads: number;
@@ -25,7 +25,7 @@ export interface FakeS3 {
 export async function startFakeS3(opts: { bucket: string; accessKeyId: string; secret: string; region: string }): Promise<FakeS3> {
   const objects = new Map<string, { body: Buffer; type: string; acl?: string }>();
   const uploads = new Map<string, { key: string; parts: Map<number, Buffer>; type: string }>();
-  const requests: { method: string; url: string }[] = [];
+  const requests: { method: string; url: string; acl?: string }[] = [];
   const failKeys = new Set<string>();
   const state = { multipartUploads: 0 };
 
@@ -38,7 +38,7 @@ export async function startFakeS3(opts: { bucket: string; accessKeyId: string; s
     req.on('end', () => {
       const body = Buffer.concat(chunks);
       const url = new URL(req.url!, 'http://x');
-      requests.push({ method: req.method!, url: req.url! });
+      requests.push({ method: req.method!, url: req.url!, ...(req.headers['x-amz-acl'] ? { acl: String(req.headers['x-amz-acl']) } : {}) });
 
       // Public "CDN" side: /public/<key>
       if (url.pathname.startsWith('/public/')) {
@@ -183,6 +183,18 @@ export async function startFakeBunny(opts: { zone: string; password: string }): 
         }
         files.set(key, { body, type: String(req.headers['content-type'] ?? '') });
         return res.writeHead(201).end(JSON.stringify({ HttpCode: 201, Message: 'File uploaded.' }));
+      }
+      if (req.method === 'GET' && (key === '' || key.endsWith('/'))) {
+        // Directory listing: the files and folders directly inside.
+        const names = new Map<string, boolean>();
+        for (const k of files.keys()) {
+          if (!k.startsWith(key)) continue;
+          const rest = k.slice(key.length);
+          const i = rest.indexOf('/');
+          names.set(i < 0 ? rest : rest.slice(0, i), i >= 0);
+        }
+        return res.writeHead(200, { 'Content-Type': 'application/json' })
+          .end(JSON.stringify([...names].map(([ObjectName, IsDirectory]) => ({ ObjectName, IsDirectory, Path: `/${opts.zone}/${key}` }))));
       }
       if (req.method === 'GET') {
         const f = files.get(key);

@@ -114,6 +114,22 @@ export class BunnyClient {
     if (r.status !== 200 && r.status !== 404) this.fail('Delete', r);
   }
 
+  /** Keys under a prefix (files in the prefix's folder whose names start with it; not recursive). */
+  async list(prefix: string): Promise<string[]> {
+    const slash = prefix.lastIndexOf('/');
+    const dir = slash >= 0 ? prefix.slice(0, slash + 1) : '';
+    const r = await this.request('GET', dir);
+    if (r.status === 404) return [];
+    if (r.status !== 200) this.fail('Listing files', r);
+    let items: { ObjectName?: string; IsDirectory?: boolean }[] = [];
+    try {
+      items = JSON.parse(r.body.toString('utf8'));
+    } catch {
+      throw new BunnyError('Listing files failed: unexpected response', r.status);
+    }
+    return items.filter((i) => !i.IsDirectory && i.ObjectName).map((i) => dir + i.ObjectName!).filter((k) => k.startsWith(prefix));
+  }
+
   /** Deleting a directory path (trailing slash) removes it recursively. Never the zone root. */
   async deletePrefix(prefix: string): Promise<number> {
     if (!prefix || prefix === '/') throw new BunnyError('Refusing to delete the whole storage zone', 0);

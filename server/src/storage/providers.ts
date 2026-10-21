@@ -218,9 +218,13 @@ export type RemoteClient = S3Client | BunnyClient;
 
 const withScheme = (s: string) => (/^https?:\/\//i.test(s) ? s : `https://${s}`);
 
-/** Build a client from validated settings. */
-export function toClient(providerId: string, s: StorageSettings, secret: string): RemoteClient {
+/**
+ * Build a client from validated settings. `privateFiles` (for backups) never
+ * marks uploads public, whatever the provider normally does for media.
+ */
+export function toClient(providerId: string, s: StorageSettings, secret: string, privateFiles = false): RemoteClient {
   const str = (k: string) => String(s[k] ?? '');
+  const acl = (publicRead: boolean) => (publicRead && !privateFiles ? 'public-read' : null);
   switch (providerId) {
     case 'r2':
       return new S3Client({ endpoint: `https://${str('accountId')}.r2.cloudflarestorage.com`, region: 'auto', bucket: str('bucket'), accessKeyId: str('accessKeyId'), secretAccessKey: secret, pathStyle: true });
@@ -232,13 +236,13 @@ export function toClient(providerId: string, s: StorageSettings, secret: string)
     case 's3':
       return new S3Client({ endpoint: `https://s3.${str('region')}.amazonaws.com`, region: str('region'), bucket: str('bucket'), accessKeyId: str('accessKeyId'), secretAccessKey: secret, pathStyle: false });
     case 'wasabi':
-      return new S3Client({ endpoint: `https://s3.${str('region')}.wasabisys.com`, region: str('region'), bucket: str('bucket'), accessKeyId: str('accessKeyId'), secretAccessKey: secret, pathStyle: true, acl: s.publicRead ? 'public-read' : null });
+      return new S3Client({ endpoint: `https://s3.${str('region')}.wasabisys.com`, region: str('region'), bucket: str('bucket'), accessKeyId: str('accessKeyId'), secretAccessKey: secret, pathStyle: true, acl: acl(!!s.publicRead) });
     case 'spaces':
-      return new S3Client({ endpoint: `https://${str('region')}.digitaloceanspaces.com`, region: str('region'), bucket: str('bucket'), accessKeyId: str('accessKeyId'), secretAccessKey: secret, pathStyle: false, acl: 'public-read' });
+      return new S3Client({ endpoint: `https://${str('region')}.digitaloceanspaces.com`, region: str('region'), bucket: str('bucket'), accessKeyId: str('accessKeyId'), secretAccessKey: secret, pathStyle: false, acl: acl(true) });
     case 'bunny':
       return new BunnyClient({ hostname: str('hostname'), zone: str('zone'), password: secret });
     case 'other':
-      return new S3Client({ endpoint: withScheme(str('endpoint')), region: str('region') || 'us-east-1', bucket: str('bucket'), accessKeyId: str('accessKeyId'), secretAccessKey: secret, pathStyle: s.pathStyle !== false, acl: s.publicRead ? 'public-read' : null });
+      return new S3Client({ endpoint: withScheme(str('endpoint')), region: str('region') || 'us-east-1', bucket: str('bucket'), accessKeyId: str('accessKeyId'), secretAccessKey: secret, pathStyle: s.pathStyle !== false, acl: acl(!!s.publicRead) });
     default:
       throw new StorageConfigError(`Unknown provider ${providerId}`);
   }

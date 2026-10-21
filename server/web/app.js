@@ -3113,64 +3113,69 @@ function backupsPanel(b) {
   const emailOn = h('input', { type: 'checkbox', role: 'switch', checked: em.enabled });
   const emailTo = h('input', { type: 'email', value: em.to ?? '', placeholder: em.admins.join(', ') || 'admin@example.com' });
   const emailBox = h('div', null,
-    field('Send to', emailTo, 'Leave blank to send to every administrator. Backups over 18 MB are too big for email; use R2 for those.'),
+    field('Send to', emailTo, 'Leave blank to send to every administrator. Backups over 18 MB are too big for email; use a storage provider for those.'),
     em.mailConfigured ? null : h('p', { class: 'warn-note' }, 'Email isn’t set up yet. Add it under “Email for verification codes” above.'));
   const syncEmail = () => { emailBox.hidden = !emailOn.checked; };
   emailOn.addEventListener('change', syncEmail);
   syncEmail();
 
-  // ── R2
-  const r2 = b.r2;
-  const r2On = h('input', { type: 'checkbox', role: 'switch', checked: r2.ready || !!r2.bucket });
-  const acct = h('input', { type: 'text', value: r2.accountId, placeholder: '32-character account ID', autocomplete: 'off', spellcheck: 'false' });
-  const keyId = h('input', { type: 'text', value: r2.accessKeyId, autocomplete: 'off', spellcheck: 'false' });
-  const secret = h('input', { type: 'password', autocomplete: 'new-password', placeholder: r2.secretSet ? 'Saved. Leave blank to keep it.' : '' });
-  const bucket = h('input', { type: 'text', value: r2.bucket, placeholder: 'podsovereign-backups', autocomplete: 'off', spellcheck: 'false' });
-  const prefix = h('input', { type: 'text', value: r2.prefix, autocomplete: 'off', spellcheck: 'false' });
+  // ── Storage provider
+  const st = b.storage;
+  const storageOn = h('input', { type: 'checkbox', role: 'switch', checked: !!st.provider });
+  let chosen = st.provider ?? 'r2';
+  let values = { ...st.settings };
+  let secretValue = '';
+  const providerSel = h('select', {
+    onchange: () => {
+      chosen = providerSel.value;
+      values = chosen === st.provider ? { ...st.settings } : {};
+      secretValue = '';
+      testResult.replaceChildren();
+      drawStorage();
+    },
+  }, b.providers.map((p) => h('option', { value: p.id }, p.tested ? p.name : `${p.name} (not yet tested)`)));
+  providerSel.value = chosen;
+  const folder = h('input', { type: 'text', value: st.folder, autocomplete: 'off', spellcheck: 'false' });
   const keep = h('input', { type: 'text', inputmode: 'numeric', value: b.keep });
-  const testMsg = h('p', { class: 'hint', role: 'status' });
+  const storageFields = h('div');
+  const testResult = h('div');
+  const storageBody = () => ({ provider: chosen, settings: values, secret: secretValue || undefined, folder: folder.value });
+  const drawStorage = () => {
+    const p = b.providers.find((x) => x.id === chosen);
+    storageFields.replaceChildren(...[
+      p.tested ? null : h('p', { class: 'hint' }, 'Built to the provider’s documentation but not yet tried with a real account. If it doesn’t work, please report it on GitHub.'),
+      h('div', { class: 'fields-grid' }, providerInputs(p, values, { secretSaved: chosen === st.provider && st.secretSet, onSecret: (v) => { secretValue = v; } })),
+      h('p', { class: 'hint' }, h('a', { href: p.docsUrl, target: '_blank', rel: 'noopener' }, `${p.name} setup guide`)),
+    ].filter(Boolean));
+  };
+  drawStorage();
   const testBtn = h('button', {
     type: 'button',
-    disabled: !r2.ready,
     onclick: async () => {
       testBtn.disabled = true;
-      testMsg.className = 'hint';
-      testMsg.textContent = 'Testing…';
+      testBtn.textContent = 'Testing…';
+      testResult.replaceChildren(h('p', { class: 'hint' }, 'Uploading a small test file…'));
       try {
-        const t = await api('POST', '/api/admin/backups/test-bucket');
-        testMsg.className = t.ok ? 'hint' : 'error';
-        testMsg.textContent = t.ok ? 'Connected. PodSovereign can write to, read from and clean up the bucket.' : t.error;
+        const t = await api('POST', '/api/admin/backups/test-bucket', { storage: storageBody() });
+        testResult.replaceChildren(h('ul', { class: 'test-steps' }, t.steps.map((x) =>
+          h('li', null, h('span', { class: `light ${x.ok ? 'on' : 'bad'}` }, x.step), h('p', { class: 'hint' }, x.detail)))));
       } catch (e) {
-        testMsg.className = 'error';
-        testMsg.textContent = e.message;
+        testResult.replaceChildren(h('p', { class: 'error' }, e.message));
       }
+      testBtn.textContent = 'Test connection';
       testBtn.disabled = false;
     },
-  }, 'Test bucket');
-  const r2Box = h('div', null,
-    h('p', { class: 'hint' }, 'Use a separate bucket from your media, kept private. In Cloudflare, create an R2 API token with Object Read & Write on that bucket.'),
-    h('div', { class: 'fields-grid' },
-      field('Account ID', acct), field('Bucket', bucket), field('Access key ID', keyId), field('Secret access key', secret),
-      field('Folder', prefix), field('Backups to keep', keep, 'Older ones in the folder are deleted.')),
-    r2.ready ? null : h('p', { class: 'hint' }, 'Save, then test the bucket.'),
-    h('div', { class: 'row' }, testBtn, r2.ready ? h('button', {
-      type: 'button',
-      class: 'quiet',
-      onclick: async () => {
-        if (!confirm('Remove the R2 bucket settings? Backups already in the bucket stay there.')) return;
-        try {
-          await api('PUT', '/api/admin/backups', { r2: null });
-          toast('R2 settings removed');
-          reload();
-        } catch (e) {
-          toast(e.message);
-        }
-      },
-    }, 'Remove bucket') : null),
-    testMsg);
-  const syncR2 = () => { r2Box.hidden = !r2On.checked; };
-  r2On.addEventListener('change', syncR2);
-  syncR2();
+  }, 'Test connection');
+  const storageBox = h('div', null,
+    h('p', { class: 'hint' }, 'Use a private bucket, separate from your media, with its own access key. Backups are never made public, even where media files are.'),
+    h('div', { class: 'fields-grid' }, field('Storage provider', providerSel)),
+    storageFields,
+    h('div', { class: 'fields-grid' }, field('Folder', folder), field('Backups to keep', keep, 'Older ones in the folder are deleted.')),
+    h('div', { class: 'row' }, testBtn, h('span', { class: 'hint' }, 'Tests the settings above without saving them.')),
+    testResult);
+  const syncStorage = () => { storageBox.hidden = !storageOn.checked; };
+  storageOn.addEventListener('change', syncStorage);
+  syncStorage();
 
   // ── Passphrase
   const pass = h('input', { type: 'password', autocomplete: 'new-password', placeholder: b.passphraseSet ? 'Saved. Leave blank to keep it.' : 'At least 12 characters' });
@@ -3189,8 +3194,8 @@ function backupsPanel(b) {
         emailTo: emailTo.value,
         keep: Number(keep.value),
       };
-      if (r2On.checked) body.r2 = { accountId: acct.value, accessKeyId: keyId.value, secret: secret.value || undefined, bucket: bucket.value, prefix: prefix.value };
-      else if (r2.ready || r2.bucket) body.r2 = null;
+      if (storageOn.checked) body.storage = storageBody();
+      else if (st.provider) body.storage = null;
       if (pass.value) body.passphrase = pass.value;
       busy(form, async () => {
         try {
@@ -3209,8 +3214,8 @@ function backupsPanel(b) {
   whenFields,
   h('label', { class: 'switch', style: 'margin:16px 0 8px' }, emailOn, 'Email backups'),
   emailBox,
-  h('label', { class: 'switch', style: 'margin:16px 0 8px' }, r2On, 'Upload backups to Cloudflare R2'),
-  r2Box,
+  h('label', { class: 'switch', style: 'margin:16px 0 8px' }, storageOn, 'Upload backups to a storage provider'),
+  storageBox,
   h('h3', { style: 'margin-top:24px' }, 'Encryption'),
   h('p', { class: 'hint' }, 'Recommended. With a passphrase, emailed and uploaded backups are encrypted, and downloads can be. Store it somewhere safe: without it, an encrypted backup can’t be restored.'),
   h('div', { class: 'fields-grid' }, field('Passphrase', pass)),
@@ -3229,7 +3234,7 @@ function backupsPanel(b) {
 
   // ── Back up now (to the saved destinations)
   const runMsg = h('p', { class: 'hint', role: 'status' });
-  const canSend = (em.enabled && em.mailConfigured) || r2.ready;
+  const canSend = (em.enabled && em.mailConfigured) || st.ready;
   const runBtn = h('button', {
     type: 'button',
     disabled: !canSend || !b.pgDump,
@@ -3254,7 +3259,7 @@ function backupsPanel(b) {
   const where = (run) => {
     if (run.status === 'running') return 'In progress…';
     if (run.trigger === 'download') return run.status === 'done' ? 'Your browser' : run.error;
-    const parts = (run.results ?? []).map((x) => `${x.to === 'r2' ? 'R2' : 'Email'}: ${x.ok ? 'sent' : x.detail}`);
+    const parts = (run.results ?? []).map((x) => (x.ok ? `${x.name ?? (x.to === 'email' ? 'Email' : 'Storage')}: sent` : x.detail));
     return parts.length ? parts.join('; ') : run.error ?? '';
   };
   const history = b.runs.length
@@ -3419,6 +3424,38 @@ function verifyPanel(s) {
 
 // ───────────── media storage ─────────────
 
+/** Form fields for a storage provider, writing into `values` (the secret goes to onSecret). */
+function providerInputs(p, values, { secretSaved, onSecret }) {
+  return p.fields.map((f) => {
+    if (f.type === 'checkbox') {
+      const cb = h('input', { type: 'checkbox', checked: values[f.key] ?? f.default ?? false, onchange: () => { values[f.key] = cb.checked; } });
+      return h('div', { class: 'field wide' }, h('label', { class: 'check' }, cb, h('span', null, f.label)), f.hint ? h('p', { class: 'hint' }, f.hint) : null);
+    }
+    if (f.type === 'secret') {
+      const inp = h('input', { type: 'password', autocomplete: 'off', placeholder: secretSaved ? 'Saved. Leave blank to keep it.' : '', oninput: (e) => onSecret(e.target.value) });
+      return field(f.label, inp, f.hint);
+    }
+    if (f.type === 'select') {
+      const v = values[f.key] ?? f.default ?? '';
+      const known = f.options.some((o) => o.value === v);
+      const other = h('input', { type: 'text', value: known ? '' : v, placeholder: 'Type the hostname', hidden: known || !f.allowOther, 'aria-label': `${f.label} (other)`, oninput: (e) => { values[f.key] = e.target.value; } });
+      const sel = h('select', {
+        onchange: () => {
+          if (sel.value === '__other') { other.hidden = false; values[f.key] = other.value; other.focus(); } else { other.hidden = true; values[f.key] = sel.value; }
+        },
+      }, f.options.map((o) => h('option', { value: o.value }, o.label)), f.allowOther ? h('option', { value: '__other' }, 'Other…') : null);
+      sel.value = known ? v : f.allowOther ? '__other' : f.options[0].value;
+      if (!values[f.key]) values[f.key] = sel.value === '__other' ? '' : sel.value;
+      const wrap = field(f.label, sel, f.hint);
+      wrap.append(other);
+      return wrap;
+    }
+    if (values[f.key] === undefined && typeof f.default === 'string') values[f.key] = f.default;
+    const inp = h('input', { type: 'text', value: values[f.key] ?? '', placeholder: f.placeholder ?? '', autocomplete: 'off', spellcheck: 'false', oninput: (e) => { values[f.key] = e.target.value; } });
+    return field(f.label, inp, f.hint);
+  });
+}
+
 function storagePanel(storage) {
   const panel = h('section', { class: 'panel' });
   const providers = [{ id: 'local', name: 'This server', blurb: 'Files are stored on this server’s disk and served from the site address.', fields: [] }, ...storage.providers];
@@ -3496,35 +3533,7 @@ function storagePanel(storage) {
       fieldsBox.replaceChildren(h('p', { class: 'hint' }, 'To put a pull-through CDN in front of this server, set the media address under Web address.'));
       return;
     }
-    const inputs = p.fields.map((f) => {
-      if (f.type === 'checkbox') {
-        const cb = h('input', { type: 'checkbox', checked: values[f.key] ?? f.default ?? false, onchange: () => { values[f.key] = cb.checked; } });
-        return h('div', { class: 'field wide' }, h('label', { class: 'check' }, cb, h('span', null, f.label)), f.hint ? h('p', { class: 'hint' }, f.hint) : null);
-      }
-      if (f.type === 'secret') {
-        const saved = cur.provider === p.id && cur.secretSet;
-        const inp = h('input', { type: 'password', autocomplete: 'off', placeholder: saved ? 'Saved. Leave blank to keep it.' : '', oninput: (e) => { secretValue = e.target.value; } });
-        return field(f.label, inp, f.hint);
-      }
-      if (f.type === 'select') {
-        const v = values[f.key] ?? f.default ?? '';
-        const known = f.options.some((o) => o.value === v);
-        const other = h('input', { type: 'text', value: known ? '' : v, placeholder: 'Type the hostname', hidden: known || !f.allowOther, 'aria-label': `${f.label} (other)`, oninput: (e) => { values[f.key] = e.target.value; } });
-        const sel = h('select', {
-          onchange: () => {
-            if (sel.value === '__other') { other.hidden = false; values[f.key] = other.value; other.focus(); } else { other.hidden = true; values[f.key] = sel.value; }
-          },
-        }, f.options.map((o) => h('option', { value: o.value }, o.label)), f.allowOther ? h('option', { value: '__other' }, 'Other…') : null);
-        sel.value = known ? v : f.allowOther ? '__other' : f.options[0].value;
-        if (!values[f.key]) values[f.key] = sel.value === '__other' ? '' : sel.value;
-        const wrap = field(f.label, sel, f.hint);
-        wrap.append(other);
-        return wrap;
-      }
-      if (values[f.key] === undefined && typeof f.default === 'string') values[f.key] = f.default;
-      const inp = h('input', { type: 'text', value: values[f.key] ?? '', placeholder: f.placeholder ?? '', autocomplete: 'off', oninput: (e) => { values[f.key] = e.target.value; } });
-      return field(f.label, inp, f.hint);
-    });
+    const inputs = providerInputs(p, values, { secretSaved: cur.provider === p.id && cur.secretSet, onSecret: (v) => { secretValue = v; } });
     const pub = h('input', { type: 'url', value: values.publicUrl ?? '', placeholder: p.publicUrlPlaceholder, oninput: (e) => { values.publicUrl = e.target.value; } });
     fieldsBox.replaceChildren(
       h('p', { class: 'hint' }, h('a', { href: p.docsUrl, target: '_blank', rel: 'noopener' }, `${p.name} setup guide`)),

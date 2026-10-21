@@ -1,11 +1,12 @@
 /**
  * Backups from the admin panel: a download on demand, and automatic backups
  * on a schedule, sent off the server by email (to the administrators) and/or
- * to a private Cloudflare R2 bucket that keeps the most recent N.
+ * to a private bucket at any of the media storage providers, keeping the newest N.
  */
 import type { Config } from '../config.js';
 import { maybeOne, one, type Db, type Queryable } from '../db/db.js';
 import { sendEmail } from '../mail/mailer.js';
+import { PROVIDERS, providerById, toClient, type FieldDef, type RemoteClient, type StorageSettings } from '../storage/providers.js';
 import { S3Client } from '../storage/s3.js';
 import { backupFileName, dumpBuffer, encryptOpenSsl } from './dump.js';
 
@@ -18,6 +19,7 @@ export class BackupError extends Error {
 /** Most email services refuse messages much bigger than this (Resend: 40 MB, Gmail: 25 MB, after base64). */
 export const EMAIL_MAX_BYTES = 18 * 1024 * 1024;
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const DEFAULT_FOLDER = 'podsovereign-backups/';
 
 interface Row {
   backup_frequency: 'off' | 'daily' | 'weekly';
@@ -26,8 +28,9 @@ interface Row {
   backup_timezone: string;
   backup_email: boolean;
   backup_email_to: string | null;
-  backup_r2: { accountId?: string; accessKeyId?: string; bucket?: string; prefix?: string } | null;
-  backup_r2_secret: string | null;
+  backup_storage_provider: string | null;
+  backup_storage: StorageSettings | null;
+  backup_storage_secret: string | null;
   backup_keep: number;
   backup_passphrase: string | null;
   backup_next_at: Date | null;
@@ -35,35 +38,72 @@ interface Row {
 
 const getRow = (q: Queryable) =>
   one<Row>(q, `SELECT backup_frequency, backup_hour, backup_weekday, backup_timezone, backup_email, backup_email_to,
-                      backup_r2, backup_r2_secret, backup_keep, backup_passphrase, backup_next_at FROM site_settings WHERE id`);
+                      backup_storage_provider, backup_storage, backup_storage_secret, backup_keep, backup_passphrase, backup_next_at
+                 FROM site_settings WHERE id`);
 
-const r2Ready = (r: Row) => !!(r.backup_r2?.accountId && r.backup_r2?.accessKeyId && r.backup_r2?.bucket && r.backup_r2_secret);
+/** Provider fields that apply to backups: everything except making files public. */
+const backupFields = (fields: FieldDef[]) => fields.filter((f) => f.key !== 'publicRead');
 
-function r2Client(cfg: { accountId: string; accessKeyId: string; bucket: string }, secret: string): S3Client {
-  return new S3Client({
-    endpoint: `https://${cfg.accountId}.r2.cloudflarestorage.com`,
-    region: 'auto',
-    bucket: cfg.bucket,
-    accessKeyId: cfg.accessKeyId,
-    secretAccessKey: secret,
-    pathStyle: true,
-  });
-}
+/** The storage providers, as offered for backups. */
+export const BACKUP_PROVIDERS = PROVIDERS.map((p) => ({ id: p.id, name: p.name, docsUrl: p.docsUrl, tested: p.tested, fields: backupFields(p.fields) }));
 
-/** Tests point R2 at a fake server. */
-export const r2Override: { endpoint: string | null } = { endpoint: null };
-function client(r: Row): S3Client {
-  const c = r.backup_r2!;
-  if (r2Override.endpoint) {
-    return new S3Client({ endpoint: r2Override.endpoint, region: 'auto', bucket: c.bucket!, accessKeyId: c.accessKeyId!, secretAccessKey: r.backup_r2_secret!, pathStyle: true });
+/** Check a provider's fields (the secret separately). Throws BackupError. */
+function validateStorage(providerId: string, settings: StorageSettings, secret: string | null): StorageSettings {
+  const p = providerById(providerId);
+  if (!p) throw new BackupError('Choose a storage provider');
+  const out: StorageSettings = {};
+  for (const f of backupFields(p.fields)) {
+    if (f.key === 'secret') {
+      if (!secret) throw new BackupError(`${f.label} is required`);
+      continue;
+    }
+    let v = settings[f.key] ?? f.default;
+    if (f.type === 'checkbox') {
+      out[f.key] = v === true;
+      continue;
+    }
+    v = typeof v === 'string' ? v.trim() : '';
+    if (!v && f.required) throw new BackupError(`${f.label} is required`);
+    if (f.options && v && !f.options.some((o) => o.value === v)) {
+      const hostLike = /^(https?:\/\/)?[a-z0-9.-]+(:\d+)?\/?$/i.test(v);
+      if (!f.allowOther || !hostLike) throw new BackupError(`Choose a ${f.label.toLowerCase()} from the list`);
+    }
+    if (f.key === 'bucket' && v && !/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/i.test(v)) throw new BackupError('That bucket name isn’t valid');
+    if (f.key === 'accountId' && v && !/^[0-9a-f]{32}$/i.test(v)) throw new BackupError('The Account ID is 32 letters and numbers (0-9, a-f)');
+    out[f.key] = v;
   }
-  return r2Client({ accountId: c.accountId!, accessKeyId: c.accessKeyId!, bucket: c.bucket! }, r.backup_r2_secret!);
+  return out;
 }
 
-const prefixOf = (r: Row) => {
-  const p = (r.backup_r2?.prefix ?? 'podsovereign-backups/').trim().replace(/^\/+/, '');
+const storageReady = (r: Row) => {
+  if (!r.backup_storage_provider) return false;
+  try {
+    validateStorage(r.backup_storage_provider, r.backup_storage ?? {}, r.backup_storage_secret);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const providerName = (r: Row) => providerById(r.backup_storage_provider ?? '')?.name ?? 'Storage';
+
+/** Tests point the S3 providers at a fake server. */
+export const storageOverride: { endpoint: string | null } = { endpoint: null };
+function client(r: Row): RemoteClient {
+  const s = r.backup_storage ?? {};
+  if (storageOverride.endpoint) {
+    return new S3Client({ endpoint: storageOverride.endpoint, region: String(s.region || 'auto'), bucket: String(s.bucket), accessKeyId: String(s.accessKeyId), secretAccessKey: r.backup_storage_secret!, pathStyle: true });
+  }
+  return toClient(r.backup_storage_provider!, s, r.backup_storage_secret!, true);
+}
+
+const folderOf = (r: Row) => {
+  const p = String(r.backup_storage?.folder ?? DEFAULT_FOLDER).trim().replace(/^\/+/, '');
   return p && !p.endsWith('/') ? `${p}/` : p;
 };
+
+/** Where backups land, for messages: "my-bucket/podsovereign-backups/". */
+const whereOf = (r: Row) => `${r.backup_storage?.bucket ?? r.backup_storage?.zone ?? ''}/${folderOf(r)}`;
 
 // ───────────── schedule ─────────────
 
@@ -113,7 +153,11 @@ export async function backupView(db: Db, config: Config) {
   return {
     schedule: { frequency: r.backup_frequency, hour: r.backup_hour, weekday: r.backup_weekday, timezone: r.backup_timezone, nextAt: r.backup_next_at },
     email: { enabled: r.backup_email, to: r.backup_email_to, admins, mailConfigured: !!config.mail },
-    r2: { accountId: r.backup_r2?.accountId ?? '', accessKeyId: r.backup_r2?.accessKeyId ?? '', bucket: r.backup_r2?.bucket ?? '', prefix: r.backup_r2?.prefix ?? 'podsovereign-backups/', secretSet: !!r.backup_r2_secret, ready: r2Ready(r) },
+    storage: (() => {
+      const { folder, ...settings } = r.backup_storage ?? {};
+      return { provider: r.backup_storage_provider, name: r.backup_storage_provider ? providerName(r) : null, settings, folder: folder ?? DEFAULT_FOLDER, secretSet: !!r.backup_storage_secret, ready: storageReady(r) };
+    })(),
+    providers: BACKUP_PROVIDERS,
     keep: r.backup_keep,
     passphraseSet: !!r.backup_passphrase,
     runs: runs.map((x) => ({ ...x, bytes: x.bytes === null ? null : Number(x.bytes) })),
@@ -127,7 +171,8 @@ export interface BackupInput {
   timezone?: unknown;
   email?: unknown;
   emailTo?: unknown;
-  r2?: unknown;
+  /** null removes the storage destination; {provider, settings, secret?, folder} sets it. */
+  storage?: unknown;
   keep?: unknown;
   /** New passphrase; '' or null removes it; undefined keeps it. */
   passphrase?: unknown;
@@ -142,7 +187,7 @@ function int(v: unknown, field: string, min: number, max: number): number {
 export async function saveBackupSettings(db: Db, input: BackupInput, now = new Date()): Promise<void> {
   await db.tx(async (q) => {
     const r = await getRow(q);
-    const n: Row = { ...r, backup_r2: { ...(r.backup_r2 ?? {}) } };
+    const n: Row = { ...r };
     if (input.frequency !== undefined) {
       if (!['off', 'daily', 'weekly'].includes(input.frequency as string)) throw new BackupError('Frequency must be off, daily or weekly');
       n.backup_frequency = input.frequency as Row['backup_frequency'];
@@ -162,21 +207,16 @@ export async function saveBackupSettings(db: Db, input: BackupInput, now = new D
       if (to && !/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(to)) throw new BackupError('Send backups to: enter an email address, or leave it blank for every administrator');
       n.backup_email_to = to || null;
     }
-    if (input.r2 !== undefined) {
-      if (input.r2 === null) {
-        n.backup_r2 = {};
-        n.backup_r2_secret = null;
+    if (input.storage !== undefined) {
+      if (input.storage === null) {
+        n.backup_storage_provider = null;
+        n.backup_storage = {};
+        n.backup_storage_secret = null;
       } else {
-        const o = (input.r2 ?? {}) as Record<string, unknown>;
-        const t = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
-        const accountId = t(o.accountId);
-        if (accountId && !/^[0-9a-f]{32}$/i.test(accountId)) throw new BackupError('The R2 account ID is the 32-character ID from the Cloudflare dashboard');
-        const bucket = t(o.bucket);
-        if (bucket && !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(bucket)) throw new BackupError('Bucket names use lowercase letters, numbers and dashes');
-        const prefix = t(o.prefix);
-        if (prefix && !/^[A-Za-z0-9._\/-]{1,200}$/.test(prefix)) throw new BackupError('The folder may use letters, numbers, dots, dashes, underscores and slashes');
-        n.backup_r2 = { accountId, accessKeyId: t(o.accessKeyId), bucket, prefix: prefix || 'podsovereign-backups/' };
-        if (t(o.secret)) n.backup_r2_secret = t(o.secret);
+        const { provider, settings, secret } = parseStorage(input.storage, r);
+        n.backup_storage_provider = provider;
+        n.backup_storage = settings;
+        n.backup_storage_secret = secret;
       }
     }
     if (input.keep !== undefined) n.backup_keep = int(input.keep, 'Backups to keep', 1, 365);
@@ -186,26 +226,45 @@ export async function saveBackupSettings(db: Db, input: BackupInput, now = new D
       if (p.length > 256) throw new BackupError('The passphrase is too long');
       n.backup_passphrase = p || null;
     }
-    if (n.backup_frequency !== 'off' && !n.backup_email && !r2Ready(n)) {
-      throw new BackupError('Choose where automatic backups go: email, an R2 bucket, or both');
+    if (n.backup_frequency !== 'off' && !n.backup_email && !storageReady(n)) {
+      throw new BackupError('Choose where automatic backups go: email, a storage bucket, or both');
     }
     const next = nextRun({ frequency: n.backup_frequency, hour: n.backup_hour, weekday: n.backup_weekday, timezone: n.backup_timezone }, now);
     await q.query(
       `UPDATE site_settings SET backup_frequency = $1, backup_hour = $2, backup_weekday = $3, backup_timezone = $4,
-              backup_email = $5, backup_email_to = $6, backup_r2 = $7, backup_r2_secret = $8, backup_keep = $9,
-              backup_passphrase = $10, backup_next_at = $11, updated_at = now() WHERE id`,
+              backup_email = $5, backup_email_to = $6, backup_storage_provider = $7, backup_storage = $8, backup_storage_secret = $9,
+              backup_keep = $10, backup_passphrase = $11, backup_next_at = $12, updated_at = now() WHERE id`,
       [n.backup_frequency, n.backup_hour, n.backup_weekday, n.backup_timezone, n.backup_email, n.backup_email_to,
-        JSON.stringify(n.backup_r2), n.backup_r2_secret, n.backup_keep, n.backup_passphrase, next?.toISOString() ?? null],
+        n.backup_storage_provider, JSON.stringify(n.backup_storage ?? {}), n.backup_storage_secret, n.backup_keep, n.backup_passphrase, next?.toISOString() ?? null],
     );
   });
 }
 
-/** Upload a small file, read it back, list it, delete it. */
-export async function testBucket(db: Db): Promise<{ ok: boolean; steps: { step: string; ok: boolean; detail: string }[] }> {
-  const r = await getRow(db);
-  if (!r2Ready(r)) throw new BackupError('Save the R2 account ID, access key, secret and bucket first');
+/** Validate a {provider, settings, secret?, folder} destination; a blank secret keeps the saved one for the same provider. */
+function parseStorage(input: unknown, r: Row): { provider: string; settings: StorageSettings; secret: string | null } {
+  const o = (input && typeof input === 'object' ? input : {}) as { provider?: unknown; settings?: unknown; secret?: unknown; folder?: unknown };
+  const provider = typeof o.provider === 'string' ? o.provider : '';
+  const secretIn = typeof o.secret === 'string' ? o.secret.trim() : '';
+  const secret = secretIn || (provider === r.backup_storage_provider ? r.backup_storage_secret : null);
+  const settings = validateStorage(provider, (o.settings && typeof o.settings === 'object' ? o.settings : {}) as StorageSettings, secret);
+  const folder = typeof o.folder === 'string' ? o.folder.trim() : '';
+  if (folder && !/^[A-Za-z0-9._\/-]{1,200}$/.test(folder)) throw new BackupError('The folder may use letters, numbers, dots, dashes, underscores and slashes');
+  return { provider, settings: { ...settings, folder: folder || DEFAULT_FOLDER }, secret };
+}
+
+/**
+ * Upload a small file, read it back, list it, delete it. Tests the settings
+ * given (before they're saved), or the saved ones.
+ */
+export async function testBucket(db: Db, input?: unknown): Promise<{ ok: boolean; steps: { step: string; ok: boolean; detail: string }[] }> {
+  let r = await getRow(db);
+  if (input) {
+    const p = parseStorage(input, r);
+    r = { ...r, backup_storage_provider: p.provider, backup_storage: p.settings, backup_storage_secret: p.secret };
+  }
+  if (!storageReady(r)) throw new BackupError('Fill in the storage settings first');
   const c = client(r);
-  const key = `${prefixOf(r)}_connection-test-${Date.now()}.txt`;
+  const key = `${folderOf(r)}_connection-test-${Date.now()}.txt`;
   const steps: { step: string; ok: boolean; detail: string }[] = [];
   const run = async (step: string, fn: () => Promise<string>) => {
     try {
@@ -223,7 +282,7 @@ export async function testBucket(db: Db): Promise<{ ok: boolean; steps: { step: 
       if (!got.equals(body)) throw new Error('The file came back different');
       return 'It reads back correctly.';
     })) &&
-    (await run('List', async () => { const keys = await c.list(prefixOf(r)); return `The backup folder lists ${keys.length} file${keys.length === 1 ? '' : 's'} (old backups can be pruned).`; }));
+    (await run('List', async () => { const keys = await c.list(folderOf(r)); return `The backup folder lists ${keys.length} file${keys.length === 1 ? '' : 's'} (old backups can be pruned).`; }));
   await run('Clean up', async () => { await c.delete(key); return 'The test file was deleted.'; });
   return { ok: steps.every((s) => s.ok), steps };
 }
@@ -248,16 +307,16 @@ export async function finishRun(db: Queryable, id: string, r: { status: 'done' |
 }
 
 /**
- * Make a backup and send it wherever automatic backups go (email and/or R2).
+ * Make a backup and send it wherever automatic backups go (email and/or a storage bucket).
  * Returns the run record. Each destination is tried even if another fails.
  */
 export async function runBackup(db: Db, config: Config, trigger: 'manual' | 'scheduled', userId: string | null = null, now = new Date()) {
   const r = await getRow(db);
-  if (!r.backup_email && !r2Ready(r)) throw new BackupError('Set up email or an R2 bucket for backups first');
+  if (!r.backup_email && !storageReady(r)) throw new BackupError('Set up email or a storage bucket for backups first');
   const encrypted = !!r.backup_passphrase;
   const fileName = backupFileName(now, encrypted);
   const runId = await startRun(db, trigger, userId, fileName, encrypted);
-  const results: { to: string; ok: boolean; detail: string }[] = [];
+  const results: { to: 'email' | 'storage'; name: string; ok: boolean; detail: string }[] = [];
   try {
     let data = await dumpBuffer(config.databaseUrl);
     if (encrypted) data = encryptOpenSsl(data, r.backup_passphrase!);
@@ -267,8 +326,8 @@ export async function runBackup(db: Db, config: Config, trigger: 'manual' | 'sch
       const to = r.backup_email_to
         ? [r.backup_email_to]
         : (await db.query<{ email: string }>(`SELECT email FROM users WHERE is_admin ORDER BY created_at`)).rows.map((u) => u.email);
-      if (!config.mail) results.push({ to: 'email', ok: false, detail: 'Email isn’t set up (Site settings → Email)' });
-      else if (data.length > EMAIL_MAX_BYTES) results.push({ to: 'email', ok: false, detail: `The backup is ${size}, too big to email. Use an R2 bucket.` });
+      if (!config.mail) results.push({ to: 'email', name: 'Email', ok: false, detail: 'Email isn’t set up (Site settings → Email)' });
+      else if (data.length > EMAIL_MAX_BYTES) results.push({ to: 'email', name: 'Email', ok: false, detail: `The backup is ${size}, too big to email. Use a storage bucket.` });
       else {
         for (const addr of to) {
           try {
@@ -288,25 +347,26 @@ export async function runBackup(db: Db, config: Config, trigger: 'manual' | 'sch
               ].join('\n'),
               attachments: [{ filename: fileName, contentType: encrypted ? 'application/octet-stream' : 'application/gzip', content: data }],
             });
-            results.push({ to: 'email', ok: true, detail: `Sent to ${addr}` });
+            results.push({ to: 'email', name: 'Email', ok: true, detail: `Sent to ${addr}` });
           } catch (e) {
-            results.push({ to: 'email', ok: false, detail: `${addr}: ${(e as Error).message}` });
+            results.push({ to: 'email', name: 'Email', ok: false, detail: `${addr}: ${(e as Error).message}` });
           }
         }
       }
     }
 
-    if (r2Ready(r)) {
+    if (storageReady(r)) {
+      const name = providerName(r);
       try {
         const c = client(r);
-        const prefix = prefixOf(r);
-        await c.putBuffer(`${prefix}${fileName}`, data, encrypted ? 'application/octet-stream' : 'application/gzip');
+        const folder = folderOf(r);
+        await c.putBuffer(`${folder}${fileName}`, data, encrypted ? 'application/octet-stream' : 'application/gzip');
         // Keep the newest N (names sort by time).
-        const old = (await c.list(prefix)).filter((k) => /podsovereign-db-[\d-]+\.sql\.gz(\.enc)?$/.test(k)).sort().reverse().slice(r.backup_keep);
+        const old = (await c.list(folder)).filter((k) => /podsovereign-db-[\d-]+\.sql\.gz(\.enc)?$/.test(k)).sort().reverse().slice(r.backup_keep);
         for (const k of old) await c.delete(k);
-        results.push({ to: 'r2', ok: true, detail: `Uploaded to ${r.backup_r2!.bucket}/${prefix}${fileName}${old.length ? `; removed ${old.length} older` : ''}` });
+        results.push({ to: 'storage', name, ok: true, detail: `Uploaded to ${whereOf(r)}${fileName}${old.length ? `; removed ${old.length} older` : ''}` });
       } catch (e) {
-        results.push({ to: 'r2', ok: false, detail: `R2: ${(e as Error).message}` });
+        results.push({ to: 'storage', name, ok: false, detail: `${name}: ${(e as Error).message}` });
       }
     }
 

@@ -7,13 +7,14 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { after, before, describe, test } from 'node:test';
 import { gunzipSync } from 'node:zlib';
-import { nextRun, r2Override, runBackup, runDueBackup } from '../src/backup/backups.js';
+import { nextRun, runBackup, runDueBackup, storageOverride } from '../src/backup/backups.js';
 import { dumpBuffer, encryptOpenSsl, encryptStream } from '../src/backup/dump.js';
 import type { Db } from '../src/db/db.js';
 import { createApp } from '../src/http/app.js';
+import { toClient } from '../src/storage/providers.js';
 import { sendViaResend } from '../src/mail/resend.js';
 import { startFakeSmtp, type FakeSmtp } from './support/fake-smtp.js';
-import { startFakeS3, type FakeS3 } from './support/fake-storage.js';
+import { startFakeBunny, startFakeS3, type FakeS3 } from './support/fake-storage.js';
 import { freshDatabase, TEST_SOCKET } from './support/pgwire.js';
 import { setupDb, tempDir, testConfig } from './support/env.js';
 
@@ -61,7 +62,7 @@ before(async () => {
   dir = await tempDir('backup');
   smtp = await startFakeSmtp();
   s3 = await startFakeS3({ bucket: 'ps-backups', accessKeyId: 'AKBACKUP', secret: 'backup-secret', region: 'auto' });
-  r2Override.endpoint = s3.endpoint;
+  storageOverride.endpoint = s3.endpoint;
   config = testConfig({ mediaDir: dir, databaseUrl: urlFor(DB_NAME), publicBaseUrl: 'http://feeds.mine.test', siteName: 'Johns Creek Studios' });
   server = http.createServer(createApp({ db, config }));
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -73,7 +74,7 @@ before(async () => {
 });
 
 after(async () => {
-  r2Override.endpoint = null;
+  storageOverride.endpoint = null;
   await new Promise<void>((r) => server.close(() => r()));
   await smtp.close();
   await s3.close();
@@ -154,12 +155,14 @@ describe('admin panel', () => {
   test('settings are checked; automatic backups need somewhere to go', async () => {
     let r = await admin.put('/api/admin/backups', { frequency: 'daily', hour: 3, timezone: 'America/New_York' });
     assert.equal(r.status, 400);
-    assert.match(r.json.error, /email, an R2 bucket, or both/);
+    assert.match(r.json.error, /email, a storage bucket, or both/);
     assert.equal((await admin.put('/api/admin/backups', { timezone: 'Mars/Olympus' })).status, 400);
     assert.equal((await admin.put('/api/admin/backups', { hour: 24 })).status, 400);
     assert.equal((await admin.put('/api/admin/backups', { passphrase: 'short' })).status, 400);
     assert.equal((await admin.put('/api/admin/backups', { emailTo: 'not an email' })).status, 400);
-    assert.equal((await admin.put('/api/admin/backups', { r2: { accountId: 'nope', bucket: 'x' } })).status, 400);
+    assert.equal((await admin.put('/api/admin/backups', { storage: { provider: 'r2', settings: { accountId: 'nope', accessKeyId: 'a', bucket: 'xyz' }, secret: 's' } })).status, 400);
+    assert.equal((await admin.put('/api/admin/backups', { storage: { provider: 'gdrive', settings: {} } })).status, 400);
+    assert.equal((await admin.put('/api/admin/backups', { storage: { provider: 'b2', settings: { endpoint: 's3.us-west-004.backblazeb2.com', accessKeyId: 'a', bucket: 'my-bucket' } } })).status, 400, 'secret required');
     r = await admin.put('/api/admin/backups', { frequency: 'daily', hour: 3, timezone: 'America/New_York', email: true });
     assert.equal(r.status, 200, r.text);
     assert.ok(Date.parse(r.json.schedule.nextAt) > Date.now());
@@ -206,14 +209,21 @@ describe('admin panel', () => {
     assert.equal((await admin.put('/api/admin/backups', { passphrase: '' })).status, 200);
   });
 
-  test('R2: test the bucket, upload, and keep only the newest backups', async () => {
-    let r = await admin.put('/api/admin/backups', { r2: { accountId: '0123456789abcdef0123456789abcdef', accessKeyId: 'AKBACKUP', secret: 'backup-secret', bucket: 'ps-backups', prefix: 'nightly' }, keep: 2, email: false });
+  test('storage: any provider; test it, upload, and keep only the newest backups', async () => {
+    const r2 = { provider: 'r2', settings: { accountId: '0123456789abcdef0123456789abcdef', accessKeyId: 'AKBACKUP', bucket: 'ps-backups' }, folder: 'nightly' };
+    let r = await admin.put('/api/admin/backups', { storage: { ...r2, secret: 'backup-secret' }, keep: 2, email: false });
     assert.equal(r.status, 200, r.text);
-    assert.equal(r.json.r2.ready, true);
+    assert.equal(r.json.storage.ready, true);
+    assert.equal(r.json.storage.name, 'Cloudflare R2');
+    assert.ok(r.json.providers.some((p: any) => p.id === 'bunny'), 'every media provider is offered');
+    assert.ok(!r.json.providers.some((p: any) => p.fields.some((f: any) => f.key === 'publicRead')), 'no “make public” option for backups');
     assert.ok(!JSON.stringify(r.json).includes('backup-secret'));
     const t = await admin.post('/api/admin/backups/test-bucket');
     assert.equal(t.json.ok, true, JSON.stringify(t.json));
     assert.equal([...s3.objects.keys()].filter((k) => k.includes('_connection-test')).length, 0, 'test file cleaned up');
+    const unsaved = await admin.post('/api/admin/backups/test-bucket', { storage: { ...r2, secret: 'wrong-secret' } });
+    assert.equal(unsaved.json.ok, false, 'tests the settings on screen, before saving');
+    assert.equal((await admin.get('/api/admin/backups')).json.storage.ready, true);
 
     for (const day of ['2026-10-18', '2026-10-19', '2026-10-20']) {
       const run = await runBackup(db, config, 'manual', null, new Date(`${day}T07:00:00Z`));
@@ -223,10 +233,41 @@ describe('admin panel', () => {
     assert.deepEqual(keys, ['nightly/podsovereign-db-2026-10-19-070000.sql.gz', 'nightly/podsovereign-db-2026-10-20-070000.sql.gz']);
     assert.match(sql(s3.objects.get(keys[1]!)!.body), /CREATE TABLE/);
 
-    r = await admin.put('/api/admin/backups', { r2: { accountId: '0123456789abcdef0123456789abcdef', accessKeyId: 'AKBACKUP', secret: 'wrong-secret', bucket: 'ps-backups' } });
-    const bad = await admin.post('/api/admin/backups/test-bucket');
-    assert.equal(bad.json.ok, false);
-    await admin.put('/api/admin/backups', { r2: { accountId: '0123456789abcdef0123456789abcdef', accessKeyId: 'AKBACKUP', secret: 'backup-secret', bucket: 'ps-backups', prefix: 'nightly' } });
+    // Saving again without the secret keeps it; a wrong one fails the test.
+    assert.equal((await admin.put('/api/admin/backups', { storage: r2 })).json.storage.ready, true);
+    await admin.put('/api/admin/backups', { storage: { ...r2, secret: 'wrong-secret' } });
+    assert.equal((await admin.post('/api/admin/backups/test-bucket')).json.ok, false);
+    // Switching provider needs that provider's secret.
+    assert.equal((await admin.put('/api/admin/backups', { storage: { provider: 'b2', settings: { endpoint: 's3.us-west-004.backblazeb2.com', accessKeyId: 'a', bucket: 'my-bucket' } } })).status, 400);
+    await admin.put('/api/admin/backups', { storage: { ...r2, secret: 'backup-secret' } });
+  });
+
+  test('backups are never uploaded as public files, even on Spaces', () => {
+    const acl = (provider: string, settings: Record<string, string | boolean>, privateFiles: boolean) =>
+      (toClient(provider, settings, 'x', privateFiles) as unknown as { cfg: { acl?: string | null } }).cfg.acl ?? null;
+    assert.equal(acl('spaces', { region: 'nyc3', accessKeyId: 'a', bucket: 'b' }, false), 'public-read', 'media on Spaces is public');
+    assert.equal(acl('spaces', { region: 'nyc3', accessKeyId: 'a', bucket: 'b' }, true), null);
+    assert.equal(acl('wasabi', { region: 'us-east-1', accessKeyId: 'a', bucket: 'b', publicRead: true }, true), null);
+    assert.equal(acl('other', { endpoint: 'https://s3.example.com', region: 'us-east-1', accessKeyId: 'a', bucket: 'b', publicRead: true }, true), null);
+  });
+
+  test('Bunny Storage: upload, list and prune', async () => {
+    const bunny = await startFakeBunny({ zone: 'ps-backups', password: 'zone-pass' });
+    storageOverride.endpoint = null;
+    try {
+      const r = await admin.put('/api/admin/backups', { storage: { provider: 'bunny', settings: { zone: 'ps-backups', hostname: bunny.hostname }, secret: 'zone-pass', folder: 'db' }, keep: 1 });
+      assert.equal(r.status, 200, r.text);
+      assert.equal((await admin.post('/api/admin/backups/test-bucket')).json.ok, true);
+      for (const day of ['2026-10-19', '2026-10-20']) {
+        const run = await runBackup(db, config, 'manual', null, new Date(`${day}T07:00:00Z`));
+        assert.equal(run.status, 'done', JSON.stringify(run));
+      }
+      assert.deepEqual([...bunny.files.keys()], ['db/podsovereign-db-2026-10-20-070000.sql.gz']);
+    } finally {
+      storageOverride.endpoint = s3.endpoint;
+      await bunny.close();
+      await admin.put('/api/admin/backups', { storage: { provider: 'r2', settings: { accountId: '0123456789abcdef0123456789abcdef', accessKeyId: 'AKBACKUP', bucket: 'ps-backups' }, secret: 'backup-secret', folder: 'nightly' }, keep: 2 });
+    }
   });
 
   test('the scheduled backup runs once when due, then moves to the next time', async () => {
