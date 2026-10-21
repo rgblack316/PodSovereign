@@ -1192,6 +1192,302 @@ const locationsPayload = (list) => {
   return list.map((l) => ({ name: l.name, rel: l.rel, geo: l.geo, osm: l.osm, country: l.country }));
 };
 
+// ───────────── Podcasting 2.0 tag forms ─────────────
+
+/** A small list editor: rows built by makeRow(item, index, redraw); add() returns a new item. */
+function rowList({ list, makeRow, addLabel, add, empty, onChange }) {
+  const rows = h('div', { class: 'tag-rows' });
+  const changed = () => onChange?.();
+  function draw() {
+    rows.replaceChildren(...list.map((item, i) => {
+      const remove = h('button', { type: 'button', class: 'quiet danger', onclick: () => { list.splice(i, 1); changed(); draw(); } }, 'Remove');
+      return h('div', { class: 'tag-row' }, makeRow(item, i, changed, draw), h('div', { class: 'tag-row-end' }, remove));
+    }));
+    if (!list.length && empty) rows.append(h('p', { class: 'hint' }, empty));
+  }
+  draw();
+  const addBtn = add ? h('button', { type: 'button', onclick: () => { list.push(add()); changed(); draw(); rows.querySelector('.tag-row:last-child input')?.focus(); } }, addLabel) : null;
+  return { el: h('div', null, rows, addBtn ? h('div', { class: 'actions', style: 'margin-top:8px' }, addBtn) : null), redraw: draw };
+}
+
+const bound = (obj, key, attrs = {}) => {
+  const el = h('input', { type: 'text', value: obj[key] ?? '', ...attrs });
+  el.addEventListener('input', () => { obj[key] = el.value; el.dispatchEvent(new CustomEvent('fieldchange', { bubbles: true })); });
+  return el;
+};
+
+// ── Value for value (podcast:value) ──
+
+const sats = (btc) => {
+  const n = Number(btc);
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 1e8) : null;
+};
+
+function valueEditor({ blocks, onChange }) {
+  const wrap = h('div', { class: 'value-editor' });
+  const changed = () => onChange?.();
+  wrap.addEventListener('fieldchange', changed);
+
+  function draw() {
+    wrap.replaceChildren(...blocks.map((b, bi) => {
+      const method = h('select', { 'aria-label': 'Payment method' },
+        h('option', { value: 'keysend' }, 'Keysend (node and Lightning addresses)'),
+        h('option', { value: 'lnaddress' }, 'Lightning address'));
+      if (![...method.options].some((o) => o.value === b.method)) method.prepend(h('option', { value: b.method }, b.method));
+      method.value = b.method;
+      method.addEventListener('change', () => { b.method = method.value; changed(); });
+      const suggested = bound(b, 'suggested', { inputmode: 'decimal', placeholder: '0.00000005000', 'aria-label': 'Suggested amount' });
+      const satsNote = h('p', { class: 'hint' });
+      const noteSats = () => { const s = sats(b.suggested); satsNote.textContent = s ? `About ${s.toLocaleString()} sats per payment.` : 'Optional. In bitcoin: 0.00000005 is 5 sats.'; };
+      suggested.addEventListener('input', noteSats);
+      noteSats();
+
+      const total = h('p', { class: 'hint value-total' });
+      const pctCells = [];
+      const updatePct = () => {
+        const sum = b.recipients.reduce((t, r) => t + (Number(r.split) || 0), 0);
+        b.recipients.forEach((r, i) => { if (pctCells[i]) pctCells[i].textContent = sum ? `${Math.round(((Number(r.split) || 0) / sum) * 1000) / 10}%` : '—'; });
+        total.textContent = `Splits are shares: each recipient gets their split ÷ ${sum || 0} of every payment.`;
+      };
+      const recipients = rowList({
+        list: b.recipients,
+        addLabel: 'Add recipient',
+        add: () => ({ name: '', type: 'lnaddress', address: '', split: 0, fee: false, customKey: null, customValue: null }),
+        onChange: () => { changed(); updatePct(); },
+        empty: 'No recipients yet. Add the people who should receive payments.',
+        makeRow: (r, i, rowChanged, redraw) => {
+          const type = h('select', { 'aria-label': 'Address type' }, h('option', { value: 'lnaddress' }, 'Lightning address'), h('option', { value: 'node' }, 'Node pubkey'));
+          if (![...type.options].some((o) => o.value === r.type)) type.prepend(h('option', { value: r.type }, r.type));
+          type.value = r.type;
+          const address = bound(r, 'address', { placeholder: r.type === 'node' ? '03ae9f91a0cb8ff43840e3c322c4c61f…' : 'name@getalby.com', 'aria-label': 'Address' });
+          type.addEventListener('change', () => { r.type = type.value; address.placeholder = r.type === 'node' ? '03ae9f91a0cb8ff43840e3c322c4c61f…' : 'name@getalby.com'; rowChanged(); });
+          const split = h('input', { type: 'text', inputmode: 'numeric', value: r.split ?? '', 'aria-label': 'Split (shares)', class: 'short' });
+          split.addEventListener('input', () => { r.split = split.value === '' ? '' : Number(split.value); rowChanged(); });
+          const pct = h('span', { class: 'pct' });
+          pctCells[i] = pct;
+          const fee = h('input', { type: 'checkbox', checked: r.fee });
+          fee.addEventListener('change', () => { r.fee = fee.checked; rowChanged(); });
+          const more = h('details', { class: 'more', open: r.customKey || r.customValue ? true : null }, h('summary', null, 'Custom record'),
+            h('div', { class: 'row' },
+              h('div', { class: 'field' }, h('label', null, 'Custom key'), bound(r, 'customKey', { placeholder: '696969' })),
+              h('div', { class: 'field' }, h('label', null, 'Custom value'), bound(r, 'customValue', { placeholder: 'Optional' }))),
+            h('p', { class: 'hint' }, 'Only if the recipient’s wallet asks for one (some node and Lightning address setups do).'));
+          return h('div', { class: 'recipient' },
+            h('div', { class: 'recipient-main' }, bound(r, 'name', { placeholder: 'Name', 'aria-label': 'Name' }), type, address,
+              h('label', { class: 'split' }, split, pct), h('label', { class: 'check small' }, fee, 'Fee')),
+            more);
+        },
+      });
+      updatePct();
+
+      const other = h('textarea', { class: 'code', rows: 3, spellcheck: 'false' }, b.other ?? '');
+      other.addEventListener('input', () => { b.other = other.value; changed(); });
+      return h('div', { class: 'value-block' },
+        blocks.length > 1 ? h('h3', { class: 'sub' }, `Value block ${bi + 1}`) : null,
+        h('div', { class: 'row' }, field('Method', method), h('div', { class: 'field' }, h('label', null, 'Suggested amount (BTC)'), suggested, satsNote)),
+        h('h3', { class: 'sub' }, 'Recipients'),
+        recipients.el,
+        total,
+        h('details', { class: 'more', open: b.other ? true : null }, h('summary', null, 'Time splits and other tags in this block'),
+          h('div', { class: 'field', style: 'margin-top:8px' }, other,
+            h('p', { class: 'hint' }, 'Advanced, as XML. For example a ', h('code', { class: 'inline' }, '<podcast:valueTimeSplit>'), ' that sends part of the payments to a song or guest during part of the episode.'))),
+        h('div', { class: 'actions' }, h('button', { type: 'button', class: 'quiet danger', onclick: () => { if (!confirm('Remove this value block and all its recipients?')) return; blocks.splice(bi, 1); changed(); draw(); } }, 'Remove value block')));
+    }));
+    if (!blocks.length) {
+      wrap.append(h('p', { class: 'hint' }, 'Not set up. Listeners using Podcasting 2.0 apps can stream sats to you while they listen.'),
+        h('div', { class: 'actions' }, h('button', { type: 'button', onclick: () => { blocks.push(blankValue()); changed(); draw(); } }, 'Set up value for value')));
+    }
+  }
+  draw();
+  return { el: wrap, redraw: draw };
+}
+
+const blankValue = () => ({ type: 'lightning', method: 'keysend', suggested: '0.00000005000', recipients: [{ name: '', type: 'lnaddress', address: '', split: 100, fee: false, customKey: null, customValue: null }], other: '' });
+const copyValue = (blocks) => JSON.parse(JSON.stringify(blocks));
+const valuePayload = (blocks) => blocks.map((b) => ({
+  type: b.type, method: b.method, suggested: b.suggested || null, other: b.other || '',
+  recipients: b.recipients.map((r) => ({ name: r.name || null, type: r.type, address: (r.address || '').trim(), split: r.split === '' ? null : Number(r.split), fee: !!r.fee, customKey: r.customKey || null, customValue: r.customValue || null })),
+}));
+
+function valueSummary(blocks) {
+  if (!blocks.length) return h('p', { class: 'hint' }, 'The show has no value split set up. Add one on the Show details tab.');
+  return h('ul', { class: 'plain-list' }, blocks.flatMap((b) => b.recipients.map((r) => {
+    const sum = b.recipients.reduce((t, x) => t + (Number(x.split) || 0), 0);
+    return h('li', null, h('b', null, r.name || r.address), h('span', { class: 'hint' }, ` · ${sum ? Math.round((r.split / sum) * 1000) / 10 : 0}%${r.fee ? ' (fee)' : ''}`));
+  })));
+}
+
+// ── Funding ──
+
+function fundingEditor({ list, onChange }) {
+  return rowList({
+    list, onChange, addLabel: 'Add a support link', empty: 'No support links.',
+    add: () => ({ url: '', label: '' }),
+    makeRow: (f, i, changed) => {
+      const label = bound(f, 'label', { placeholder: 'Support the show', maxlength: 128, 'aria-label': 'Link text' });
+      const url = bound(f, 'url', { type: 'url', placeholder: 'https://…', 'aria-label': 'Link address' });
+      [label, url].forEach((el) => el.addEventListener('input', changed));
+      return h('div', { class: 'pair' }, label, url);
+    },
+  });
+}
+
+// ── Recommended shows (podcast:podroll) ──
+
+function podrollEditor({ list, onChange }) {
+  const changed = () => onChange?.();
+  const url = h('input', { type: 'url', placeholder: 'Paste a show’s feed address', 'aria-label': 'Feed address of a show to recommend' });
+  const find = h('button', { type: 'button' }, 'Add show');
+  const err = formError();
+  const rows = rowList({
+    list, onChange, empty: 'No recommended shows.',
+    makeRow: (r) => h('div', { class: 'remote' },
+      h('b', null, r.title || r.feedUrl || `Show ${r.feedGuid}`),
+      h('div', { class: 'hint' }, [r.title && r.feedUrl ? r.feedUrl : null, r.title || r.feedUrl ? `GUID ${r.feedGuid}` : 'No feed address saved, so its name can’t be shown'].filter(Boolean).join(' · '))),
+  });
+  // Show names for saved entries that have a feed address (titles aren't stored in the feed).
+  (async () => {
+    let found = false;
+    for (const r of list.filter((x) => x.feedUrl && !x.title).slice(0, 20)) {
+      try {
+        r.title = (await api('GET', `/api/feed-lookup?url=${encodeURIComponent(r.feedUrl)}`)).show.title;
+        found = true;
+      } catch { /* leave the address showing */ }
+    }
+    if (found) rows.redraw();
+  })();
+  async function add() {
+    if (!url.value.trim()) return url.focus();
+    err.hidden = true;
+    find.disabled = true;
+    find.textContent = 'Looking…';
+    try {
+      const { show } = await api('GET', `/api/feed-lookup?url=${encodeURIComponent(url.value.trim())}`);
+      if (list.some((x) => x.feedGuid === show.feedGuid)) throw new Error(`${show.title ?? 'That show'} is already on the list.`);
+      list.push({ feedGuid: show.feedGuid, feedUrl: show.feedUrl, title: show.title, medium: null });
+      url.value = '';
+      changed();
+      rows.redraw();
+      toast(`Added ${show.title ?? 'the show'}`);
+    } catch (e) {
+      showError(err, e);
+    } finally {
+      find.disabled = false;
+      find.textContent = 'Add show';
+    }
+  }
+  find.addEventListener('click', add);
+  url.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); add(); } });
+  const guid = h('input', { type: 'text', placeholder: 'Podcast GUID', 'aria-label': 'Podcast GUID' });
+  const manual = h('details', { class: 'more' }, h('summary', null, 'Add by GUID instead'),
+    h('div', { class: 'place-search', style: 'margin-top:8px' }, guid, h('button', {
+      type: 'button',
+      onclick: () => { if (!guid.value.trim()) return guid.focus(); list.push({ feedGuid: guid.value.trim(), feedUrl: null, title: null, medium: null }); guid.value = ''; changed(); rows.redraw(); },
+    }, 'Add')));
+  return { el: h('div', null, h('div', { class: 'place-search' }, url, find), err, h('div', { style: 'margin-top:12px' }, rows.el), manual) };
+}
+const podrollPayload = (list) => list.map((r) => ({ feedGuid: r.feedGuid, feedUrl: r.feedUrl || null, medium: r.medium || null }));
+
+// ── Publishing schedule (podcast:updateFrequency) ──
+
+const SCHEDULES = [
+  ['', 'Not set'], ['FREQ=DAILY', 'Daily'], ['FREQ=WEEKLY', 'Weekly'], ['FREQ=WEEKLY;INTERVAL=2', 'Every two weeks'],
+  ['FREQ=MONTHLY', 'Monthly'], ['FREQ=MONTHLY;INTERVAL=2', 'Every two months'], ['custom', 'Custom rule'],
+];
+
+function scheduleEditor({ value, onChange }) {
+  const v = value ? { ...value } : { label: '', rrule: null, dtstart: null, complete: false };
+  const changed = () => onChange?.();
+  const preset = h('select', { 'aria-label': 'How often new episodes come out' }, SCHEDULES.map(([r, t]) => h('option', { value: r }, t)));
+  preset.value = !v.rrule ? '' : SCHEDULES.some(([r]) => r === v.rrule) ? v.rrule : 'custom';
+  const label = bound(v, 'label', { placeholder: 'Shown in some apps, e.g. Every other Monday', maxlength: 128 });
+  const rule = bound(v, 'rrule', { placeholder: 'FREQ=WEEKLY;BYDAY=MO', class: 'code-input' });
+  const start = h('input', { type: 'date', value: v.dtstart ? String(v.dtstart).slice(0, 10) : '' });
+  const complete = h('input', { type: 'checkbox', checked: v.complete });
+  const ruleField = field('Rule (iCalendar RRULE)', rule, 'For example FREQ=WEEKLY;BYDAY=MO,TH for Mondays and Thursdays.');
+  const sync = () => { ruleField.hidden = preset.value !== 'custom'; };
+  preset.addEventListener('change', () => {
+    if (preset.value !== 'custom') {
+      v.rrule = preset.value || null;
+      const name = SCHEDULES.find(([r]) => r === preset.value)?.[1];
+      if (preset.value && (!v.label || SCHEDULES.some(([, t]) => t === v.label))) { v.label = name; label.value = name; }
+    }
+    sync();
+    changed();
+  });
+  [label, rule].forEach((el) => el.addEventListener('input', changed));
+  start.addEventListener('change', () => { v.dtstart = start.value || null; changed(); });
+  complete.addEventListener('change', () => { v.complete = complete.checked; changed(); });
+  sync();
+  return {
+    el: h('div', null,
+      h('div', { class: 'row' }, field('How often', preset), field('Description', label)),
+      ruleField,
+      h('div', { class: 'row' }, field('Starting (optional)', start, 'For a show returning from a break, or a limited series.'),
+        h('div', { class: 'field' }, h('label', { class: 'check' }, complete, 'No more episodes are planned')))),
+    get: () => (!v.rrule && !v.label && !v.complete ? null : { label: v.label || null, rrule: preset.value === 'custom' ? v.rrule : (preset.value || null), dtstart: v.dtstart, complete: !!v.complete }),
+  };
+}
+
+// ── License ──
+
+const LICENSES = [
+  ['', 'Not set'],
+  ['cc-by-4.0', 'CC BY 4.0: credit me'],
+  ['cc-by-sa-4.0', 'CC BY-SA 4.0: credit me, share alike'],
+  ['cc-by-nd-4.0', 'CC BY-ND 4.0: credit me, no changes'],
+  ['cc-by-nc-4.0', 'CC BY-NC 4.0: credit me, non-commercial'],
+  ['cc-by-nc-sa-4.0', 'CC BY-NC-SA 4.0: credit me, non-commercial, share alike'],
+  ['cc-by-nc-nd-4.0', 'CC BY-NC-ND 4.0: credit me, non-commercial, no changes'],
+  ['cc0-1.0', 'CC0 1.0: public domain'],
+  ['custom', 'Another license'],
+];
+
+function licenseEditor({ value, onChange, inherit }) {
+  const v = value ? { ...value } : { identifier: '', url: null };
+  const select = h('select', { 'aria-label': 'License' }, LICENSES.map(([id, t]) => h('option', { value: id }, id === '' && inherit ? 'Same as the show' : t)));
+  const known = LICENSES.find(([id]) => id && id !== 'custom' && id === (v.identifier || '').toLowerCase());
+  select.value = !v.identifier ? '' : known ? known[0] : 'custom';
+  const name = bound(v, 'identifier', { placeholder: 'my-podcast-license-v1', maxlength: 128 });
+  const url = bound(v, 'url', { type: 'url', placeholder: 'https://example.com/license.pdf' });
+  const custom = h('div', { class: 'row' }, field('License name', name), field('Link to the license', url, 'Required for a license that isn’t on the list.'));
+  const sync = () => { custom.hidden = select.value !== 'custom'; };
+  select.addEventListener('change', () => {
+    if (select.value !== 'custom') { v.identifier = select.value; v.url = null; }
+    else if (known) { v.identifier = ''; name.value = ''; }
+    sync();
+    onChange?.();
+  });
+  [name, url].forEach((el) => el.addEventListener('input', () => onChange?.()));
+  sync();
+  return {
+    el: h('div', null, field('License', select, 'How others may reuse your episodes.'), custom),
+    get: () => {
+      if (!select.value) return null;
+      if (select.value === 'custom') return v.identifier ? { identifier: v.identifier, url: v.url || null } : null;
+      // Unchanged: keep exactly what was stored (e.g. its original capitalisation and link).
+      if (value && (value.identifier || '').toLowerCase() === select.value) return { identifier: value.identifier, url: value.url };
+      return { identifier: select.value, url: null };
+    },
+  };
+}
+
+// ── Text records (podcast:txt) ──
+
+function txtEditor({ list, onChange }) {
+  return rowList({
+    list, onChange, addLabel: 'Add text record', empty: 'None.',
+    add: () => ({ purpose: '', value: '' }),
+    makeRow: (t, i, changed) => {
+      const purpose = bound(t, 'purpose', { placeholder: 'Purpose, e.g. verify', maxlength: 128, 'aria-label': 'Purpose', class: 'short-wide' });
+      const value = bound(t, 'value', { placeholder: 'Value', maxlength: 4000, 'aria-label': 'Value' });
+      [purpose, value].forEach((el) => el.addEventListener('input', changed));
+      return h('div', { class: 'pair' }, purpose, value);
+    },
+  });
+}
+const txtPayload = (list) => list.map((t) => ({ purpose: t.purpose || null, value: t.value }));
+
 // ───────────── episode editor ─────────────
 
 const TRANSCRIPT_TYPES = [
@@ -1203,7 +1499,8 @@ async function viewEpisode(p, canEdit, episodeId) {
   const isNew = episodeId === 'new';
   const ep = isNew
     ? { status: 'draft', inFeed: false, title: '', description: '', link: null, enclosure: null, duration: null, season: null, episode: null,
-        episodeType: 'full', explicit: null, imageUrl: null, block: false, transcripts: [], chapters: null, people: [], otherTags: '', itunesTitle: null }
+        episodeType: 'full', explicit: null, imageUrl: null, block: false, transcripts: [], chapters: null, people: [], locations: [],
+        value: [], funding: [], license: null, txt: [], otherTags: '', itunesTitle: null }
     : (await api('GET', `/api/podcasts/${p.id}/episodes/${episodeId}`)).episode;
   const showInfo = await api('GET', `/api/podcasts/${p.id}/details`);
 
@@ -1456,6 +1753,41 @@ async function viewEpisode(p, canEdit, episodeId) {
   let locationsChanged = false;
   const locEditor = locationsEditor({ list: locations, defaultRel: 'subject', onChange: () => { locationsChanged = true; markDirty(); } });
 
+  // ── Value for value, support links, license, text records ──
+  const changes = {};
+  const mark = (k) => () => { changes[k] = true; markDirty(); };
+  const valueBlocks = copyValue(ep.value ?? []);
+  let ownValue = valueBlocks.length > 0;
+  const vEditor = valueEditor({ blocks: valueBlocks, onChange: mark('value') });
+  const valueSlot = h('div');
+  const valueRadio = (own, labelText, small) => {
+    const r = h('input', { type: 'radio', name: 'value-mode', checked: ownValue === own });
+    r.addEventListener('change', () => {
+      ownValue = own;
+      changes.value = true;
+      markDirty();
+      if (own && !valueBlocks.length) valueBlocks.push(...copyValue(showInfo.show.value?.length ? showInfo.show.value : [blankValue()]));
+      vEditor.redraw();
+      drawValue();
+    });
+    return h('label', { class: 'choice' }, r, h('span', null, labelText, h('small', null, small)));
+  };
+  function drawValue() {
+    valueSlot.replaceChildren(
+      h('div', { class: 'choices two' },
+        valueRadio(false, 'Same as the show', 'Payments follow the show’s split'),
+        valueRadio(true, 'Split for this episode', 'For example, give a guest a share')),
+      h('div', { style: 'margin-top:16px' }, ownValue
+        ? [h('p', { class: 'hint' }, 'Apps use this split instead of the show’s for this episode, so include yourself.'), vEditor.el]
+        : valueSummary(showInfo.show.value ?? [])));
+  }
+  drawValue();
+  const funding = (ep.funding ?? []).map((f) => ({ ...f }));
+  const fEditor = fundingEditor({ list: funding, onChange: mark('funding') });
+  const lic = licenseEditor({ value: ep.license, onChange: mark('license'), inherit: true });
+  const txt = (ep.txt ?? []).map((t) => ({ ...t }));
+  const txtEd = txtEditor({ list: txt, onChange: mark('txt') });
+
   // ── Advanced ──
   const other = h('textarea', { class: 'code', rows: Math.min(16, Math.max(4, (ep.otherTags.match(/\n/g)?.length ?? 0) + 2)), spellcheck: 'false' }, ep.otherTags);
   const block = h('input', { type: 'checkbox', checked: ep.block });
@@ -1514,6 +1846,10 @@ async function viewEpisode(p, canEdit, episodeId) {
       b.people = ownPeople ? peoplePayload(people) : [];
     }
     if (locationsChanged) b.locations = locationsPayload(locations);
+    if (changes.value) b.value = ownValue ? valuePayload(valueBlocks) : [];
+    if (changes.funding) b.funding = funding;
+    if (changes.license) b.license = lic.get();
+    if (changes.txt) b.txt = txtPayload(txt);
     if (transcriptsChanged) b.transcripts = transcripts.map((t) => ({ ...t.ref, type: t.type, language: t.language || null, rel: t.rel }));
     if (chaptersChanged) b.chapters = chapters ? chapters.ref : null;
     if (mode.value === 'draft') b.status = 'draft';
@@ -1570,18 +1906,24 @@ async function viewEpisode(p, canEdit, episodeId) {
       h('section', { class: 'panel' }, h('h2', null, 'Locations'),
         h('p', { class: 'muted' }, 'Places this episode is about, or where it was recorded. Apps can show them on a map.'),
         locEditor),
+      h('section', { class: 'panel' }, h('h2', null, 'Value for value'), valueSlot),
+      h('section', { class: 'panel' }, h('h2', null, 'Support links'),
+        h('p', { class: 'muted' }, 'Links just for this episode, such as a guest’s book or a cause you mention.'),
+        fEditor.el),
       h('section', { class: 'panel' }, h('h2', null, 'Transcripts and chapters'),
         h('h3', { class: 'sub' }, 'Transcripts'), tList, tUp.el, h('div', { class: 'actions', style: 'margin-top:8px' }, tUp.button),
         h('h3', { class: 'sub' }, 'Chapters'), cSlot, cUp.el, h('div', { class: 'actions', style: 'margin-top:8px' }, cUp.button)),
-      h('section', { class: 'panel' }, h('details', { open: ep.otherTags ? true : null },
+      h('section', { class: 'panel' }, h('details', { open: ep.otherTags || ep.license || ep.txt?.length ? true : null },
         h('summary', null, 'More tags and options'),
         h('div', { style: 'margin-top:16px' },
           field('Title for Apple Podcasts', itunesTitle, 'Only if it should differ from the title, e.g. without the episode number.'),
+          lic.el,
+          h('div', { class: 'field' }, h('label', null, 'Text records'), txtEd.el),
           h('div', { class: 'field' },
             h('label', { for: 'other-tags' }, 'Other tags'),
             (other.id = 'other-tags', other),
-            h('p', { class: 'hint' }, 'Any other iTunes or Podcasting 2.0 tags for this episode, as XML: people, soundbites, location, value, license, alternate enclosures and so on. For example ',
-              h('code', { class: 'inline' }, '<podcast:person role="guest">Ann Lee</podcast:person>'))),
+            h('p', { class: 'hint' }, 'Any other iTunes or Podcasting 2.0 tags for this episode, as XML: soundbites, alternate enclosures, social interaction and so on. For example ',
+              h('code', { class: 'inline' }, '<podcast:soundbite startTime="73.0" duration="60.0">Best bit</podcast:soundbite>'))),
           h('label', { class: 'check' }, block, 'Hide this episode from Apple Podcasts'),
           ep.guid ? h('p', { class: 'hint', style: 'margin-top:12px' }, `GUID: ${ep.guid}`) : null)))),
     h('aside', { class: 'editor-side' },
@@ -1713,6 +2055,18 @@ async function tabDetails(p, canEdit, reload) {
   const locations = s.locations.map((l) => ({ ...l }));
   let locationsChanged = false;
   const locEditor = locationsEditor({ list: locations, defaultRel: 'creator', onChange: () => (locationsChanged = true) });
+  const valueBlocks = copyValue(s.value ?? []);
+  const changes = {};
+  const mark = (k) => () => (changes[k] = true);
+  const vEditor = valueEditor({ blocks: valueBlocks, onChange: mark('value') });
+  const funding = (s.funding ?? []).map((f) => ({ ...f }));
+  const fEditor = fundingEditor({ list: funding, onChange: mark('funding') });
+  const podroll = (s.podroll ?? []).map((r) => ({ ...r }));
+  const prEditor = podrollEditor({ list: podroll, onChange: mark('podroll') });
+  const sched = scheduleEditor({ value: s.updateFrequency, onChange: mark('updateFrequency') });
+  const lic = licenseEditor({ value: s.license, onChange: mark('license') });
+  const txt = (s.txt ?? []).map((t) => ({ ...t }));
+  const txtEd = txtEditor({ list: txt, onChange: mark('txt') });
   const other = h('textarea', { class: 'code', id: 'show-other-tags', rows: Math.min(16, Math.max(4, (s.otherTags.match(/\n/g)?.length ?? 0) + 2)), spellcheck: 'false' }, s.otherTags);
 
   const form = h('form', {
@@ -1739,6 +2093,12 @@ async function tabDetails(p, canEdit, reload) {
             body.people = peoplePayload(people);
           }
           if (locationsChanged) body.locations = locationsPayload(locations);
+          if (changes.value) body.value = valuePayload(valueBlocks);
+          if (changes.funding) body.funding = funding;
+          if (changes.podroll) body.podroll = podrollPayload(podroll);
+          if (changes.updateFrequency) body.updateFrequency = sched.get();
+          if (changes.license) body.license = lic.get();
+          if (changes.txt) body.txt = txtPayload(txt);
           await api('PUT', `/api/podcasts/${p.id}/details`, body);
           toast('Show details saved');
           await refreshPodcasts();
@@ -1769,6 +2129,22 @@ async function tabDetails(p, canEdit, reload) {
       h('h2', null, 'Locations'),
       h('p', { class: 'muted' }, 'Where the show is made, or the places it covers. Episodes can list their own.'),
       locEditor),
+    h('section', { class: 'panel' },
+      h('h2', null, 'Value for value'),
+      h('p', { class: 'muted' }, 'Lightning payments (sats) that listeners can stream or boost from Podcasting 2.0 apps such as Fountain, Podverse and Castamatic. Episodes can have their own split.'),
+      vEditor.el),
+    h('section', { class: 'panel' },
+      h('h2', null, 'Support links'),
+      h('p', { class: 'muted' }, 'Where listeners can support the show: Patreon, a tip jar, merch and so on. Apps show these as buttons.'),
+      fEditor.el),
+    h('section', { class: 'panel' },
+      h('h2', null, 'Recommended shows'),
+      h('p', { class: 'muted' }, 'Other podcasts you recommend (a podroll). Apps that support it list them on your show page.'),
+      prEditor.el),
+    h('section', { class: 'panel' },
+      h('h2', null, 'Schedule and license'),
+      sched.el,
+      lic.el),
     h('section', { class: 'panel' }, h('details', { open: s.otherTags ? true : null },
       h('summary', null, 'More tags and options'),
       h('div', { style: 'margin-top:16px' },
@@ -1776,8 +2152,11 @@ async function tabDetails(p, canEdit, reload) {
         h('label', { class: 'check' }, complete, 'This show is finished: no more episodes'),
         h('label', { class: 'check', style: 'margin-top:8px' }, block, 'Hide this show from Apple Podcasts'),
         h('div', { class: 'field', style: 'margin-top:16px' },
+          h('label', null, 'Text records'), txtEd.el,
+          h('p', { class: 'hint' }, 'Short values that services read from your feed, such as ownership verification codes. Old ones can be removed once they’ve done their job.')),
+        h('div', { class: 'field', style: 'margin-top:16px' },
           h('label', { for: 'show-other-tags' }, 'Other tags'), other,
-          h('p', { class: 'hint' }, 'Any other iTunes or Podcasting 2.0 channel tags, as XML: funding, value, people, podroll, trailers, location and so on. Live shows are managed on the Live tab.')),
+          h('p', { class: 'hint' }, 'Any other iTunes or Podcasting 2.0 channel tags, as XML: trailers, images, chat, social interaction and so on. Live shows are on the Episodes tab.')),
         field('New feed address', newFeed, 'Sets <itunes:new-feed-url>. Leave blank unless you’re moving this show away from here.'),
         s.podcastGuid ? h('p', { class: 'hint' }, `Podcast GUID: ${s.podcastGuid}`) : null))),
     err,

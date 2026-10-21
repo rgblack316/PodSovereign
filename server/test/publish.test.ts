@@ -305,12 +305,12 @@ describe('episodes', () => {
   });
 
   test('other tags: any Podcasting 2.0 tag as XML, validated', async () => {
-    const tags = '<podcast:license url="https://creativecommons.org/licenses/by/4.0/">cc-by-4.0</podcast:license>\n<podcast:soundbite startTime="73.0" duration="60.0">Best bit</podcast:soundbite>';
+    const tags = '<podcast:socialInteract uri="https://mastodon.example/@garden/1" protocol="activitypub"/>\n<podcast:soundbite startTime="73.0" duration="60.0">Best bit</podcast:soundbite>';
     let r = await alice.patch(`/api/podcasts/${show}/episodes/${episode}`, { otherTags: tags });
     assert.equal(r.status, 200, r.text);
     assert.equal(r.json.episode.otherTags, tags);
     let xml = await feed();
-    assert.match(xml, /<podcast:license url="https:\/\/creativecommons.org\/licenses\/by\/4.0\/">cc-by-4.0<\/podcast:license>/);
+    assert.match(xml, /<podcast:socialInteract uri="https:\/\/mastodon.example\/@garden\/1" protocol="activitypub"\/>/);
     assert.match(xml, /<podcast:soundbite startTime="73.0" duration="60.0">Best bit<\/podcast:soundbite>/);
     // Transcripts are untouched by editing other tags.
     assert.match(xml, /podcast:transcript/);
@@ -438,6 +438,108 @@ describe('episodes', () => {
     assert.match(down.json.error, /type the details in/);
   });
 
+  test('value, funding, recommended shows, schedule, license and text records at show level', async () => {
+    const r = await alice.put(`/api/podcasts/${show}/details`, {
+      value: [{
+        type: 'lightning', method: 'lnaddress', suggested: '0.00005000000',
+        recipients: [{ name: 'rgblack316@strike.me', type: 'lnaddress', address: 'rgblack316@strike.me', split: 100, fee: false, customKey: 'lnurl_callback', customValue: 'https://strike.me/api/lnurlp/rgblack316/' }],
+      }],
+      funding: [{ url: 'https://support.example.com/garden', label: 'Support Garden Talk' }],
+      podroll: [{ feedGuid: '30ed52a9-a11c-5235-bdfc-8e3379c6edde', feedUrl: 'https://serve.podhome.fm/rss/30ed52a9-a11c-5235-bdfc-8e3379c6edde' }, { feedGuid: '856cd618-7f34-57ea-9b84-3600f1f65e7f' }],
+      updateFrequency: { label: 'Every two weeks', rrule: 'FREQ=WEEKLY;INTERVAL=2' },
+      license: { identifier: 'cc-by-4.0', url: 'https://creativecommons.org/licenses/by/4.0/' },
+      txt: [{ purpose: 'applepodcastsverify', value: '05124' }],
+    });
+    assert.equal(r.status, 200, r.text);
+    const v = r.json.show;
+    assert.equal(v.value[0].recipients[0].split, 100);
+    assert.equal(v.podroll.length, 2);
+    assert.deepEqual(v.updateFrequency, { label: 'Every two weeks', rrule: 'FREQ=WEEKLY;INTERVAL=2', dtstart: null, complete: false });
+    assert.doesNotMatch(v.otherTags, /podcast:(value|funding|podroll|updateFrequency|license|txt)/);
+    const channel = (await feed()).split('<item>')[0]!;
+    assert.match(channel, /<podcast:value type="lightning" method="lnaddress" suggested="0.00005000000">\s*<podcast:valueRecipient name="rgblack316@strike.me" type="lnaddress" address="rgblack316@strike.me" split="100" customKey="lnurl_callback" customValue="https:\/\/strike.me\/api\/lnurlp\/rgblack316\/"\/>\s*<\/podcast:value>/);
+    assert.match(channel, /<podcast:funding url="https:\/\/support.example.com\/garden">Support Garden Talk<\/podcast:funding>/);
+    assert.match(channel, /<podcast:podroll>\s*<podcast:remoteItem feedGuid="30ed52a9-a11c-5235-bdfc-8e3379c6edde" feedUrl="https:\/\/serve.podhome.fm\/rss\/30ed52a9-a11c-5235-bdfc-8e3379c6edde"\/>\s*<podcast:remoteItem feedGuid="856cd618-7f34-57ea-9b84-3600f1f65e7f"\/>\s*<\/podcast:podroll>/);
+    assert.match(channel, /<podcast:updateFrequency rrule="FREQ=WEEKLY;INTERVAL=2">Every two weeks<\/podcast:updateFrequency>/);
+    assert.match(channel, /<podcast:license url="https:\/\/creativecommons.org\/licenses\/by\/4.0\/">cc-by-4.0<\/podcast:license>/);
+    assert.match(channel, /<podcast:txt purpose="applepodcastsverify">05124<\/podcast:txt>/);
+    // Clearing a field removes its tags; the others stay.
+    const cleared = await alice.put(`/api/podcasts/${show}/details`, { podroll: [], license: null });
+    assert.equal(cleared.status, 200, cleared.text);
+    const after = (await feed()).split('<item>')[0]!;
+    assert.doesNotMatch(after, /podcast:podroll|podcast:license/);
+    assert.match(after, /podcast:value/);
+  });
+
+  test('those fields are checked before saving', async () => {
+    const bad: [Record<string, unknown>, RegExp][] = [
+      [{ value: [{ type: 'lightning', method: 'keysend', recipients: [] }] }, /at least one recipient/],
+      [{ value: [{ recipients: [{ type: 'node', address: 'not-a-key', split: 1 }] }] }, /node public key/],
+      [{ value: [{ recipients: [{ type: 'lnaddress', address: 'nope', split: 1 }] }] }, /name@example.com/],
+      [{ value: [{ recipients: [{ type: 'lnaddress', address: 'a@b.co', split: 'lots' }] }] }, /whole number/],
+      [{ value: [{ recipients: [{ type: 'lnaddress', address: 'a@b.co', split: 0 }] }] }, /split above 0/],
+      [{ value: [{ suggested: 'a bit', recipients: [{ type: 'lnaddress', address: 'a@b.co', split: 1 }] }] }, /Suggested amount/],
+      [{ funding: [{ label: 'Tip jar' }] }, /needs a web address/],
+      [{ podroll: [{ feedUrl: 'https://x.example/feed.xml' }] }, /GUID is required/],
+      [{ updateFrequency: { label: 'Often', rrule: 'every tuesday' } }, /iCalendar rule/],
+      [{ updateFrequency: { label: '10 episodes', rrule: 'FREQ=WEEKLY;COUNT=10' } }, /needs a start date/],
+      [{ txt: [{ purpose: 'x' }] }, /Text record 1 is required/],
+      [{ otherTags: '<podcast:funding url="https://x">X</podcast:funding>' }, /own field \(Funding\)/],
+    ];
+    for (const [body, msg] of bad) {
+      const r = await alice.put(`/api/podcasts/${show}/details`, body);
+      assert.equal(r.status, 400, JSON.stringify(body));
+      assert.match(r.json.error, msg, JSON.stringify(body));
+    }
+  });
+
+  test('episode level: its own value (time splits kept), funding, license and text records', async () => {
+    const timeSplit = '<podcast:valueTimeSplit startTime="60" duration="237" remotePercentage="95">\n  <podcast:remoteItem itemGuid="abc" feedGuid="def"/>\n</podcast:valueTimeSplit>';
+    let r = await alice.patch(`/api/podcasts/${show}/episodes/${episode}`, {
+      value: [{ type: 'lightning', method: 'keysend', recipients: [{ name: 'Guest', type: 'lnaddress', address: 'guest@getalby.com', split: 50 }, { name: 'Host', type: 'lnaddress', address: 'host@getalby.com', split: 50 }], other: timeSplit }],
+      funding: [{ url: 'https://example.com/ep-support', label: 'Support this episode' }],
+      license: { identifier: 'cc-by-nc-4.0' },
+      txt: [{ value: 'hello' }],
+    });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.json.episode.value[0].other, timeSplit);
+    const item = (await feed()).split('<item>')[1]!;
+    assert.match(item, /<podcast:valueRecipient name="Guest" type="lnaddress" address="guest@getalby.com" split="50"\/>/);
+    assert.match(item, /<podcast:valueTimeSplit startTime="60" duration="237" remotePercentage="95">/);
+    assert.match(item, /<podcast:funding url="https:\/\/example.com\/ep-support">Support this episode<\/podcast:funding>/);
+    assert.match(item, /<podcast:license>cc-by-nc-4.0<\/podcast:license>/);
+    assert.match(item, /<podcast:txt>hello<\/podcast:txt>/);
+    // People, transcripts and other tags are untouched.
+    assert.match(item, /podcast:transcript/);
+    // Back to the show's value.
+    r = await alice.patch(`/api/podcasts/${show}/episodes/${episode}`, { value: [] });
+    assert.deepEqual(r.json.episode.value, []);
+    assert.doesNotMatch((await feed()).split('<item>')[1]!, /podcast:value/);
+    // Shows-only tags can't be set on an episode.
+    r = await alice.patch(`/api/podcasts/${show}/episodes/${episode}`, { otherTags: '<podcast:license>x</podcast:license>' });
+    assert.match(r.json.error, /own field \(License\)/);
+  });
+
+  test('looking up a recommended show by feed address', async () => {
+    const shows = http.createServer((req, res) => {
+      const withGuid = req.url === '/with-guid.xml';
+      res.writeHead(200, { 'Content-Type': 'application/rss+xml' }).end(`<?xml version="1.0"?><rss version="2.0" xmlns:podcast="https://podcastindex.org/namespace/1.0"><channel><title>${withGuid ? 'Has GUID' : 'No GUID'}</title>${withGuid ? '<podcast:guid>917393e3-1b1e-5cef-ace4-edaa54e1f810</podcast:guid>' : ''}</channel></rss>`);
+    });
+    await new Promise<void>((done) => shows.listen(0, '127.0.0.1', done));
+    const at = `http://127.0.0.1:${(shows.address() as AddressInfo).port}`;
+    try {
+      let r = await alice.get(`/api/feed-lookup?url=${encodeURIComponent(`${at}/with-guid.xml`)}`);
+      assert.equal(r.status, 200, r.text);
+      assert.deepEqual([r.json.show.title, r.json.show.feedGuid, r.json.show.guidFromFeed], ['Has GUID', '917393e3-1b1e-5cef-ace4-edaa54e1f810', true]);
+      r = await alice.get(`/api/feed-lookup?url=${encodeURIComponent(`${at}/no-guid.xml`)}`);
+      assert.equal(r.json.show.guidFromFeed, false);
+      assert.equal(r.json.show.feedGuid, podcastGuidFor(`${at}/no-guid.xml`));
+      assert.equal((await alice.get('/api/feed-lookup?url=nope')).status, 400);
+    } finally {
+      shows.close();
+    }
+  });
+
   test('replacing the audio deletes the old file', async () => {
     const next = await alice.upload(show, 'Episode 1 (fixed).m4a', m4a(1800));
     assert.equal(next.duration, 1800);
@@ -494,6 +596,24 @@ describe('editing an imported show', () => {
     const bad = await alice.put(`/api/podcasts/${imported}/details`, { otherTags: '<podcast:liveItem status="live"/>' });
     assert.equal(bad.status, 400);
     assert.match(bad.json.error, /Live tab/);
+  });
+
+  test('after an upgrade, tags saved before the forms existed appear in the forms, and the feed is unchanged', async () => {
+    const before = await (await fetch(`${base}/imported-show/feed.xml`)).text();
+    const d = (await alice.get(`/api/podcasts/${imported}/details`)).json.show;
+    assert.equal(d.value[0].recipients.length, 2);
+    assert.equal(d.value[0].recipients[1].fee, true);
+    assert.deepEqual(d.funding, [{ url: 'https://example.com/donate', label: 'Support the show!' }]);
+    assert.ok(d.podroll.length >= 1);
+    assert.equal(d.updateFrequency.rrule, 'FREQ=WEEKLY');
+    assert.deepEqual(d.license, { identifier: 'cc-by-4.0', url: 'https://creativecommons.org/licenses/by/4.0/' });
+    assert.deepEqual(d.txt, [{ purpose: 'verify', value: 'S6lpp-7ZCn8-dZfGc-OoyaG' }]);
+    assert.doesNotMatch(d.otherTags, /podcast:(value|funding|podroll|updateFrequency|license|txt)\b/);
+    // Saving an unrelated field leaves every tag exactly as it was.
+    await alice.put(`/api/podcasts/${imported}/details`, { copyright: d.copyright ?? null });
+    const after = await (await fetch(`${base}/imported-show/feed.xml`)).text();
+    const strip = (x: string) => x.replace(/<lastBuildDate>.*<\/lastBuildDate>/, '');
+    assert.equal(strip(after), strip(before));
   });
 
   test('while a show is still importing, editing waits', async () => {

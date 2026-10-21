@@ -42,14 +42,9 @@ FeedHost doesn't stream today. Live items point at an outside stream (Icecast, Y
 - [ ] Self-host the dashboard font instead of loading it from Google Fonts
 - [ ] Encrypt saved secrets at rest: storage provider keys, SMTP password, Resend key (today they're stored in the database as-is)
 - [ ] Storage quotas per account or per podcast, with a usage display
-- [ ] Structured editors for more Podcasting 2.0 tags (today they round-trip and are editable as XML under *Other tags*):
-  - [ ] `podcast:value` / `valueRecipient`: Lightning splits at show and episode level (lnaddress and keysend, splits, fees, customKey/customValue), plus `valueTimeSplit` for guests
-  - [ ] `podcast:funding`: support links (several allowed)
-  - [ ] `podcast:podroll`: recommended shows as `remoteItem`s; look up a show by feed address to fill in its `feedGuid`
-  - [ ] `podcast:image`: artwork in several sizes, generated from the uploaded show and episode art
-  - [ ] `podcast:updateFrequency`: publishing schedule (rrule) picked from a simple list
-  - [ ] `podcast:license`: pick from common Creative Commons licenses or enter a custom one
-  - [ ] `podcast:txt`: list and remove entries (e.g. old verification tokens)
+- [x] Forms for Podcasting 2.0 tags: people, locations, value (show and episode, with time splits kept), funding, podroll (with feed lookup), updateFrequency, license, txt
+- [ ] Still edited as XML under *Other tags*, possible future forms:
+  - [ ] `podcast:image`: artwork in several sizes, generated from the uploaded show and episode art (single artwork for now)
   - [ ] `podcast:soundbite`: start/duration/title per episode
 - [ ] Waveform or chapter editor in the dashboard (today chapters are uploaded as a JSON file)
 - [ ] Commit a `package-lock.json` so Docker builds use pinned dependency versions

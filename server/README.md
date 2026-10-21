@@ -109,6 +109,13 @@ Migrations run automatically on startup. The **first account registered becomes 
 - **Length and image size are read from the file:** MP3 (including VBR), M4A/MP4, WAV and Opus for `itunes:duration`; PNG, JPEG and WebP for the artwork check. You can type the length over it.
 - **People** (`podcast:person`) have their own form on both Show details and each episode: name, role (from the Podcast Taxonomy, which also sets the group), photo and link, in the order you set. Per the Podcast Namespace, an episode's people *replace* the show's for that episode, so an episode is either "Same as the show" or has its own list (with a button to copy in the show's people, and a warning if no host is listed).
 - **Locations** (`podcast:location`) have their own form on Show details and each episode, several per show or episode: the place name, what it means (*what it's about* or *where it was made*), coordinates, OpenStreetMap ID and country. **Look up** searches OpenStreetMap and fills those in; you can also type them. The lookup uses the public Nominatim service (one search a second, only when you press Look up); set `NOMINATIM_URL` to use your own.
+- **Value for value, support links, recommended shows, schedule, license and text records** (`podcast:value`, `funding`, `podroll`, `updateFrequency`, `license`, `txt`) have their own forms too:
+  - **Value:** method, suggested amount (with the sats it works out to), and recipients (Lightning address or node, split in shares with the resulting percentage, fee, optional custom record). Time splits and other tags inside a value block are kept in an advanced box. Per the spec an episode's value replaces the show's, so an episode is "Same as the show" or has its own split (started from a copy of the show's).
+  - **Recommended shows:** paste a show's feed address; its title and `podcast:guid` are filled in (feeds without one get the GUID the spec defines from the feed address).
+  - **Schedule:** daily, weekly, every two weeks, monthly, every two months, or a custom iCalendar rule; optional start date and "no more episodes".
+  - **License:** common Creative Commons licenses, or a custom name and link. Episodes default to the show's.
+  - Show only: recommended shows and schedule. Show and episode: value, support links, license, text records.
+  - **Upgrading:** these tags were already stored individually, so after an update the forms simply show what's there (from an import or the XML box). Nothing changes in the feed until a field is edited.
 - **Transcripts and chapters** have their own fields. **Every other tag** (soundbites, value, alternate enclosures, anything an import brought along) is editable as XML under *More tags and options*, checked before it's saved. Editing one field never changes the others.
 - **Podping:** a newly published or scheduled episode is announced when it appears in the feed; editing or unpublishing a public episode announces the change. The show's Podping switch still applies.
 - **Files are cleaned up:** replacing the audio or artwork, or deleting an episode, removes files nothing else uses. Uploads never saved into an episode are removed after two days.
@@ -255,7 +262,7 @@ All `/api` calls use a session cookie. Requests that change something must send 
 | GET · PUT | `/api/admin/storage` · POST `/api/admin/storage/test` | admin |
 | GET | `/api/podcasts` | your own shows, plus ones shared with you |
 | POST | `/api/podcasts` `{title, slug?, …show details}` (start a new show) | signed in |
-| GET | `/api/categories` (Apple categories, podcast:medium values) · `/api/places?q=` (OpenStreetMap place lookup) | signed in |
+| GET | `/api/categories` (Apple categories, podcast:medium values) · `/api/places?q=` (OpenStreetMap place lookup) · `/api/feed-lookup?url=` (another show's title and GUID) | signed in |
 | GET | `/api/podcasts/:id` · `/episodes` · `/episodes/:episodeId` · `/details` · `/prefixes` | viewer+ |
 | PUT | `/api/podcasts/:id/details` (show details) | editor+ |
 | POST · PATCH · DELETE | `/api/podcasts/:id/episodes` · `/episodes/:episodeId` (PATCH changes only the fields sent) | editor+ |

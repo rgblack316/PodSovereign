@@ -18,8 +18,9 @@ import { invalidateFeedCache, isUuid } from '../db/podcasts.js';
 import { parseDuration } from '../feed/parser.js';
 import type { XmlNode } from '../feed/types.js';
 import { ownMediaPaths } from '../media/prune.js';
-import { peopleFromTags, peopleToTags, type Person } from './people.js';
-import { locationsFromTags, locationsToTags, type Place } from './location.js';
+import type { Person } from './people.js';
+import type { Place } from './location.js';
+import { applyFields, fieldTagLabels, fieldViews, isFieldTag } from './tag-fields.js';
 import { queuePing } from '../podping/podping.js';
 import {
   addNamespaces,
@@ -47,9 +48,10 @@ const MANAGED = new Map<string, string>([
   ['pubDate', 'Publishing'], ['enclosure', 'Audio'], ['itunes:title', 'Title for Apple'], ['itunes:image', 'Episode art'],
   ['itunes:duration', 'Length'], ['itunes:episode', 'Episode number'], ['itunes:season', 'Season'],
   ['itunes:episodeType', 'Type'], ['itunes:explicit', 'Explicit'], ['itunes:block', 'Hide from Apple Podcasts'],
-  ['podcast:transcript', 'Transcripts'], ['podcast:chapters', 'Chapters'], ['podcast:person', 'People'], ['podcast:location', 'Locations'],
+  ['podcast:transcript', 'Transcripts'], ['podcast:chapters', 'Chapters'], ...fieldTagLabels('item'),
 ]);
-const OWN_FIELD = new Set(['podcast:transcript', 'podcast:chapters', 'podcast:person', 'podcast:location']);
+const OWN_FIELD = (name: string) => name === 'podcast:transcript' || name === 'podcast:chapters' || isFieldTag('item', name);
+const FIELD_KEYS = ['people', 'locations', 'value', 'funding', 'license', 'txt'] as const;
 
 export interface Transcript {
   url: string;
@@ -81,6 +83,11 @@ export interface EpisodeView {
   /** This episode's own people. Empty = the show's people apply. */
   people: Person[];
   locations: Place[];
+  /** podcast:value blocks for this episode. Empty = the show's value applies. */
+  value: unknown[];
+  funding: unknown[];
+  license: unknown;
+  txt: unknown[];
   otherTags: string;
   updatedAt: string;
 }
@@ -175,8 +182,7 @@ function view(r: Row, tags: XmlNode[], mediaName: string | null): EpisodeView {
       .filter((t) => t.name === 'podcast:transcript' && t.attrs.url)
       .map((t) => ({ url: t.attrs.url!, type: t.attrs.type ?? 'text/plain', language: t.attrs.language ?? null, rel: t.attrs.rel ?? null })),
     chapters: chapters?.attrs.url ? { url: chapters.attrs.url } : null,
-    people: peopleFromTags(tags),
-    locations: locationsFromTags(tags),
+    ...(fieldViews('item', tags) as Pick<EpisodeView, 'people' | 'locations' | 'value' | 'funding' | 'license' | 'txt'>),
     otherTags: tagsToXml(tags.filter((t) => !MANAGED.has(t.name))),
     updatedAt: new Date(r.updated_at).toISOString(),
   };
@@ -211,6 +217,10 @@ export interface EpisodeInput {
   chapters?: unknown;
   people?: unknown;
   locations?: unknown;
+  value?: unknown;
+  funding?: unknown;
+  license?: unknown;
+  txt?: unknown;
   otherTags?: unknown;
 }
 
@@ -257,7 +267,7 @@ function fromRow(r: Row, tags: XmlNode[]): Draft {
     explicit: r.itunes_explicit,
     imageUrl: r.itunes_image_url,
     block: r.itunes_block,
-    managedTags: tags.filter((t) => OWN_FIELD.has(t.name)),
+    managedTags: tags.filter((t) => OWN_FIELD(t.name)),
     otherTags: tags.filter((t) => !MANAGED.has(t.name)),
     storedTags: tags,
   };
@@ -281,7 +291,8 @@ async function applyInput(
   now: Date,
 ): Promise<{ draft: Draft; namespaces: Record<string, string> }> {
   const next: Draft = { ...d };
-  if ([input.transcripts, input.chapters, input.people, input.locations, input.otherTags].some((v) => v !== undefined)) next.storedTags = null;
+  const tagInputs = [input.transcripts, input.chapters, input.otherTags, ...FIELD_KEYS.map((k) => input[k])];
+  if (tagInputs.some((v) => v !== undefined)) next.storedTags = null;
   let newNs: Record<string, string> = {};
 
   if (input.title !== undefined || creating) next.title = text(input.title, 'Title', { required: true, max: 1000 })!;
@@ -330,14 +341,12 @@ async function applyInput(
     next.imageUrl = (await fileRef(q, config, podcastId, input.image, 'Episode art', ['image']))?.url ?? null;
   }
 
-  if ([input.transcripts, input.chapters, input.people, input.locations].some((v) => v !== undefined)) {
+  if ([input.transcripts, input.chapters, ...FIELD_KEYS.map((k) => input[k])].some((v) => v !== undefined)) {
     const old = next.managedTags;
     let transcripts = old.filter((t) => t.name === 'podcast:transcript');
     let chapters = old.filter((t) => t.name === 'podcast:chapters');
-    let people = old.filter((t) => t.name === 'podcast:person');
-    let locations = old.filter((t) => t.name === 'podcast:location');
-    if (input.people !== undefined) people = await peopleToTags(q, config, podcastId, input.people);
-    if (input.locations !== undefined) locations = locationsToTags(input.locations);
+    const fieldOld = old.filter((t) => isFieldTag('item', t.name));
+    const fieldTags = (await applyFields('item', { q, config, podcastId, namespaces }, fieldOld, input as Record<string, unknown>)) ?? fieldOld;
     if (input.transcripts !== undefined) {
       const list = input.transcripts === null ? [] : input.transcripts;
       if (!Array.isArray(list)) throw new PublishError('Transcripts must be a list');
@@ -363,7 +372,7 @@ async function applyInput(
       const ref = await fileRef(q, config, podcastId, input.chapters, 'Chapters', ['chapters', 'transcript']);
       chapters = ref ? [node('podcast:chapters', { url: ref.url, type: 'application/json+chapters' })] : [];
     }
-    next.managedTags = [...transcripts, ...chapters, ...people, ...locations];
+    next.managedTags = [...transcripts, ...chapters, ...fieldTags];
   }
 
   if (input.otherTags !== undefined) {
