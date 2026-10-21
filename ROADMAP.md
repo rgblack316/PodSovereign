@@ -9,6 +9,15 @@
 
 Background: Cloudflare's terms restrict serving video, or a disproportionate amount of large files, through its CDN and Tunnel hostnames on Free, Pro and Business plans ([policy](https://developers.cloudflare.com/fundamentals/reference/policies-compliances/delivering-videos-with-cloudflare/)), and every uncached download through the tunnel uses the home connection's upload bandwidth.
 
+## OP3 stats on the show dashboard
+
+Shown only for shows that have **OP3** ticked as a stats prefix (Settings → Stats prefixes); other shows see nothing new.
+- [ ] A Stats panel on the show page: downloads over time (last 7 / 30 / 90 days), top episodes, and top apps and countries
+- [ ] Per-episode download counts in the Episodes list and the episode editor
+- [ ] Find the show on OP3 by its `podcast:guid` (no setup for the podcaster), with a link to its public OP3 stats page
+- [ ] OP3 API key in Site settings (to confirm against OP3's API docs when building), with results cached so the dashboard doesn't call OP3 on every page view
+- [ ] Note in the panel that stats count from when the OP3 prefix was turned on
+
 ## Live shows (`podcast:liveItem`)
 
 Done:
