@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { after, before, test } from 'node:test';
 import type { Db } from '../src/db/db.js';
 import { createApp } from '../src/http/app.js';
-import { clearOp3Cache } from '../src/stats/op3.js';
+import { clearOp3Cache, syncOp3Daily } from '../src/stats/op3.js';
 import { setupDb, tempDir, testConfig } from './support/env.js';
 import { startFakeOp3, type FakeOp3 } from './support/fake-op3.js';
 
@@ -13,6 +13,8 @@ const UUID = 'aabbccddeeff00112233445566778899';
 let db: Db;
 let server: http.Server;
 let fake: FakeOp3;
+let config: ReturnType<typeof testConfig>;
+const cfg = () => config;
 let base: string;
 let knownGuid = '';
 const requests = { reset: () => (fake.requests.length = 0) };
@@ -41,7 +43,7 @@ let show: string;
 before(async () => {
   db = await setupDb('podsovereign_op3_test');
   fake = await startFakeOp3({ token: TOKEN, uuid: UUID });
-  const config = testConfig({ mediaDir: await tempDir('op3'), publicBaseUrl: 'http://feeds.mine.test', op3ApiUrl: fake.apiUrl });
+  config = testConfig({ mediaDir: await tempDir('op3'), publicBaseUrl: 'http://feeds.mine.test', op3ApiUrl: fake.apiUrl });
   server = http.createServer(createApp({ db, config }));
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -119,4 +121,42 @@ test('a show OP3 hasn’t seen yet gets a plain explanation', async () => {
   assert.match(s.json.error, /hasn’t counted any downloads/);
   // It tried the guid and then the feed address (base64url).
   assert.ok(fake.requests.some((q) => q.path === `/api/1/shows/${Buffer.from('http://feeds.mine.test/brand-new/feed.xml').toString('base64url')}`));
+});
+
+test('daily downloads and countries: summed from OP3’s records, then kept up to date', async () => {
+  const now = new Date('2026-10-21T15:00:00Z');
+  const day = (n: number, h = 12) => new Date(Date.UTC(2026, 9, 21 - n, h)).toISOString();
+  fake.downloads.length = 0;
+  // 400 days back (only a year is read), a few a day, US and GB, plus one with no country.
+  for (let n = 400; n >= 0; n--) for (let i = 0; i < (n % 3) + 1; i++) fake.downloads.push({ time: day(n, 8 + i), countryCode: i === 2 ? 'GB' : 'US' });
+  fake.downloads.push({ time: day(0, 14), countryCode: null });
+  const expect = (from: number) => fake.downloads.filter((d) => Date.parse(d.time) >= Date.UTC(2026, 9, 21 - from) && Date.parse(d.time) < now.getTime()).length;
+
+  fake.requests.length = 0;
+  // Small pages force paging (the real page is 20,000); cap the pages to also test resuming.
+  await syncOp3Daily(db, cfg(), show, { now, maxPages: 3, pageSize: 100 });
+  let st = (await db.query<{ u: Date }>(`SELECT op3_synced_until AS u FROM podcasts WHERE id = $1`, [show])).rows[0]!.u;
+  assert.ok(st.getTime() < now.getTime(), 'stopped part way');
+  await syncOp3Daily(db, cfg(), show, { now, maxPages: 1000, pageSize: 100 });
+  st = (await db.query<{ u: Date }>(`SELECT op3_synced_until AS u FROM podcasts WHERE id = $1`, [show])).rows[0]!.u;
+  assert.equal(st.toISOString(), now.toISOString());
+  assert.ok(fake.requests.some((q) => q.path.includes('continuationToken=')), 'follows continuation tokens');
+
+  const r = await admin.get(`/api/podcasts/${show}/op3/daily?days=90`);
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.days.length, 90);
+  assert.equal(r.json.days.at(-1).day, '2026-10-21');
+  assert.equal(r.json.total, expect(89));
+  assert.deepEqual(r.json.countries.map((c: { code: string }) => c.code), ['US', 'GB', '']);
+  const yr = await admin.get(`/api/podcasts/${show}/op3/daily?days=365`);
+  assert.equal(yr.json.total, expect(364));
+  assert.equal((await admin.get(`/api/podcasts/${show}/op3/daily?days=12`)).status, 400);
+
+  // New downloads arrive; the next sync only re-reads from the last day it had.
+  fake.downloads.push({ time: '2026-10-21T16:00:00.000Z', countryCode: 'CA' }, { time: '2026-10-22T09:00:00.000Z', countryCode: 'CA' });
+  fake.requests.length = 0;
+  await syncOp3Daily(db, cfg(), show, { now: new Date('2026-10-22T12:00:00Z'), maxPages: 1000, pageSize: 100 });
+  assert.ok(fake.requests.filter((q) => q.path.startsWith('/api/1/downloads')).every((q) => q.path.includes('start=2026-10-21T00%3A00%3A00.000Z') || q.path.includes('continuationToken')));
+  const c = (await db.query<{ n: number }>(`SELECT sum(downloads)::int AS n FROM op3_daily WHERE podcast_id = $1 AND country = 'CA'`, [show])).rows[0]!.n;
+  assert.equal(c, 2, 'no double counting of the re-read day');
 });

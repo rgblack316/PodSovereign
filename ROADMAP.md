@@ -4,12 +4,6 @@ What's planned next, roughly in order. For what's already built, see the feature
 
 Found a bug or want to help? [Open an issue](https://github.com/rgblack316/podsovereign/issues) or send a pull request.
 
-## OP3 stats: next steps
-
-Built: an **OP3 Stats** tab on shows that use the OP3 prefix (downloads in the last 30 days, the last four weeks, per-episode downloads and top apps), with the OP3 token in Site settings.
-- [ ] Per-episode download counts in the Episodes list and the episode editor
-- [ ] Daily downloads over longer ranges (90 days, a year) and top countries, from OP3's download records
-
 ## Media storage providers
 
 Built: choose where media lives under Site settings → Media storage.
@@ -51,7 +45,7 @@ PodSovereign doesn't stream today. Live shows point at an outside stream (Icecas
 - [ ] Publish a prebuilt app image on GitHub Container Registry, so installs and updates skip the local build (seconds instead of minutes)
 
 ## Recently completed
-- OP3 Stats tab for shows using the OP3 prefix
+- OP3 Stats tab for shows using the OP3 prefix: daily downloads (30 days, 90 days, a year), countries, apps, per-episode downloads in the Episodes list and editor
 - Saved passwords and API keys encrypted in the database; the dashboard font is served from your own server (no Google Fonts)
 - Database backups from the admin panel: instant download, scheduled backups by email or to any storage provider, optional encryption
 - Forms for value, funding, podroll, update frequency, license and text records; people and locations

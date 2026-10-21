@@ -21,7 +21,7 @@ Clone it and run your own: the site's name, logo, favicon and web address are al
 - Forms for Podcasting 2.0 tags: people, locations (with map lookup), value for value (Lightning splits, per show or episode), support links, recommended shows (podroll), schedule, license, text records. Anything else is editable as XML
 - Live shows (`podcast:liveItem`): schedule, go live, end
 - Stats prefixes (OP3, Podtrac, Podscribe, Magellan AI, Blubrry, custom), detected on import
-- OP3 Stats tab for shows using the OP3 prefix: downloads, weekly trend, per-episode downloads and top apps (add an OP3 API token under Site settings)
+- OP3 Stats tab for shows using the OP3 prefix: daily downloads over 30 days, 90 days or a year, countries, apps, and per-episode downloads (also in the Episodes list and editor). Add an OP3 API token under Site settings.
 - Podping through the Podcast Index hub (no key needed), with a switch per show
 
 **Running it**

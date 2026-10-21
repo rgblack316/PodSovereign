@@ -113,6 +113,21 @@ config.op3ApiUrl = op3.apiUrl;
 await saveSiteSettings(db, config, { op3Token: 'demo-op3-token' });
 const creekGuid = (await db.query<{ g: string }>(`SELECT podcast_guid AS g FROM podcasts WHERE id = $1`, [creek])).rows[0]!.g;
 op3.guids.add(creekGuid);
+op3.episodes.length = 0;
+for (const [i, e] of (await db.query<{ guid: string; title: string; pub_date: Date }>(`SELECT guid, title, pub_date FROM episodes WHERE podcast_id = $1 ORDER BY pub_date`, [creek])).rows.entries()) {
+  const base = 80 + i * 40;
+  op3.episodes.push({ itemGuid: e.guid, title: e.title, pubdate: e.pub_date, downloads1: base, downloads3: base * 1.6, downloads7: base * 2, downloads30: base * 2.6, downloadsAll: base * 3 + 50 });
+}
+// A year of made-up downloads: growing, busier on Mondays, mostly US.
+for (let n = 365; n >= 0; n--) {
+  const d = new Date(Date.now() - n * 86_400_000);
+  const count = Math.round(20 + (365 - n) / 12 + (d.getUTCDay() === 1 ? 25 : 0) + Math.random() * 10);
+  for (let i = 0; i < count; i++) {
+    const r = Math.random();
+    op3.downloads.push({ time: new Date(d.getTime() - (count - i) * 1000).toISOString(), countryCode: r < 0.6 ? 'US' : r < 0.75 ? 'GB' : r < 0.85 ? 'CA' : r < 0.92 ? 'AU' : r < 0.97 ? 'DE' : null });
+  }
+}
+op3.downloads.sort((a, b) => a.time.localeCompare(b.time));
 await db.query(`INSERT INTO podcast_prefixes (podcast_id, service_key, enabled, position) VALUES ($1, 'op3', true, 0) ON CONFLICT DO NOTHING`, [creek]);
 
 const server = http.createServer(createApp({ db, config, log: console.log }));

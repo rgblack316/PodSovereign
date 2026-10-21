@@ -682,6 +682,133 @@ async function viewShow(id, tab, sub) {
 
 const fmtNum = (n) => (n === null || n === undefined ? '—' : Number(n).toLocaleString());
 
+/** OP3 counts per episode GUID, or null when OP3 isn't available for this show (never throws). */
+async function op3EpisodeCounts(p) {
+  if (!p.op3) return null;
+  try {
+    const s = await api('GET', `/api/podcasts/${p.id}/op3`);
+    return new Map(s.episodes.map((e) => [e.itemGuid, e]));
+  } catch {
+    return null;
+  }
+}
+
+const countryName = (() => {
+  let names = null;
+  try { names = new Intl.DisplayNames(undefined, { type: 'region' }); } catch { /* older browser */ }
+  return (code) => {
+    if (!code) return 'Unknown';
+    try { return names?.of(code) ?? code; } catch { return code; }
+  };
+})();
+
+/** Line chart of daily downloads with a hover readout (one series, so no legend). */
+function dailyChart(days) {
+  const W = 760, H = 220, padL = 44, padR = 12, padT = 12, padB = 28;
+  const max = Math.max(4, ...days.map((d) => d.downloads));
+  const step = Math.pow(10, Math.floor(Math.log10(max)));
+  const top = Math.ceil(max / step) * step;
+  const x = (i) => padL + (days.length === 1 ? 0 : (i * (W - padL - padR)) / (days.length - 1));
+  const y = (v) => padT + (H - padT - padB) * (1 - v / top);
+  const ns = 'http://www.w3.org/2000/svg';
+  const el = (tag, attrs, ...kids) => {
+    const n = document.createElementNS(ns, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
+    for (const k of kids) n.append(k);
+    return n;
+  };
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, class: 'daily-chart', role: 'img', 'aria-label': `Downloads per day from ${days[0].day} to ${days.at(-1).day}` });
+  for (const t of [0, top / 2, top]) {
+    svg.append(el('line', { x1: padL, x2: W - padR, y1: y(t), y2: y(t), class: 'grid' }),
+      el('text', { x: padL - 6, y: y(t) + 4, class: 'axis', 'text-anchor': 'end' }, Number(t).toLocaleString()));
+  }
+  const fmtDay = (d, opts) => new Date(`${d}T12:00:00Z`).toLocaleDateString(undefined, { timeZone: 'UTC', ...opts });
+  const ticks = days.length <= 31 ? [0, Math.floor(days.length / 2), days.length - 1] : [0, Math.floor(days.length / 3), Math.floor((2 * days.length) / 3), days.length - 1];
+  for (const i of ticks) svg.append(el('text', { x: x(i), y: H - 8, class: 'axis', 'text-anchor': i === 0 ? 'start' : i === days.length - 1 ? 'end' : 'middle' }, fmtDay(days[i].day, { month: 'short', day: 'numeric' })));
+  const pts = days.map((d, i) => `${x(i).toFixed(1)},${y(d.downloads).toFixed(1)}`);
+  svg.append(el('path', { d: `M${pts[0]} L${pts.join(' L')} L${x(days.length - 1)},${y(0)} L${x(0)},${y(0)} Z`, class: 'area' }),
+    el('path', { d: `M${pts.join(' L')}`, class: 'line' }));
+  const rule = el('line', { y1: padT, y2: y(0), class: 'rule', visibility: 'hidden' });
+  const dot = el('circle', { r: 4, class: 'dot', visibility: 'hidden' });
+  svg.append(rule, dot);
+  const tip = h('div', { class: 'chart-tip', hidden: true });
+  const box = h('div', { class: 'chart-box' }, svg, tip);
+  const show = (clientX) => {
+    const r = svg.getBoundingClientRect();
+    const px = ((clientX - r.left) / r.width) * W;
+    const i = Math.max(0, Math.min(days.length - 1, Math.round(((px - padL) / (W - padL - padR)) * (days.length - 1))));
+    const d = days[i];
+    rule.setAttribute('x1', x(i)); rule.setAttribute('x2', x(i)); rule.setAttribute('visibility', 'visible');
+    dot.setAttribute('cx', x(i)); dot.setAttribute('cy', y(d.downloads)); dot.setAttribute('visibility', 'visible');
+    tip.replaceChildren(h('b', null, Number(d.downloads).toLocaleString()), ` downloads, ${fmtDay(d.day, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}`);
+    tip.hidden = false;
+    const left = (x(i) / W) * r.width;
+    tip.style.left = `${Math.min(Math.max(left, 80), r.width - 80)}px`;
+  };
+  const hide = () => { tip.hidden = true; rule.setAttribute('visibility', 'hidden'); dot.setAttribute('visibility', 'hidden'); };
+  svg.addEventListener('pointermove', (e) => show(e.clientX));
+  svg.addEventListener('pointerleave', hide);
+  return box;
+}
+
+/** Horizontal bars with a share; rows = [{name, downloads}]. */
+function shareBars(rows, total) {
+  const max = Math.max(1, ...rows.map((a) => a.downloads));
+  return h('ul', { class: 'hbars' }, rows.map((a) => h('li', { title: `${a.name}: ${fmtNum(a.downloads)} downloads` },
+    h('span', { class: 'hbar-name' }, a.name),
+    h('span', { class: 'hbar-track' }, h('span', { class: 'hbar', style: `width:${Math.max(1, (100 * a.downloads) / max)}%` })),
+    h('span', { class: 'hbar-value' }, `${Math.round((100 * a.downloads) / (total || 1))}%`))));
+}
+
+/** Daily downloads and countries, with a range switch; polls while OP3 records are being read. */
+function op3DailyPanels(p) {
+  let days = 30;
+  const chartPanel = h('section', { class: 'panel' });
+  const countryPanel = h('section', { class: 'panel' });
+  let timer = null;
+  cleanup.push(() => clearTimeout(timer));
+  const load = async () => {
+    clearTimeout(timer);
+    let d;
+    try {
+      d = await api('GET', `/api/podcasts/${p.id}/op3/daily?days=${days}`);
+    } catch (e) {
+      chartPanel.replaceChildren(h('h2', null, 'Downloads by day'), h('p', { class: 'error' }, e.message));
+      countryPanel.hidden = true;
+      return;
+    }
+    const ranges = h('div', { class: 'page-sizes', role: 'group', 'aria-label': 'Time range' },
+      [[30, '30 days'], [90, '90 days'], [365, 'Year']].map(([n, label]) => h('button', { type: 'button', 'aria-pressed': String(n === days), onclick: () => { days = n; load(); } }, label)));
+    const empty = !d.syncedUntil;
+    const status = d.syncing
+      ? h('p', { class: 'hint' }, h('span', { class: 'light warn' }, empty ? 'Reading download records from OP3 (the first time takes a little while)…' : 'Updating from OP3…'))
+      : d.error ? h('p', { class: 'error' }, `Couldn’t update from OP3: ${d.error}`) : null;
+    chartPanel.replaceChildren(...[
+      h('div', { class: 'row', style: 'justify-content:space-between;align-items:flex-start' },
+        h('div', null, h('h2', null, 'Downloads by day'),
+          h('p', { class: 'hint' }, empty ? 'Daily numbers come from OP3’s download records (days in UTC).' : `${fmtNum(d.total)} downloads in this range. Days are in UTC.`)),
+        ranges),
+      status,
+      empty ? null : dailyChart(d.days),
+    ].filter(Boolean));
+    if (empty || !d.countries.length) countryPanel.hidden = true;
+    else {
+      countryPanel.hidden = false;
+      const top = d.countries.slice(0, 10).map((c) => ({ name: countryName(c.code), downloads: c.downloads }));
+      const rest = d.countries.slice(10).reduce((a, c) => a + c.downloads, 0);
+      if (rest) top.push({ name: 'Other countries', downloads: rest });
+      countryPanel.replaceChildren(h('h2', null, 'Countries'),
+        h('p', { class: 'hint' }, `Share of downloads by country, ${days === 365 ? 'over the last year' : `over the last ${days} days`}.`),
+        shareBars(top, d.total));
+    }
+    if (d.syncing) timer = setTimeout(load, 4000);
+  };
+  chartPanel.append(h('h2', null, 'Downloads by day'), h('p', { class: 'hint' }, 'Loading…'));
+  countryPanel.hidden = true;
+  load();
+  return [chartPanel, countryPanel];
+}
+
 async function tabOp3(p, canEdit, reload, refresh = false) {
   let s;
   try {
@@ -730,11 +857,7 @@ async function tabOp3(p, canEdit, reload, refresh = false) {
   const topApps = s.apps.slice(0, 8);
   const otherApps = s.apps.slice(8).reduce((a, x) => a + x.downloads, 0);
   if (otherApps) topApps.push({ name: 'Other apps', downloads: otherApps });
-  const maxA = Math.max(1, ...topApps.map((a) => a.downloads));
-  const appList = topApps.length ? h('ul', { class: 'hbars' }, topApps.map((a) => h('li', { title: `${a.name}: ${fmtNum(a.downloads)} downloads` },
-    h('span', { class: 'hbar-name' }, a.name),
-    h('span', { class: 'hbar-track' }, h('span', { class: 'hbar', style: `width:${Math.max(1, (100 * a.downloads) / maxA)}%` })),
-    h('span', { class: 'hbar-value' }, `${Math.round((100 * a.downloads) / totalApps)}%`)))) : h('p', { class: 'hint' }, 'No app data yet.');
+  const appList = topApps.length ? shareBars(topApps, totalApps) : h('p', { class: 'hint' }, 'No app data yet.');
 
   // Episodes table, sortable
   const cols = [
@@ -775,6 +898,7 @@ async function tabOp3(p, canEdit, reload, refresh = false) {
             h('a', { href: s.statsPageUrl, target: '_blank', rel: 'noopener' }, 'Open on op3.dev'))),
         refreshBtn),
       tiles),
+    ...op3DailyPanels(p),
     h('section', { class: 'panel' }, h('h2', null, 'Last four weeks'), weekChart),
     h('section', { class: 'panel' }, h('h2', null, 'Episodes'), h('p', { class: 'hint' }, 'Downloads in each episode’s first day, week and month, and in total. Select a column to sort.'), tableBox),
     h('section', { class: 'panel' }, h('h2', null, 'Apps'), h('p', { class: 'hint' }, 'Share of downloads by app over the last three months.'), appList));
@@ -1024,7 +1148,8 @@ function pageList(current, total) {
   return out;
 }
 
-function episodeRow(p, e) {
+function episodeRow(p, e, op3) {
+  const c = op3?.get(e.guid);
   return h('tr', null,
     h('td', null,
       h('a', { class: 'ep-title', href: `#/show/${p.id}/episodes/${e.id}` }, e.title || 'Untitled'),
@@ -1039,7 +1164,8 @@ function episodeRow(p, e) {
       ].filter(Boolean).join(' · '))),
     h('td', { class: 'nowrap' }, e.status === 'draft' ? '—' : fmtDate(e.pub_date)),
     h('td', { class: 'num' }, fmtDuration(e.itunes_duration)),
-    h('td', { class: 'num nowrap' }, e.enclosure_length ? fmtBytes(Number(e.enclosure_length)) : '—'));
+    h('td', { class: 'num nowrap' }, e.enclosure_length ? fmtBytes(Number(e.enclosure_length)) : '—'),
+    op3 !== undefined ? h('td', { class: 'num', title: c ? `First week ${fmtNum(c.downloads7)}, first month ${fmtNum(c.downloads30)}` : null }, op3 === null ? '' : c ? fmtNum(c.downloadsAll) : '—') : null);
 }
 
 async function tabEpisodes(p, canEdit) {
@@ -1067,8 +1193,12 @@ async function tabEpisodes(p, canEdit) {
   const pager = h('nav', { class: 'pager', 'aria-label': 'Episode pages' });
   const table = h('table', { class: 'episodes' },
     h('thead', null, h('tr', null,
-      h('th', null, 'Episode'), h('th', null, 'Published'), h('th', { class: 'num' }, 'Length'), h('th', { class: 'num' }, 'Size'))),
+      h('th', null, 'Episode'), h('th', null, 'Published'), h('th', { class: 'num' }, 'Length'), h('th', { class: 'num' }, 'Size'),
+      p.op3 ? h('th', { class: 'num', title: 'All-time downloads counted by OP3' }, 'Downloads') : null)),
     tbody);
+  // OP3 counts load after the list; until then the column is blank (undefined = no column at all).
+  let op3 = p.op3 ? null : undefined;
+  if (p.op3) op3EpisodeCounts(p).then((m) => { if (m) { op3 = m; draw(); } });
 
   function draw(scroll) {
     const pages = size ? Math.max(1, Math.ceil(episodes.length / size)) : 1;
@@ -1076,7 +1206,7 @@ async function tabEpisodes(p, canEdit) {
     pageMemory[p.id] = page;
     const from = size ? (page - 1) * size : 0;
     const shown = size ? episodes.slice(from, from + size) : episodes;
-    tbody.replaceChildren(...shown.map((e) => episodeRow(p, e)));
+    tbody.replaceChildren(...shown.map((e) => episodeRow(p, e, op3)));
 
     const n = episodes.length;
     count.textContent = (size && n > size ? `Showing ${from + 1}–${from + shown.length} of ${n} episodes.` : `${n} episode${n === 1 ? '' : 's'}.`) +
@@ -2066,9 +2196,23 @@ async function viewEpisode(p, canEdit, episodeId) {
           },
         }, 'Delete episode') : null))));
 
+  const op3Slot = h('div');
+  if (!isNew && p.op3 && ep.guid) {
+    op3EpisodeCounts(p).then((m) => {
+      const c = m?.get(ep.guid);
+      if (!c) return;
+      op3Slot.replaceChildren(h('section', { class: 'panel' },
+        h('h2', null, 'Downloads'),
+        h('p', { class: 'hint' }, 'Counted by OP3, bots excluded.'),
+        h('div', { class: 'stat-tiles' },
+          [['First day', c.downloads1], ['First week', c.downloads7], ['First month', c.downloads30], ['All time', c.downloadsAll]]
+            .map(([label, v]) => h('div', { class: 'stat-tile' }, h('span', { class: 'stat-value' }, fmtNum(v)), h('span', { class: 'stat-label' }, label))))));
+    });
+  }
   return h('div', null,
     h('nav', { class: 'crumbs', 'aria-label': 'Breadcrumb' }, h('a', { href: `#/show/${p.id}/episodes` }, 'Episodes'), h('span', { 'aria-hidden': 'true' }, ' / '),
       h('span', null, isNew ? 'New episode' : ep.title)),
+    op3Slot,
     form);
 }
 

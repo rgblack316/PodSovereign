@@ -42,7 +42,7 @@ import { BackupError, backupView, finishRun, runBackup, saveBackupSettings, star
 import { backupFileName, dumpStream, encryptStream, pgDumpVersion } from '../backup/dump.js';
 import { changeStorage, latestMove, MoveError } from '../storage/move.js';
 import { unseal } from '../crypto/secrets.js';
-import { Op3Error, op3Stats, testOp3Token } from '../stats/op3.js';
+import { Op3Error, op3Daily, op3Stats, testOp3Token } from '../stats/op3.js';
 import { PROVIDERS, StorageConfigError, validateSettings, type StorageSettings } from '../storage/providers.js';
 import { localPath, storeFor, testConnection, type StorageState } from '../storage/store.js';
 import {
@@ -729,6 +729,13 @@ export function createApp(deps: AppDeps) {
   router.get('/api/podcasts/:id/op3', async (ctx) => {
     const { podcastId } = await requirePodcast(ctx, 'viewer');
     sendJson(ctx.res, 200, await op3Stats(db, config, podcastId, { refresh: ctx.url.searchParams.get('refresh') === '1' }));
+  });
+
+  router.get('/api/podcasts/:id/op3/daily', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'viewer');
+    const days = Number(ctx.url.searchParams.get('days') ?? 30);
+    if (![7, 30, 90, 365].includes(days)) throw new HttpError(400, 'days must be 7, 30, 90 or 365');
+    sendJson(ctx.res, 200, await op3Daily(db, config, podcastId, days, { log: deps.log }));
   });
 
   router.post('/api/admin/site/test-email', async (ctx) => {

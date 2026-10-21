@@ -639,3 +639,13 @@ hr.sep { border: 0; border-top: 1px solid var(--rule); margin: var(--s5) 0; }
 table.op3-episodes .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 table.op3-episodes th button.sort { all: unset; cursor: pointer; font: inherit; color: inherit; }
 table.op3-episodes th button.sort:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.chart-box { position: relative; margin-top: var(--s3); }
+.daily-chart { width: 100%; height: auto; display: block; touch-action: pan-y; }
+.daily-chart .grid { stroke: var(--rule); stroke-width: 1; }
+.daily-chart .axis { fill: var(--ink-3); font-size: 11px; font-family: var(--font); }
+.daily-chart .line { fill: none; stroke: var(--fader); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.daily-chart .area { fill: var(--fader); opacity: 0.12; }
+.daily-chart .rule { stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 3 3; }
+.daily-chart .dot { fill: var(--fader); stroke: var(--panel); stroke-width: 2; }
+.chart-tip { position: absolute; top: 0; transform: translateX(-50%); background: var(--ink); color: #fff; font-size: var(--t-sm); padding: 4px 8px; border-radius: var(--r-sm); white-space: nowrap; pointer-events: none; }
+.chart-tip b { font-weight: 650; }

@@ -7,12 +7,21 @@ export interface FakeOp3 {
   requests: { path: string; auth: string | undefined }[];
   /** podcast:guid values the fake knows (all map to `uuid`). */
   guids: Set<string>;
+  /** Download records served by /downloads/show (kept sorted by time). */
+  downloads: { time: string; countryCode: string | null }[];
+  /** Rows for /queries/episode-download-counts (defaults to two sample episodes). */
+  episodes: Record<string, unknown>[];
   close(): Promise<void>;
 }
 
 export async function startFakeOp3(opts: { token: string; uuid: string; title?: string }): Promise<FakeOp3> {
   const requests: FakeOp3['requests'] = [];
   const guids = new Set<string>();
+  const downloads: FakeOp3['downloads'] = [];
+  const episodes: FakeOp3['episodes'] = [
+    { itemGuid: 'ep-2', title: 'Tomatoes', pubdate: '2026-10-14T10:00:00.000Z', downloads1: 90, downloads3: 140, downloads7: 180, downloads30: 220, downloadsAll: 220 },
+    { itemGuid: 'ep-1', title: 'Soil', pubdate: '2026-09-01T10:00:00.000Z', downloads1: 70, downloads3: 110, downloads7: 150, downloads30: 300, downloadsAll: 410 },
+  ];
   const server = http.createServer((req, res) => {
     const url = new URL(req.url!, 'http://x');
     requests.push({ path: url.pathname + url.search, auth: req.headers.authorization });
@@ -29,10 +38,21 @@ export async function startFakeOp3(opts: { token: string; uuid: string; title?: 
       return json(200, { asof: '2026-10-21T20:00:00.000Z', showDownloadCounts: { [url.searchParams.get('showUuid')!]: { monthlyDownloads: 1234, days: '1'.repeat(30), weeklyAvgDownloads: 300, weeklyDownloads: [250, 280, 320, 350], numWeeks: 4 } } });
     }
     if (url.pathname === '/api/1/queries/episode-download-counts') {
-      return json(200, { showUuid: opts.uuid, episodes: [
-        { itemGuid: 'ep-2', title: 'Tomatoes', pubdate: '2026-10-14T10:00:00.000Z', downloads1: 90, downloads3: 140, downloads7: 180, downloads30: 220, downloadsAll: 220 },
-        { itemGuid: 'ep-1', title: 'Soil', pubdate: '2026-09-01T10:00:00.000Z', downloads1: 70, downloads3: 110, downloads7: 150, downloads30: 300, downloadsAll: 410 },
-      ] });
+      return json(200, { showUuid: opts.uuid, episodes });
+    }
+    if (url.pathname === `/api/1/downloads/show/${opts.uuid}`) {
+      const q = url.searchParams;
+      const limit = Number(q.get('limit') ?? 100);
+      const rel = (v: string | null) => (v ? Date.parse(v) : null);
+      const start = rel(q.get('start')), after = rel(q.get('startAfter')), end = rel(q.get('end'));
+      const all = downloads.filter((d) => {
+        const t = Date.parse(d.time);
+        return (start === null || t >= start) && (after === null || t > after) && (end === null || t < end);
+      });
+      const offset = q.get('continuationToken') ? Number(q.get('continuationToken')) : 0;
+      const rows = all.slice(offset, offset + limit).map((d) => ({ time: d.time, showUuid: opts.uuid, countryCode: d.countryCode, agentName: 'Overcast' }));
+      const more = offset + limit < all.length;
+      return json(200, { rows, count: rows.length, queryTime: 1, ...(more ? { continuationToken: String(offset + limit) } : {}) });
     }
     if (url.pathname === '/api/1/queries/top-apps-for-show') return json(200, { showUuid: opts.uuid, appDownloads: { Overcast: 120, 'Apple Podcasts': 500, Spotify: 300 } });
     json(404, { error: 'unknown' });
@@ -42,6 +62,8 @@ export async function startFakeOp3(opts: { token: string; uuid: string; title?: 
     apiUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/1`,
     requests,
     guids,
+    downloads,
+    episodes,
     close: () => new Promise((r) => server.close(() => r())),
   };
 }
