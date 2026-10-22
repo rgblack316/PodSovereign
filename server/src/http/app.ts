@@ -260,6 +260,7 @@ export function createApp(deps: AppDeps) {
         feedUrl: feedUrl(p.slug),
         podpingEnabled: p.podping_enabled,
         redirectStatus: p.redirect_status,
+        redirectConfirmed: !!p.redirect_confirmed_at,
         imported: p.imported,
         liveNow: p.live_now,
         mediaFailed: p.media_failed,
@@ -333,7 +334,7 @@ export function createApp(deps: AppDeps) {
       // Shows using the OP3 prefix get an OP3 Stats tab.
       op3: !!(await maybeOne(db, `SELECT 1 FROM podcast_prefixes WHERE podcast_id = $1 AND service_key = 'op3' AND enabled`, [podcastId])),
       live: { now: counts.live_now, upcoming: counts.live_upcoming },
-      redirect: { status: p.redirect_status, detail: p.redirect_detail, checkedAt: p.redirect_checked_at },
+      redirect: { status: p.redirect_status, detail: p.redirect_detail, checkedAt: p.redirect_checked_at, confirmedAt: p.redirect_confirmed_at },
     };
   }
 

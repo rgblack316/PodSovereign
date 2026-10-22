@@ -176,7 +176,10 @@ function showLights(p) {
   else if (m.done) lights.push({ cls: 'on', text: `Storage Used (${fmtBytes(m.bytes)})` });
   else lights.push({ cls: '', text: 'No media' });
 
-  if (p.sourceFeedUrl) {
+  const redirectLight = redirectWarning(p);
+  if (redirectLight) lights.push(redirectLight);
+  else if (p.sourceFeedUrl && !(p.redirect?.status === 'ok' && p.setup?.overviewHidden)) {
+    // During the move. Once it's confirmed and Overview has hidden, the light goes; it comes back only if the redirect breaks.
     const r = p.redirect?.status;
     lights.push(
       r === 'ok' ? { cls: 'on', text: 'Old feed redirects here' }
@@ -194,19 +197,30 @@ function showLights(p) {
   return lights;
 }
 
+/** A redirect that was confirmed and has since stopped working (found by the weekly check). */
+function redirectWarning(p) {
+  const r = p.redirect?.status;
+  if (!p.sourceFeedUrl || !p.redirect?.confirmedAt || !r || r === 'ok') return null;
+  return r === 'temporary' ? { cls: 'warn', text: 'Old feed redirect is now temporary' }
+    : r === 'elsewhere' ? { cls: 'bad', text: 'Old feed now redirects elsewhere' }
+      : r === 'unreachable' ? { cls: 'warn', text: 'Old feed can’t be reached' }
+        : { cls: 'bad', text: 'Old feed no longer redirects here' };
+}
+
 /** Tiny dots for the sidebar, from the list endpoint. */
 function miniLights(p) {
   const dots = [
     p.status === 'active' ? 'on' : 'warn',
     p.mediaFailed ? 'warn' : 'on',
   ];
-  if (p.imported) dots.push(p.redirectStatus === 'ok' ? 'on' : p.redirectStatus === 'temporary' ? 'warn' : ['elsewhere', 'unreachable'].includes(p.redirectStatus) ? 'bad' : '');
+  // A working redirect needs no dot; one that's missing or broken does.
+  if (p.imported && p.redirectStatus !== 'ok') dots.push(p.redirectStatus === 'temporary' ? 'warn' : ['elsewhere', 'unreachable'].includes(p.redirectStatus) || (p.redirectConfirmed && p.redirectStatus === 'none') ? 'bad' : '');
   dots.push(p.podpingEnabled ? 'on' : '');
   if (p.liveNow) dots.push('live');
   const summary = [
     p.status === 'active' ? 'feed live' : 'importing',
     p.mediaFailed ? `${p.mediaFailed} files not copied` : null,
-    p.imported ? (p.redirectStatus === 'ok' ? 'redirect in place' : 'no redirect confirmed') : null,
+    p.imported && p.redirectStatus !== 'ok' ? (p.redirectConfirmed ? 'old feed redirect stopped working' : 'no redirect confirmed') : null,
     p.podpingEnabled ? 'Podping on' : 'Podping off',
     p.liveNow ? 'on air' : null,
   ].filter(Boolean).join(', ');
@@ -3140,6 +3154,39 @@ async function tabTeam(p, canEdit, reload) {
   return h('div', null, parts);
 }
 
+/** The old feed's redirect status, with a Check again button for editors. */
+function redirectFact(p) {
+  const box = h('div');
+  const r = p.redirect ?? {};
+  const ok = r.status === 'ok';
+  const msg = h('span', { class: 'hint', role: 'status' });
+  const btn = p.role === 'viewer' ? null : h('button', {
+    type: 'button',
+    class: 'quiet',
+    onclick: async () => {
+      btn.disabled = true;
+      msg.textContent = 'Checking…';
+      try {
+        const res = await api('POST', `/api/podcasts/${p.id}/redirect-check`);
+        await refreshPodcasts();
+        toast(res.result.status === 'ok' ? 'The old feed redirects here' : 'The old feed doesn’t redirect here');
+        render();
+      } catch (e) {
+        msg.textContent = e.message;
+        btn.disabled = false;
+      }
+    },
+  }, 'Check again');
+  box.append(
+    h('span', { class: `light ${ok ? 'on' : r.status === 'temporary' || r.status === 'unreachable' ? 'warn' : r.status ? 'bad' : ''}` },
+      r.confirmedAt && r.status === 'none' ? 'The old feed no longer redirects here: it answers directly again, so the redirect was removed at the old host.' : r.detail ?? 'Not checked yet'),
+    h('div', { class: 'hint' },
+      r.checkedAt ? `Checked ${fmtDate(r.checkedAt, true)}. ` : '',
+      r.confirmedAt ? 'Checked again automatically every week; you’ll see a warning at the top of the show if it stops working.' : 'Checked automatically every week once it’s working.'),
+    h('div', { class: 'row', style: 'gap:8px;margin-top:4px' }, btn, msg));
+  return box;
+}
+
 async function feedAndDelete(p) {
   const err = formError();
   const confirmInput = h('input', { type: 'text', autocomplete: 'off', 'aria-label': `Type ${p.slug} to confirm` });
@@ -3172,6 +3219,7 @@ async function feedAndDelete(p) {
         h('dt', null, 'Episodes'), h('dd', null, p.episodeCount),
         p.sourceFeedUrl ? [h('dt', null, 'Imported from'), h('dd', null, p.sourceFeedUrl)] : null,
         p.importedAt ? [h('dt', null, 'Imported'), h('dd', null, fmtDate(p.importedAt, true))] : null,
+        p.sourceFeedUrl ? [h('dt', null, 'Old feed redirect'), h('dd', null, redirectFact(p))] : null,
         h('dt', null, 'Your access'), h('dd', null, { owner: 'Owner', editor: 'Editor', viewer: 'Viewer (read only)' }[p.role]))),
     p.role !== 'owner' ? null : h('section', { class: 'panel', id: 'section-delete' },
       h('h2', null, 'Delete this show'),

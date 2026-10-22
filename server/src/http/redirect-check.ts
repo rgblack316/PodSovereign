@@ -1,5 +1,6 @@
 import type { Config } from '../config.js';
-import type { Queryable } from '../db/db.js';
+import type { Db, Queryable } from '../db/db.js';
+import { feedPath } from '../urls.js';
 import { traceRedirects } from '../import/http.js';
 
 export type RedirectStatus = 'ok' | 'temporary' | 'elsewhere' | 'none' | 'unreachable';
@@ -50,7 +51,43 @@ export async function checkRedirect(config: Config, oldUrl: string, newUrl: stri
 
 export async function saveRedirectResult(q: Queryable, podcastId: string, r: RedirectResult) {
   await q.query(
-    `UPDATE podcasts SET redirect_status = $2, redirect_detail = $3, redirect_checked_at = now() WHERE id = $1`,
+    `UPDATE podcasts SET redirect_status = $2, redirect_detail = $3, redirect_checked_at = now(),
+            redirect_confirmed_at = CASE WHEN $2 = 'ok' THEN COALESCE(redirect_confirmed_at, now()) ELSE redirect_confirmed_at END
+      WHERE id = $1`,
     [podcastId, r.status, r.detail],
   );
+}
+
+/** Re-check confirmed redirects weekly; one that stopped working is re-checked daily until it's fixed. */
+export const REDIRECT_RECHECK = { okDays: 7, brokenDays: 1 };
+
+export async function recheckDueRedirects(db: Db, config: Config, log?: (m: string) => void, limit = 10): Promise<number> {
+  const { rows } = await db.query<{ id: string; slug: string; source_feed_url: string; redirect_status: string | null }>(
+    `SELECT id, slug, source_feed_url, redirect_status FROM podcasts
+      WHERE status = 'active' AND source_feed_url IS NOT NULL AND redirect_confirmed_at IS NOT NULL
+        AND (redirect_checked_at IS NULL
+             OR redirect_checked_at < now() - make_interval(days => CASE WHEN redirect_status = 'ok' THEN $1::int ELSE $2::int END))
+      ORDER BY redirect_checked_at NULLS FIRST LIMIT $3`,
+    [REDIRECT_RECHECK.okDays, REDIRECT_RECHECK.brokenDays, limit],
+  );
+  for (const p of rows) {
+    const r = await checkRedirect(config, p.source_feed_url, config.publicBaseUrl + feedPath(p.slug));
+    await saveRedirectResult(db, p.id, r);
+    if (r.status !== p.redirect_status) log?.(`redirect check for ${p.slug}: ${p.redirect_status ?? 'unchecked'} → ${r.status}`);
+  }
+  return rows.length;
+}
+
+export function startRedirectWorker(deps: { db: Db; config: Config; log?: (m: string) => void }, everyMs = 60 * 60_000) {
+  let running = false;
+  const tick = () => {
+    if (running) return;
+    running = true;
+    recheckDueRedirects(deps.db, deps.config, deps.log)
+      .catch((e) => deps.log?.(`redirect checks: ${(e as Error).message}`))
+      .finally(() => (running = false));
+  };
+  const first = setTimeout(tick, 5 * 60_000);
+  const timer = setInterval(tick, everyMs);
+  return { stop: () => { clearTimeout(first); clearInterval(timer); } };
 }

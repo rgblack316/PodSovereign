@@ -45,6 +45,7 @@ PodSovereign doesn't stream today. Live shows point at an outside stream (Icecas
 - [ ] Publish a prebuilt app image on GitHub Container Registry, so installs and updates skip the local build (seconds instead of minutes)
 
 ## Recently completed
+- Old feed redirects re-checked weekly after the move, with a warning if one stops working; the status bar drops the redirect light once the move is settled
 - Storage used: per show (the show's status bar), and per account and for the whole site (Site settings)
 - Website rebuild on feed changes (Cloudflare Pages, Netlify, Vercel, Render, GitHub Actions, custom webhook)
 - OP3 Stats tab for shows using the OP3 prefix: daily downloads (30 days, 90 days, a year), countries, apps, per-episode downloads in the Episodes list and editor
