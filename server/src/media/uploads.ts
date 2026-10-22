@@ -24,6 +24,7 @@ import { KIND_DIRS } from '../import/importer.js';
 import { activeStore } from '../storage/store.js';
 import { mediaPath } from '../urls.js';
 import { probeFile } from './probe.js';
+import { readId3Chapters } from './id3.js';
 import { pruneMedia } from './prune.js';
 
 export const CHUNK_SIZE = 8 * 1024 * 1024;
@@ -75,6 +76,8 @@ export interface MediaJson {
   width: number | null;
   height: number | null;
   name: string | null;
+  /** For an MP3 just uploaded: how many chapters its ID3 tags hold. */
+  id3Chapters?: number;
 }
 
 interface MediaRow {
@@ -280,6 +283,7 @@ export async function completeUpload(db: Db, config: Config, podcastId: string, 
       }
     }
     const info = u.kind === 'audio' || u.kind === 'video' || u.kind === 'image' ? await probeFile(file, u.mime_type) : {};
+    const id3Chapters = u.kind === 'audio' && u.mime_type === 'audio/mpeg' ? await readId3Chapters(file).then((c) => c.length, () => 0) : undefined;
     if (u.kind === 'image' && !info.width) throw new UploadError('That file isn’t a readable JPEG, PNG or WebP image');
 
     const sha256 = await new Promise<string>((resolve, reject) => {
@@ -307,7 +311,7 @@ export async function completeUpload(db: Db, config: Config, podcastId: string, 
       return row;
     });
     await rm(file, { force: true });
-    return mediaJson(config, m);
+    return { ...mediaJson(config, m), ...(id3Chapters ? { id3Chapters } : {}) };
   });
 }
 

@@ -22,6 +22,7 @@ Clone it and run your own: the site's name, logo, favicon and web address are al
 - Live shows (`podcast:liveItem`): schedule, go live, end
 - Stats prefixes (OP3, Podtrac, Podscribe, Magellan AI, Blubrry, custom), detected on import
 - OP3 Stats tab for shows using the OP3 prefix: all-time downloads (from the show's whole OP3 history, re-read monthly to pick up OP3's corrections), daily downloads over 30 days, 90 days or a year, countries, apps, and per-episode downloads (also in the Episodes list and editor). Add an OP3 API token under Site settings. Numbers are fetched from OP3 every 6 hours and saved, so the tab opens instantly.
+- Chapter editor for each episode: times, titles, links, images and hidden markers, set by ear with a built-in player; import a JSON chapters file, read chapters from an MP3's ID3 tags, and write them back into the MP3 for Apple Podcasts and other apps
 - Podping through the Podcast Index hub (no key needed), with a switch per show
 - Website rebuilds: when a show's feed changes (new episode, edit, removal, a scheduled episode going live), call its site's build hook: Cloudflare Pages, Netlify, Vercel, Render, GitHub Actions or a custom webhook. Several quick changes make one rebuild; failures are retried. Set it up under the show's Settings → Podping.
 

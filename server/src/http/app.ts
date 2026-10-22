@@ -43,6 +43,7 @@ import { backupFileName, dumpStream, encryptStream, pgDumpVersion } from '../bac
 import { changeStorage, latestMove, MoveError } from '../storage/move.js';
 import { unseal } from '../crypto/secrets.js';
 import { buildView, queueManualBuild, saveBuildSettings, SiteBuildError, testBuild } from '../sitebuild/sitebuild.js';
+import { chaptersFromAudio, getChapters, isWritingMp3, saveChapters, startMp3ChapterWrite } from '../publish/chapters.js';
 import { Op3Error, op3Daily, op3State, requestOp3Refresh, testOp3Token } from '../stats/op3.js';
 import { PROVIDERS, StorageConfigError, validateSettings, type StorageSettings } from '../storage/providers.js';
 import { localPath, storeFor, testConnection, type StorageState } from '../storage/store.js';
@@ -473,6 +474,37 @@ export function createApp(deps: AppDeps) {
     const { dropped } = await db.tx((q) => updateEpisode(q, config, podcastId, ctx.params.episodeId!, body));
     await pruneMedia(db, config, podcastId, dropped, deps.log);
     sendJson(ctx.res, 200, { episode: await getEpisode(db, podcastId, ctx.params.episodeId!) });
+  });
+
+  // ───────────── chapters ─────────────
+
+  router.get('/api/podcasts/:id/episodes/:episodeId/chapters', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'viewer');
+    const r = await getChapters(db, config, podcastId, ctx.params.episodeId!);
+    sendJson(ctx.res, 200, { ...r, writing: isWritingMp3(ctx.params.episodeId!) });
+  });
+
+  router.put('/api/podcasts/:id/episodes/:episodeId/chapters', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    const body = await readJson(ctx.req, 1024 * 1024);
+    const episodeId = ctx.params.episodeId!;
+    const dropped = await saveChapters(db, config, podcastId, episodeId, body.chapters);
+    await pruneMedia(db, config, podcastId, dropped, deps.log);
+    if (body.writeToMp3 === true) startMp3ChapterWrite(db, config, podcastId, episodeId, deps.log);
+    const r = await getChapters(db, config, podcastId, episodeId);
+    sendJson(ctx.res, 200, { ...r, writing: isWritingMp3(episodeId) });
+  });
+
+  router.post('/api/podcasts/:id/episodes/:episodeId/chapters/write-mp3', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    startMp3ChapterWrite(db, config, podcastId, ctx.params.episodeId!, deps.log);
+    const r = await getChapters(db, config, podcastId, ctx.params.episodeId!);
+    sendJson(ctx.res, 200, { ...r, writing: true });
+  });
+
+  router.post('/api/podcasts/:id/media/:mediaId/id3-chapters', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    sendJson(ctx.res, 200, { chapters: await chaptersFromAudio(db, config, podcastId, ctx.params.mediaId!) });
   });
 
   router.delete('/api/podcasts/:id/episodes/:episodeId', async (ctx) => {

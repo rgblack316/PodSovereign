@@ -668,3 +668,18 @@ table.usage td { border-bottom: 0; }
 table.usage tr.usage-account td { border-top: 1px solid var(--rule); }
 table.usage tr.usage-show td { border-top: 0; padding-top: 2px; padding-bottom: 6px; color: var(--ink-2); }
 table.usage tr.usage-show td:first-child { padding-left: var(--s5); }
+
+/* Chapter editor */
+.chapters-editor audio { width: 100%; margin: var(--s2) 0 var(--s3); }
+.chapter-rows { display: grid; gap: var(--s3); }
+.chapter-row { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: var(--s3); padding: var(--s3); border: 1px solid var(--rule); border-radius: var(--r-md); }
+.chapter-row .ch-art img, .chapter-row .ch-art .ep-thumb { width: 56px; height: 56px; border-radius: var(--r-sm); object-fit: cover; display: block; }
+.ch-main { display: grid; gap: var(--s2); min-width: 0; }
+.ch-line { display: flex; gap: var(--s2); }
+.ch-line input { flex: 1 1 auto; min-width: 0; }
+.ch-line .ch-time { flex: 0 0 7.5em; font-variant-numeric: tabular-nums; }
+.ch-time.invalid { border-color: var(--onair); }
+.ch-tools { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s2); align-items: center; }
+.ch-tools button { padding: 4px 8px; font-size: var(--t-sm); }
+.offer { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; margin-bottom: var(--s3); }
+@media (max-width: 600px) { .chapter-row { grid-template-columns: 1fr; } .ch-line { flex-wrap: wrap; } .ch-line .ch-time { flex-basis: 100%; } }

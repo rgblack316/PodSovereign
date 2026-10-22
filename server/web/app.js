@@ -1178,6 +1178,240 @@ function uploader({ podcastId, kind, accept, label, onDone, onStart, dropTarget,
   return { button: pick, el: h('div', { class: 'uploader' }, input, progress, err), busy: () => !!ctrl };
 }
 
+// ───────────── chapter editor ─────────────
+
+/** "1:02:03.5", "62:03", "125" → seconds (or null when it isn't a time). */
+function parseTime(text) {
+  const t = String(text).trim();
+  if (!t) return null;
+  if (!/^\d+(:\d{1,2}){0,2}(\.\d+)?$/.test(t)) return null;
+  const parts = t.split(':').map(Number);
+  const secs = parts.reduce((a, n) => a * 60 + n, 0);
+  return Number.isFinite(secs) ? Math.round(secs * 1000) / 1000 : null;
+}
+/** Seconds → "1:02:03.5" / "2:03" (tenths only when present). */
+function fmtTime(s) {
+  if (s === null || s === undefined) return '';
+  const whole = Math.floor(s);
+  const tenths = Math.round((s - whole) * 10);
+  const base = fmtDuration(whole + (tenths === 10 ? 1 : 0));
+  return tenths && tenths !== 10 ? `${base}.${tenths}` : base;
+}
+
+/**
+ * Chapters for one episode: a list to edit (times, titles, links, images,
+ * hidden markers), a player to set times by ear, JSON import, chapters read
+ * from the MP3's tags, and an option to write them back into the MP3.
+ * Saved by the episode's Save button (after the episode itself).
+ */
+function chaptersEditor({ p, episodeId, canEdit, audio, markDirty }) {
+  let rows = [];
+  let isDirty = false;
+  let saved = null; // last server state (url, mp3Write…)
+  let uploads = 0;
+  const el = h('div', { class: 'chapters-editor' });
+  const list = h('div', { class: 'chapter-rows' });
+  const notes = h('div');
+  const offer = h('div');
+  const status = h('p', { class: 'hint', role: 'status' });
+  const player = h('audio', { controls: true, preload: 'none' });
+  const writeMp3 = h('input', { type: 'checkbox', checked: true });
+  const writeRow = h('label', { class: 'check', hidden: true }, writeMp3,
+    h('span', null, 'Also write the chapters into the MP3 file', h('span', { class: 'hint' }, ' (Apple Podcasts and some other apps read chapters from the file itself)')));
+  const changed = () => { isDirty = true; markDirty(); validate(); };
+
+  const row = (c) => ({ startTime: c.startTime ?? null, timeText: fmtTime(c.startTime), title: c.title ?? '', url: c.url ?? '', img: c.img ?? null, imgRef: c.img ?? null, toc: c.toc !== false });
+  const load = (list2, dirty = true) => {
+    rows = list2.map(row).sort((a, b) => (a.startTime ?? 0) - (b.startTime ?? 0));
+    if (dirty) changed();
+    draw();
+  };
+
+  function syncPlayer() {
+    const a = audio();
+    const src = a && /^https?:/.test(a.url) ? a.url : null;
+    if (src && player.getAttribute('src') !== src) player.setAttribute('src', src);
+    player.hidden = !src;
+    writeRow.hidden = !(a && a.mp3);
+  }
+
+  function validate() {
+    const msgs = [];
+    const times = rows.map((r) => r.startTime);
+    if (rows.some((r) => r.startTime === null)) msgs.push('Every chapter needs a start time, like 12:30.');
+    const seen = new Set();
+    for (const t of times) {
+      if (t === null) continue;
+      if (seen.has(t)) msgs.push(`Two chapters start at ${fmtTime(t)}.`);
+      seen.add(t);
+    }
+    const dur = audio()?.duration;
+    if (dur && times.some((t) => t !== null && t >= dur)) msgs.push(`A chapter starts after the audio ends (${fmtTime(dur)}).`);
+    if (rows.length && times[0] !== null && Math.min(...times.filter((t) => t !== null)) > 0) msgs.push('Tip: most apps expect the first chapter to start at 0:00.');
+    if (rows.some((r) => !r.title.trim())) msgs.push('Every chapter needs a title.');
+    notes.replaceChildren(...msgs.map((m) => h('p', { class: m.startsWith('Tip') ? 'hint' : 'warn-note' }, m)));
+    return msgs.filter((m) => !m.startsWith('Tip'));
+  }
+
+  function draw() {
+    syncPlayer();
+    list.replaceChildren(...rows.map((r, i) => {
+      const time = h('input', { type: 'text', inputmode: 'decimal', value: r.timeText, placeholder: '0:00', 'aria-label': `Chapter ${i + 1} start time`, class: 'ch-time' });
+      time.addEventListener('input', () => { r.timeText = time.value; r.startTime = parseTime(time.value); time.classList.toggle('invalid', r.startTime === null); changed(); });
+      time.addEventListener('change', () => { if (r.startTime !== null) { rows.sort((a, b) => (a.startTime ?? 0) - (b.startTime ?? 0)); draw(); } });
+      const title = h('input', { type: 'text', value: r.title, placeholder: 'Chapter title', 'aria-label': `Chapter ${i + 1} title`, maxlength: 500 });
+      title.addEventListener('input', () => { r.title = title.value; changed(); });
+      const link = h('input', { type: 'url', value: r.url, placeholder: 'Link (optional)', 'aria-label': `Chapter ${i + 1} link` });
+      link.addEventListener('input', () => { r.url = link.value; changed(); });
+      const toc = h('input', { type: 'checkbox', checked: r.toc });
+      toc.addEventListener('change', () => { r.toc = toc.checked; changed(); });
+      const imgUp = uploader({
+        podcastId: p.id, kind: 'image', accept: 'image/jpeg,image/png,image/webp', label: r.img ? 'Change image' : 'Add image',
+        onDone: (m) => { r.img = m.url; r.imgRef = { mediaId: m.id }; changed(); draw(); },
+      });
+      const useNow = h('button', { type: 'button', class: 'quiet', title: 'Set this chapter to where the player is', onclick: () => {
+        r.startTime = Math.round(player.currentTime * 10) / 10; r.timeText = fmtTime(r.startTime); rows.sort((a, b) => (a.startTime ?? 0) - (b.startTime ?? 0)); changed(); draw();
+      } }, 'Use player time');
+      const play = h('button', { type: 'button', class: 'quiet', 'aria-label': `Play from chapter ${i + 1}`, onclick: () => {
+        if (r.startTime === null) return;
+        player.currentTime = r.startTime;
+        player.play().catch(() => {});
+      } }, '▶');
+      return h('div', { class: 'chapter-row' },
+        h('div', { class: 'ch-art' }, r.img ? h('img', { src: r.img, alt: '', loading: 'lazy' }) : h('span', { class: 'ep-thumb empty', 'aria-hidden': 'true' })),
+        h('div', { class: 'ch-main' },
+          h('div', { class: 'ch-line' }, time, title),
+          h('div', { class: 'ch-line' }, link),
+          h('div', { class: 'ch-tools' },
+            play, useNow,
+            h('label', { class: 'check small' }, toc, 'Show in chapter list'),
+            imgUp.button,
+            r.img ? h('button', { type: 'button', class: 'quiet', onclick: () => { r.img = r.imgRef = null; changed(); draw(); } }, 'Remove image') : null,
+            h('button', { type: 'button', class: 'quiet danger', onclick: () => { rows.splice(i, 1); changed(); draw(); } }, 'Remove chapter')),
+          imgUp.el));
+    }));
+    if (!rows.length) list.append(h('p', { class: 'hint' }, 'No chapters yet. Add them here, import a JSON chapters file, or read them from the MP3.'));
+    validate();
+    drawStatus();
+  }
+
+  function drawStatus() {
+    const w = saved?.mp3Write;
+    status.className = w?.status === 'failed' ? 'error' : 'hint';
+    status.textContent = saved?.writing || w?.status === 'running' ? 'Writing the chapters into the MP3…'
+      : w?.status === 'failed' ? `Writing the chapters into the MP3 didn’t finish: ${w.error}`
+        : w?.status === 'done' ? `Chapters written into the MP3 ${fmtDate(w.at, true)}.` : '';
+  }
+
+  // JSON import (read in the browser; saved with the episode).
+  const jsonInput = h('input', { type: 'file', accept: '.json,application/json', hidden: true, onchange: async () => {
+    const f = jsonInput.files[0];
+    jsonInput.value = '';
+    if (!f) return;
+    try {
+      const doc = JSON.parse(await f.text());
+      if (!Array.isArray(doc?.chapters)) throw new Error('That JSON file has no "chapters" list. Use the Podcast Namespace chapters format.');
+      if (rows.length && !confirm(`Replace the ${rows.length} chapters here with the ${doc.chapters.length} in ${f.name}?`)) return;
+      load(doc.chapters.filter((c) => typeof c?.startTime === 'number').map((c) => ({ startTime: c.startTime, title: c.title ?? '', url: c.url ?? null, img: c.img ?? null, toc: c.toc })));
+      toast(`${rows.length} chapters imported. Save the episode to keep them.`);
+    } catch (e) {
+      toast(e instanceof SyntaxError ? 'That isn’t a valid JSON file' : e.message);
+    }
+  } });
+
+  async function fromAudio(mediaId, count) {
+    if (rows.length && !confirm(`Replace the ${rows.length} chapters here with ${count ? `the ${count}` : 'those'} in the audio file?`)) return;
+    offer.replaceChildren(h('p', { class: 'hint' }, 'Reading chapters from the audio file…'));
+    try {
+      const r = await api('POST', `/api/podcasts/${p.id}/media/${mediaId}/id3-chapters`);
+      offer.replaceChildren();
+      if (!r.chapters.length) return toast('No chapters found in the audio file');
+      load(r.chapters);
+      toast(`${r.chapters.length} chapters loaded from the audio file. Save the episode to keep them.`);
+    } catch (e) {
+      offer.replaceChildren(h('p', { class: 'error' }, e.message));
+    }
+  }
+
+  const addBtn = h('button', { type: 'button', onclick: () => {
+    const at = player.currentTime > 0 ? Math.round(player.currentTime * 10) / 10 : rows.length ? (rows.at(-1).startTime ?? 0) + 60 : 0;
+    rows.push(row({ startTime: at, title: '' }));
+    rows.sort((a, b) => (a.startTime ?? 0) - (b.startTime ?? 0));
+    changed();
+    draw();
+    list.querySelectorAll('input[aria-label$="title"]')[rows.findIndex((r) => r.startTime === at)]?.focus();
+  } }, 'Add chapter');
+  const audioBtn = h('button', { type: 'button', class: 'quiet', onclick: () => {
+    const id = audio()?.mediaId ?? saved?.audio?.mediaId;
+    if (!id) return toast('Upload the MP3 first');
+    fromAudio(id);
+  } }, 'Read from the MP3');
+
+  el.append(
+    h('p', { class: 'muted' }, 'Chapters let listeners skip to a part of the episode. Play the audio, pause where a chapter starts and choose “Use player time”.'),
+    offer,
+    player,
+    list,
+    notes,
+    canEdit ? h('div', { class: 'actions', style: 'margin-top:8px' }, addBtn,
+      h('button', { type: 'button', class: 'quiet', onclick: () => jsonInput.click() }, 'Import JSON file'), audioBtn,
+      h('button', { type: 'button', class: 'quiet', onclick: () => { if (rows.length && confirm('Remove all chapters?')) { rows = []; changed(); draw(); } } }, 'Remove all')) : null,
+    jsonInput,
+    writeRow,
+    status);
+
+  // Existing episode: load its chapters.
+  if (episodeId) {
+    api('GET', `/api/podcasts/${p.id}/episodes/${episodeId}/chapters`).then((r) => {
+      saved = r;
+      if (r.error) offer.replaceChildren(h('p', { class: 'warn-note' }, r.error));
+      load(r.chapters, false);
+      audioBtn.hidden = !(r.audio?.mp3 || audio()?.mp3);
+      if (r.writing) pollWrite(episodeId);
+    }).catch((e) => offer.replaceChildren(h('p', { class: 'error' }, e.message)));
+  } else draw();
+
+  function pollWrite(id) {
+    const t = setTimeout(async () => {
+      try {
+        const r = await api('GET', `/api/podcasts/${p.id}/episodes/${id}/chapters`);
+        saved = { ...saved, ...r };
+        drawStatus();
+        if (r.writing || r.mp3Write?.status === 'running') pollWrite(id);
+      } catch { /* stop */ }
+    }, 3000);
+    cleanup.push(() => clearTimeout(t));
+  }
+
+  return {
+    el,
+    dirty: () => isDirty,
+    busy: () => uploads > 0,
+    /** A new audio file was uploaded: offer the chapters in its tags. */
+    audioChanged(m) {
+      syncPlayer();
+      audioBtn.hidden = !/mpeg/.test(m.mimeType ?? '');
+      offer.replaceChildren();
+      if (m.id3Chapters) {
+        offer.replaceChildren(h('div', { class: 'warn-note offer' },
+          `This MP3 has ${m.id3Chapters} chapter${m.id3Chapters === 1 ? '' : 's'} in it. `,
+          h('button', { type: 'button', onclick: () => fromAudio(m.id, m.id3Chapters) }, 'Use them')));
+      }
+    },
+    async save(id) {
+      const errs = validate();
+      if (errs.length) throw new Error(`Chapters: ${errs[0]}`);
+      const a = audio();
+      const r = await api('PUT', `/api/podcasts/${p.id}/episodes/${id}/chapters`, {
+        chapters: rows.map((r2) => ({ startTime: r2.startTime, title: r2.title, url: r2.url || null, img: r2.imgRef, toc: r2.toc })),
+        writeToMp3: !!(a?.mp3 && writeMp3.checked && rows.length),
+      });
+      saved = r;
+      isDirty = false;
+    },
+  };
+}
+
 // ───────────── episodes list ─────────────
 
 function episodeState(e) {
@@ -1868,6 +2102,7 @@ async function viewEpisode(p, canEdit, episodeId) {
       if (m.duration) duration.value = fmtDuration(m.duration);
       drawAudio();
       toast('Audio uploaded');
+      chEd.audioChanged(m);
     },
   });
   const useLink = h('details', { class: 'use-link' }, h('summary', null, 'Use a file hosted somewhere else'),
@@ -1958,9 +2193,7 @@ async function viewEpisode(p, canEdit, episodeId) {
 
   // ── Transcripts & chapters ──
   const transcripts = ep.transcripts.map((t) => ({ ...t, ref: { url: t.url } }));
-  let chapters = ep.chapters ? { ref: { url: ep.chapters.url }, url: ep.chapters.url } : null;
-  let chaptersChanged = false;
-  let transcriptsChanged = false;
+    let transcriptsChanged = false;
   const tList = h('div', { class: 'file-list' });
   const tUp = uploader({
     podcastId: p.id,
@@ -1994,30 +2227,13 @@ async function viewEpisode(p, canEdit, episodeId) {
   }
   drawTranscripts();
 
-  const cSlot = h('div', { class: 'file-list' });
-  const cUp = uploader({
-    podcastId: p.id,
-    kind: 'chapters',
-    accept: '.json,application/json',
-    label: 'Upload chapters file',
-    onStart: markDirty,
-    onDone: (m) => {
-      unsaved.add(m.id);
-      chapters = { url: m.url, name: m.name, ref: { mediaId: m.id } };
-      chaptersChanged = true;
-      drawChapters();
-    },
+  const chEd = chaptersEditor({
+    p,
+    episodeId: isNew ? null : ep.id,
+    canEdit,
+    audio: () => (current ? { url: current.url, mediaId: enclosure?.mediaId ?? null, mp3: /mpeg|mp3/i.test(current.type ?? '') || /\.mp3(\?|$)/i.test(current.url), duration: current.duration ?? ep.duration } : null),
+    markDirty,
   });
-  function drawChapters() {
-    cUp.button.textContent = chapters ? 'Replace chapters' : 'Upload chapters file';
-    cSlot.replaceChildren(chapters
-      ? h('div', { class: 'file-row' },
-        h('div', { class: 'file-icon', 'aria-hidden': 'true' }, 'CH'),
-        h('div', null, h('b', null, fileLabel(chapters.url, chapters.name)), h('div', { class: 'hint' }, 'JSON chapters')),
-        h('div', { class: 'file-opts' }, h('button', { type: 'button', class: 'quiet', onclick: () => { chapters = null; chaptersChanged = true; markDirty(); drawChapters(); } }, 'Remove')))
-      : h('p', { class: 'hint' }, 'No chapters. Use a Podcast Namespace JSON chapters file (many editors export one).'));
-  }
-  drawChapters();
 
   // ── People ──
   const people = editablePeople(ep.people ?? []);
@@ -2173,7 +2389,6 @@ async function viewEpisode(p, canEdit, episodeId) {
     if (changes.license) b.license = lic.get();
     if (changes.txt) b.txt = txtPayload(txt);
     if (transcriptsChanged) b.transcripts = transcripts.map((t) => ({ ...t.ref, type: t.type, language: t.language || null, rel: t.rel }));
-    if (chaptersChanged) b.chapters = chapters ? chapters.ref : null;
     if (mode.value === 'draft') b.status = 'draft';
     else if (mode.value === 'schedule') {
       if (!when.value) throw new Error('Choose when to publish');
@@ -2194,7 +2409,7 @@ async function viewEpisode(p, canEdit, episodeId) {
     onsubmit: (ev) => {
       ev.preventDefault();
       err.hidden = true;
-      if (up.busy() || artUp.busy() || tUp.busy() || cUp.busy()) return showError(err, 'Wait for the upload to finish.');
+      if (up.busy() || artUp.busy() || tUp.busy() || chEd.busy()) return showError(err, 'Wait for the upload to finish.');
       busy(form, async () => {
         try {
           const b = body();
@@ -2202,8 +2417,10 @@ async function viewEpisode(p, canEdit, episodeId) {
             ? await api('POST', `/api/podcasts/${p.id}/episodes`, b)
             : await api('PATCH', `/api/podcasts/${p.id}/episodes/${ep.id}`, b);
           unsaved.clear();
-          dirty = false;
           const e = r.episode;
+          // Chapters are saved on their own, once the episode exists.
+          if (chEd.dirty()) await chEd.save(e.id);
+          dirty = false;
           toast(e.status === 'draft' ? 'Draft saved' : !e.inFeed ? `Scheduled for ${fmtDate(e.pubDate, true)}` : ep.inFeed ? 'Saved' : 'Published');
           await refreshPodcasts();
           go(`#/show/${p.id}/episodes/${e.id}`);
@@ -2234,7 +2451,7 @@ async function viewEpisode(p, canEdit, episodeId) {
         fEditor.el),
       h('section', { class: 'panel' }, h('h2', null, 'Transcripts and chapters'),
         h('h3', { class: 'sub' }, 'Transcripts'), tList, tUp.el, h('div', { class: 'actions', style: 'margin-top:8px' }, tUp.button),
-        h('h3', { class: 'sub' }, 'Chapters'), cSlot, cUp.el, h('div', { class: 'actions', style: 'margin-top:8px' }, cUp.button)),
+        h('h3', { class: 'sub' }, 'Chapters'), chEd.el),
       h('section', { class: 'panel' }, h('details', { open: ep.otherTags || ep.license || ep.txt?.length ? true : null },
         h('summary', null, 'More tags and options'),
         h('div', { style: 'margin-top:16px' },
