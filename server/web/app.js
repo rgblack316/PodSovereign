@@ -173,7 +173,7 @@ function showLights(p) {
   const m = p.media ?? { done: 0, failed: 0, pending: 0 };
   if (p.status === 'importing') lights.push({ cls: 'warn', text: `Copying media (${m.done} done)` });
   else if (m.failed) lights.push({ cls: 'warn', text: `${m.failed} file${m.failed === 1 ? '' : 's'} not copied` });
-  else if (m.done) lights.push({ cls: 'on', text: `${p.sourceFeedUrl ? 'Media copied' : 'Media stored'} (${fmtBytes(m.bytes)})` });
+  else if (m.done) lights.push({ cls: 'on', text: `Storage Used (${fmtBytes(m.bytes)})` });
   else lights.push({ cls: '', text: 'No media' });
 
   if (p.sourceFeedUrl) {
@@ -3362,7 +3362,7 @@ async function refreshSetup() {
 }
 
 async function viewSite() {
-  const [{ settings: s }, storage, backups] = await Promise.all([api('GET', '/api/admin/site'), api('GET', '/api/admin/storage'), api('GET', '/api/admin/backups')]);
+  const [{ settings: s }, storage, backups, usage] = await Promise.all([api('GET', '/api/admin/site'), api('GET', '/api/admin/storage'), api('GET', '/api/admin/backups'), api('GET', '/api/admin/storage-usage')]);
   const remoteStorage = storage.current.provider !== 'local';
 
   // Branding: name + logo + favicon
@@ -3518,6 +3518,7 @@ async function viewSite() {
     brandForm,
     addrForm,
     storagePanel(storage),
+    usagePanel(usage),
     verifyPanel(s),
     backupsPanel(backups),
     op3Panel(s),
@@ -3525,6 +3526,40 @@ async function viewSite() {
       h('h2', null, 'Sign-ups'),
       h('label', { class: 'switch', style: 'margin-top:12px' }, reg, 'Anyone can create an account'),
       h('p', { class: 'hint', style: 'margin-top:8px' }, 'When off, only admins can add podcasters (under People).')));
+}
+
+// ───────────── storage used ─────────────
+
+function usagePanel(u) {
+  const t = u.total;
+  const tiles = h('div', { class: 'stat-tiles' },
+    [['Storage used, whole site', fmtBytes(t.bytes)], ['Files', fmtNum(t.files)], ['Shows', fmtNum(t.shows)], ['Accounts', fmtNum(t.accounts)]]
+      .map(([label, v]) => h('div', { class: 'stat-tile' }, h('span', { class: 'stat-value' }, v), h('span', { class: 'stat-label' }, label))));
+  const share = (b) => (t.bytes ? `${Math.round((100 * b) / t.bytes)}%` : '—');
+  const rows = [];
+  for (const a of u.accounts) {
+    rows.push(h('tr', { class: 'usage-account' },
+      h('td', null, h('b', null, a.name || a.email), a.name ? h('div', { class: 'hint' }, a.email) : null),
+      h('td', { class: 'num' }, fmtNum(a.shows)),
+      h('td', { class: 'num' }, fmtNum(a.files)),
+      h('td', { class: 'num nowrap' }, a.bytes ? fmtBytes(a.bytes) : '—'),
+      h('td', { class: 'num' }, a.bytes ? share(a.bytes) : '—')));
+    for (const sh of u.shows.filter((x) => x.ownerId === a.id)) {
+      rows.push(h('tr', { class: 'usage-show' },
+        h('td', null, h('a', { href: `#/show/${sh.id}` }, sh.title)),
+        h('td', null),
+        h('td', { class: 'num' }, fmtNum(sh.files)),
+        h('td', { class: 'num nowrap' }, sh.bytes ? fmtBytes(sh.bytes) : '—'),
+        h('td', { class: 'num' }, sh.bytes ? share(sh.bytes) : '—')));
+    }
+  }
+  return h('section', { class: 'panel' },
+    h('h2', null, 'Storage used'),
+    h('p', { class: 'muted' }, 'Episode audio, artwork, transcripts and chapter files stored for each show, wherever they’re kept. A show counts toward its owner’s account.'),
+    tiles,
+    h('div', { class: 'table-wrap', style: 'margin-top:16px' }, h('table', { class: 'usage' },
+      h('thead', null, h('tr', null, h('th', null, 'Account and shows'), h('th', { class: 'num' }, 'Shows'), h('th', { class: 'num' }, 'Files'), h('th', { class: 'num' }, 'Storage used'), h('th', { class: 'num' }, 'Share'))),
+      h('tbody', null, rows))));
 }
 
 // ───────────── backups ─────────────

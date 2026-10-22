@@ -745,6 +745,35 @@ export function createApp(deps: AppDeps) {
     sendJson(ctx.res, 200, { job: await jobJson(user.id, ctx.params.id!) });
   });
 
+  // Storage used: every stored file (episodes, artwork, transcripts, chapters), by account and show.
+  // A show counts toward its owner's account.
+  router.get('/api/admin/storage-usage', async (ctx) => {
+    await requireAdmin(ctx);
+    const { rows: shows } = await db.query<{ id: string; title: string; slug: string; owner_id: string; files: number; bytes: string }>(
+      `SELECT p.id, p.title, p.slug, p.owner_id,
+              count(m.id) FILTER (WHERE m.status = 'done')::int AS files,
+              COALESCE(sum(m.bytes) FILTER (WHERE m.status = 'done'), 0)::bigint AS bytes
+         FROM podcasts p LEFT JOIN media_files m ON m.podcast_id = p.id
+        GROUP BY p.id ORDER BY bytes DESC, p.title`,
+    );
+    const { rows: users } = await db.query<{ id: string; email: string; display_name: string | null; is_admin: boolean }>(
+      `SELECT id, email, display_name, is_admin FROM users ORDER BY created_at`,
+    );
+    const showList = shows.map((s) => ({ id: s.id, title: s.title, slug: s.slug, ownerId: s.owner_id, files: s.files, bytes: Number(s.bytes) }));
+    const accounts = users.map((u) => {
+      const mine = showList.filter((s) => s.ownerId === u.id);
+      return {
+        id: u.id, email: u.email, name: u.display_name, isAdmin: u.is_admin,
+        shows: mine.length, files: mine.reduce((a, s) => a + s.files, 0), bytes: mine.reduce((a, s) => a + s.bytes, 0),
+      };
+    }).sort((a, b) => b.bytes - a.bytes || a.email.localeCompare(b.email));
+    sendJson(ctx.res, 200, {
+      total: { bytes: showList.reduce((a, s) => a + s.bytes, 0), files: showList.reduce((a, s) => a + s.files, 0), shows: showList.length, accounts: users.length },
+      accounts,
+      shows: showList,
+    });
+  });
+
   router.post('/api/admin/site/test-op3', async (ctx) => {
     await requireAdmin(ctx);
     const body = await readJson(ctx.req);

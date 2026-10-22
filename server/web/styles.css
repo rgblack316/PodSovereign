@@ -661,3 +661,10 @@ table.op3-episodes th button.sort:focus-visible { outline: 2px solid var(--focus
 .header-rows { display: grid; gap: var(--s2); justify-items: start; }
 .header-row { width: 100%; gap: var(--s2); align-items: center; }
 .header-row input { flex: 1 1 0; min-width: 0; }
+
+/* Storage used (Site settings) */
+table.usage .num { text-align: right; font-variant-numeric: tabular-nums; }
+table.usage td { border-bottom: 0; }
+table.usage tr.usage-account td { border-top: 1px solid var(--rule); }
+table.usage tr.usage-show td { border-top: 0; padding-top: 2px; padding-bottom: 6px; color: var(--ink-2); }
+table.usage tr.usage-show td:first-child { padding-left: var(--s5); }

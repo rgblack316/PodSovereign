@@ -38,13 +38,14 @@ PodSovereign doesn't stream today. Live shows point at an outside stream (Icecas
 **Hosting caveat:** Cloudflare's terms prohibit streaming video through its CDN and Tunnel hostnames on Free, Pro and Business plans, and restrict large-file traffic. A streaming server would need a different path, such as a separate DNS-only subdomain, Cloudflare Stream, or another provider.
 
 ## Security and running costs
-- [ ] Storage limits per account or per show, with a usage display
+- [ ] Storage limits per account or per show (usage is shown already: Site settings → Storage used)
 
 ## Installs and updates
 - [ ] Commit a `package-lock.json` so every Docker build uses the same dependency versions
 - [ ] Publish a prebuilt app image on GitHub Container Registry, so installs and updates skip the local build (seconds instead of minutes)
 
 ## Recently completed
+- Storage used: per show (the show's status bar), and per account and for the whole site (Site settings)
 - Website rebuild on feed changes (Cloudflare Pages, Netlify, Vercel, Render, GitHub Actions, custom webhook)
 - OP3 Stats tab for shows using the OP3 prefix: daily downloads (30 days, 90 days, a year), countries, apps, per-episode downloads in the Episodes list and editor
 - Saved passwords and API keys encrypted in the database; the dashboard font is served from your own server (no Google Fonts)
