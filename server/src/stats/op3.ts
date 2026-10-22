@@ -11,7 +11,7 @@
  * its own, so one slow OP3 query doesn't hold up or break the others.
  */
 import type { Config } from '../config.js';
-import { maybeOne, type Db } from '../db/db.js';
+import { maybeOne, type Db, type Queryable } from '../db/db.js';
 import { feedPath } from '../urls.js';
 
 export class Op3Error extends Error {
@@ -209,6 +209,29 @@ export interface Op3State {
   apps: Op3Stats['apps'];
   appsAt: string | null;
   appsError: string | null;
+  allTime: AllTime;
+}
+
+export interface AllTime {
+  /** Every download saved so far, and the first day counted. */
+  downloads: number;
+  firstDay: string | null;
+  /** True once the show's whole OP3 history has been read (until then the total is still growing). */
+  complete: boolean;
+  /** While older history is being read: how far back it has got. */
+  readingFrom: string | null;
+}
+
+async function allTimeOf(db: Db, podcastId: string): Promise<AllTime> {
+  const r = (await maybeOne<{ n: number; first: string | null; h: Date | null; bu: Date | null; be: Date | null }>(
+    db,
+    `SELECT (SELECT coalesce(sum(downloads), 0)::int FROM op3_daily WHERE podcast_id = p.id) AS n,
+            (SELECT to_char(min(day), 'YYYY-MM-DD') FROM op3_daily WHERE podcast_id = p.id AND downloads > 0) AS first,
+            p.op3_history_at AS h, p.op3_backfill_until AS bu, p.op3_backfill_end AS be
+       FROM podcasts p WHERE p.id = $1`,
+    [podcastId],
+  ))!;
+  return { downloads: r.n, firstDay: r.first, complete: !!r.h && !r.be, readingFrom: r.be && r.bu ? new Date(r.bu).toISOString() : null };
 }
 
 const iso = (d: Date | null | undefined) => (d ? new Date(d).toISOString() : null);
@@ -241,6 +264,7 @@ export async function op3State(db: Db, config: Config, podcastId: string, opts: 
     apps: s?.apps ?? [],
     appsAt: iso(s?.apps_at),
     appsError: s?.apps_error ?? null,
+    allTime: await allTimeOf(db, podcastId),
   };
 }
 
@@ -261,8 +285,8 @@ export async function requestOp3Refresh(db: Db, config: Config, podcastId: strin
 
 /**
  * Every few minutes: refresh the next show that's due (one at a time). Due =
- * never refreshed, last refreshed over 6 hours ago, or a year of history still
- * being read (picked up again after a short pause until it's complete).
+ * never refreshed, last refreshed over 6 hours ago, or history still being
+ * read (picked up again after a short pause until it's complete).
  */
 export async function refreshDueOp3(db: Db, config: Config, opts: { now?: Date; log?: (m: string) => void; pageSize?: number; maxMs?: number } = {}): Promise<string | null> {
   if (!config.op3Token || refreshing.size) return null;
@@ -274,7 +298,8 @@ export async function refreshDueOp3(db: Db, config: Config, opts: { now?: Date; 
         AND EXISTS (SELECT 1 FROM podcast_prefixes x WHERE x.podcast_id = p.id AND x.service_key = 'op3' AND x.enabled)
         AND (p.op3_refreshed_at IS NULL
              OR p.op3_refreshed_at < $1::timestamptz - make_interval(secs => $2)
-             OR (p.op3_error_code IS NULL AND (p.op3_synced_until IS NULL OR p.op3_synced_until < $1::timestamptz - interval '1 day')
+             OR (p.op3_error_code IS NULL
+                 AND (p.op3_synced_until IS NULL OR p.op3_synced_until < $1::timestamptz - interval '1 day' OR p.op3_backfill_end IS NOT NULL)
                  AND p.op3_refreshed_at < $1::timestamptz - interval '5 minutes'))
       ORDER BY p.op3_refreshed_at NULLS FIRST LIMIT 1`,
     [now, REFRESH_EVERY_MS / 1000],
@@ -302,81 +327,145 @@ export function startOp3Worker(deps: { db: Db; config: Config; log?: (m: string)
 
 const DAY_MS = 86_400_000;
 const PAGE = 5_000;
-/** How far back the first sync goes. */
+/** The first sync reads this far back, so recent numbers show quickly; older history is read after. */
 export const HISTORY_DAYS = 366;
-/** One sync stops after this long and carries on at the next refresh (the year of history can be large). */
+/** Before OP3 existed, so reading from here gets a show's whole OP3 history. */
+export const OP3_EPOCH = new Date('2021-01-01T00:00:00Z');
+/** The whole history is re-read this often, to pick up OP3's later corrections (bots found later, say). */
+const REREAD_EVERY_MS = 30 * DAY_MS;
+/** One sync stops after this long and carries on at the next run (a show's history can be large). */
 const SYNC_MAX_MS = 10 * 60_000;
 const syncing = new Set<string>();
 const utcDay = (t: number) => new Date(Math.floor(t / DAY_MS) * DAY_MS);
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
+const nextIsoDay = (day: string) => isoDay(new Date(Date.parse(`${day}T00:00:00Z`) + DAY_MS));
 
 interface DownloadRow { time?: string; countryCode?: string | null }
 interface DownloadsPage { rows?: DownloadRow[]; count?: number; continuationToken?: string | null }
 
 /**
- * Sum OP3's download records into op3_daily, from where the last sync left
- * off up to now. The first sync reaches back HISTORY_DAYS. Progress is saved
- * after every page, so a timeout loses one page, not the whole run: the
- * next sync re-reads from the start of the last day it had (that day may
- * have been partly counted, so it's cleared and counted again).
+ * Read OP3's download records from the start of `start`'s day up to `end`,
+ * replacing the saved daily counts day by day as it goes: each day is
+ * cleared just before its records are added, so what's saved stays shown
+ * while it's re-read. Progress is saved after every page through `save`
+ * (the start of the last day read, which may have been partly read; a later
+ * run re-reads it). Returns whether it reached `end`.
+ */
+async function readRecords(db: Db, config: Config, a: {
+  token: string; showUuid: string; podcastId: string; start: Date; end: Date; pageSize: number;
+  budget: { pages: number; deadline: number };
+  save: (q: Queryable, until: Date, complete: boolean) => Promise<void>;
+}): Promise<boolean> {
+  const startDay = utcDay(a.start.getTime());
+  if (startDay.getTime() >= a.end.getTime()) {
+    await db.tx((q) => a.save(q, a.end, true));
+    return true;
+  }
+  const lastEndDay = isoDay(new Date(a.end.getTime() - 1));
+  let cleared = isoDay(new Date(startDay.getTime() - DAY_MS)); // days after this one have been cleared in this run
+  let last: string | null = null;
+  let continuationToken: string | null = null;
+  while (a.budget.pages > 0) {
+    a.budget.pages--;
+    const params: Record<string, string> = { format: 'json', limit: String(a.pageSize), end: a.end.toISOString() };
+    if (continuationToken) {
+      params.continuationToken = continuationToken;
+      params.start = startDay.toISOString();
+    } else if (last) params.startAfter = last;
+    else params.start = startDay.toISOString();
+    const r = await op3Get<DownloadsPage>(config, a.token, `/downloads/show/${a.showUuid}`, params, { timeoutMs: op3Timeouts.page, retries: 1 });
+    const rows = r.body?.rows ?? [];
+    const counts = new Map<string, number>();
+    for (const d of rows) {
+      if (!d.time) continue;
+      const key = `${d.time.slice(0, 10)}|${(d.countryCode ?? '').toUpperCase().slice(0, 2)}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+      last = d.time;
+    }
+    continuationToken = r.body?.continuationToken || null;
+    const complete = rows.length < a.pageSize && !continuationToken;
+    // Days up to here are now read (or being read): clear the ones not yet cleared in this run.
+    const clearTo = complete ? lastEndDay : last ? last.slice(0, 10) : cleared;
+    await db.tx(async (q) => {
+      if (clearTo > cleared) await q.query(`DELETE FROM op3_daily WHERE podcast_id = $1 AND day > $2 AND day <= $3`, [a.podcastId, cleared, clearTo]);
+      const entries = [...counts];
+      for (let i = 0; i < entries.length; i += 500) {
+        const vals: unknown[] = [a.podcastId];
+        const tuples = entries.slice(i, i + 500).map(([k, n]) => {
+          const [day, country] = k.split('|');
+          vals.push(day, country, n);
+          return `($1, $${vals.length - 2}, $${vals.length - 1}, $${vals.length})`;
+        });
+        await q.query(
+          `INSERT INTO op3_daily (podcast_id, day, country, downloads) VALUES ${tuples.join(', ')}
+           ON CONFLICT (podcast_id, day, country) DO UPDATE SET downloads = op3_daily.downloads + EXCLUDED.downloads`,
+          vals,
+        );
+      }
+      await a.save(q, complete ? a.end : last ? utcDay(Date.parse(last)) : startDay, complete);
+    });
+    if (clearTo > cleared) cleared = clearTo;
+    if (complete) return true;
+    if (Date.now() > a.budget.deadline) return false;
+  }
+  return false;
+}
+
+/**
+ * Bring the saved daily counts up to date: first from where the last sync
+ * left off up to now (the very first sync reads the last HISTORY_DAYS), then
+ * older history ("backfill") back to the start of OP3, with whatever time is
+ * left. Every month or so the whole history is re-read. Saved as it goes, so
+ * a timeout loses one page, not the whole run.
  */
 export async function syncOp3Daily(db: Db, config: Config, podcastId: string, opts: { now?: Date; maxPages?: number; pageSize?: number; maxMs?: number; showUuid?: string } = {}): Promise<void> {
   if (syncing.has(podcastId)) return;
   syncing.add(podcastId);
-  const started = Date.now();
   try {
     const token = needToken(config);
-    const now = (opts.now ?? new Date()).getTime();
+    const now = opts.now ?? new Date();
     const showUuid = opts.showUuid ?? (await resolveShow(db, config, token, podcastId)).showUuid;
-    const row = (await maybeOne<{ op3_synced_until: Date | null }>(db, `SELECT op3_synced_until FROM podcasts WHERE id = $1`, [podcastId]))!;
-    const from = utcDay(row.op3_synced_until ? new Date(row.op3_synced_until).getTime() : now - HISTORY_DAYS * DAY_MS);
+    const budget = { pages: opts.maxPages ?? Infinity, deadline: Date.now() + (opts.maxMs ?? SYNC_MAX_MS) };
     const pageSize = opts.pageSize ?? PAGE;
-    const maxPages = opts.maxPages ?? Infinity;
-    const maxMs = opts.maxMs ?? SYNC_MAX_MS;
-    let last: string | null = null;
-    let continuationToken: string | null = null;
-    let first = true;
-    for (let page = 0; page < maxPages; page++) {
-      const params: Record<string, string> = { format: 'json', limit: String(pageSize), end: new Date(now).toISOString() };
-      if (continuationToken) {
-        params.continuationToken = continuationToken;
-        params.start = from.toISOString();
-      } else if (last) params.startAfter = last;
-      else params.start = from.toISOString();
-      const r = await op3Get<DownloadsPage>(config, token, `/downloads/show/${showUuid}`, params, { timeoutMs: op3Timeouts.page, retries: 1 });
-      const rows = r.body?.rows ?? [];
-      const counts = new Map<string, number>();
-      for (const d of rows) {
-        if (!d.time) continue;
-        const key = `${d.time.slice(0, 10)}|${(d.countryCode ?? '').toUpperCase().slice(0, 2)}`;
-        counts.set(key, (counts.get(key) ?? 0) + 1);
-        last = d.time;
-      }
-      continuationToken = r.body?.continuationToken || null;
-      const complete = rows.length < pageSize && !continuationToken;
-      // Everything before the start of the last day read is fully counted.
-      const until = complete ? new Date(now) : last ? utcDay(Date.parse(last)) : from;
-      await db.tx(async (q) => {
-        if (first) await q.query(`DELETE FROM op3_daily WHERE podcast_id = $1 AND day >= $2`, [podcastId, isoDay(from)]);
-        const entries = [...counts];
-        for (let i = 0; i < entries.length; i += 500) {
-          const vals: unknown[] = [podcastId];
-          const tuples = entries.slice(i, i + 500).map(([k, n]) => {
-            const [day, country] = k.split('|');
-            vals.push(day, country, n);
-            return `($1, $${vals.length - 2}, $${vals.length - 1}, $${vals.length})`;
-          });
-          await q.query(
-            `INSERT INTO op3_daily (podcast_id, day, country, downloads) VALUES ${tuples.join(', ')}
-             ON CONFLICT (podcast_id, day, country) DO UPDATE SET downloads = op3_daily.downloads + EXCLUDED.downloads`,
-            vals,
-          );
-        }
-        await q.query(`UPDATE podcasts SET op3_synced_until = $2, op3_synced_at = now(), op3_sync_error = NULL WHERE id = $1`, [podcastId, until]);
-      });
-      first = false;
-      if (complete || Date.now() - started > maxMs) break;
+    const row = (await maybeOne<{ op3_synced_until: Date | null; op3_backfill_until: Date | null; op3_backfill_end: Date | null; op3_history_at: Date | null }>(
+      db, `SELECT op3_synced_until, op3_backfill_until, op3_backfill_end, op3_history_at FROM podcasts WHERE id = $1`, [podcastId],
+    ))!;
+
+    // 1. Recent: up to now.
+    const firstSync = !row.op3_synced_until;
+    const forwardStart = row.op3_synced_until ? new Date(row.op3_synced_until) : utcDay(now.getTime() - HISTORY_DAYS * DAY_MS);
+    const forwardDone = await readRecords(db, config, {
+      token, showUuid, podcastId, start: forwardStart, end: now, pageSize, budget,
+      save: async (q, until, complete) => {
+        await q.query(
+          `UPDATE podcasts SET op3_synced_until = $2, op3_synced_at = now(), op3_sync_error = NULL,
+                  op3_backfill_until = CASE WHEN $3 THEN $4::timestamptz ELSE op3_backfill_until END,
+                  op3_backfill_end = CASE WHEN $3 THEN $5::timestamptz ELSE op3_backfill_end END
+            WHERE id = $1`,
+          // After the very first sync, read everything older than it.
+          [podcastId, until, complete && firstSync, OP3_EPOCH, utcDay(forwardStart.getTime())],
+        );
+      },
+    });
+    if (!forwardDone) return;
+
+    // 2. Older history, and the monthly re-read of all of it.
+    let b = (await maybeOne<{ s: Date | null; e: Date | null; h: Date | null; u: Date }>(
+      db, `SELECT op3_backfill_until AS s, op3_backfill_end AS e, op3_history_at AS h, op3_synced_until AS u FROM podcasts WHERE id = $1`, [podcastId],
+    ))!;
+    if (!b.e && (!b.h || now.getTime() - new Date(b.h).getTime() > REREAD_EVERY_MS)) {
+      const end = utcDay(new Date(b.u).getTime());
+      await db.query(`UPDATE podcasts SET op3_backfill_until = $2, op3_backfill_end = $3 WHERE id = $1`, [podcastId, OP3_EPOCH, end]);
+      b = { ...b, s: OP3_EPOCH, e: end };
     }
+    if (!b.e) return;
+    await readRecords(db, config, {
+      token, showUuid, podcastId, start: new Date(b.s ?? OP3_EPOCH), end: new Date(b.e), pageSize, budget,
+      save: async (q, until, complete) => {
+        if (complete) await q.query(`UPDATE podcasts SET op3_backfill_until = NULL, op3_backfill_end = NULL, op3_history_at = now(), op3_sync_error = NULL WHERE id = $1`, [podcastId]);
+        else await q.query(`UPDATE podcasts SET op3_backfill_until = $2, op3_sync_error = NULL WHERE id = $1`, [podcastId, until]);
+      },
+    });
   } catch (e) {
     await db.query(`UPDATE podcasts SET op3_sync_error = $2, op3_synced_at = now() WHERE id = $1`, [podcastId, (e as Error).message]).catch(() => {});
     throw e;
@@ -395,15 +484,23 @@ export interface Op3Daily {
   /** Downloads are summed up to here. */
   syncedUntil: string | null;
   error: string | null;
+  /** Every download saved so far, and the first day counted. */
+  allTime: number;
+  firstDay: string | null;
+  /** True once the show's whole OP3 history has been read (until then allTime is still growing). */
+  historyComplete: boolean;
+  /** While older history is being read: how far back it has got. */
+  backfillAt: string | null;
 }
 
 /** Daily downloads and countries for the last `days` days, from what's saved. */
 export async function op3Daily(db: Db, config: Config, podcastId: string, days: number, opts: { now?: Date } = {}): Promise<Op3Daily> {
   needToken(config);
   const now = (opts.now ?? new Date()).getTime();
-  const p = (await maybeOne<{ op3_synced_until: Date | null; op3_synced_at: Date | null; op3_sync_error: string | null }>(
-    db, `SELECT op3_synced_until, op3_synced_at, op3_sync_error FROM podcasts WHERE id = $1`, [podcastId],
+  const p = (await maybeOne<{ op3_synced_until: Date | null; op3_synced_at: Date | null; op3_sync_error: string | null; op3_backfill_until: Date | null; op3_backfill_end: Date | null; op3_history_at: Date | null }>(
+    db, `SELECT op3_synced_until, op3_synced_at, op3_sync_error, op3_backfill_until, op3_backfill_end, op3_history_at FROM podcasts WHERE id = $1`, [podcastId],
   ))!;
+  const all = await allTimeOf(db, podcastId);
   const fromDay = utcDay(now - (days - 1) * DAY_MS);
   const { rows: byDay } = await db.query<{ day: string; n: number }>(
     `SELECT to_char(day, 'YYYY-MM-DD') AS day, sum(downloads)::int AS n FROM op3_daily WHERE podcast_id = $1 AND day >= $2 GROUP BY day`,
@@ -428,5 +525,9 @@ export async function op3Daily(db: Db, config: Config, podcastId: string, days: 
     syncing: syncing.has(podcastId) || refreshing.has(podcastId),
     syncedUntil: p.op3_synced_until ? new Date(p.op3_synced_until).toISOString() : null,
     error: p.op3_sync_error,
+    allTime: all.downloads,
+    firstDay: all.firstDay,
+    historyComplete: all.complete,
+    backfillAt: all.readingFrom,
   };
 }

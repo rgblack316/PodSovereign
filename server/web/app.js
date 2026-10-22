@@ -881,8 +881,12 @@ async function tabOp3(p, canEdit, reload) {
   // Headline numbers
   const c = s.counts ?? {};
   s.weeklyDownloads = c.weeklyDownloads ?? [];
+  const at = s.allTime;
+  const allTimeLabel = !at.firstDay ? 'All-time downloads'
+    : at.complete ? `All-time downloads, since ${fmtDate(at.firstDay)}`
+      : `Downloads since ${fmtDate(at.firstDay)} (still reading older history)`;
   const tiles = h('div', { class: 'stat-tiles' },
-    [['Downloads, last 30 days', c.monthlyDownloads], ['Weekly average', c.weeklyAvgDownloads], ['Episodes counted', s.episodes.length]]
+    [[allTimeLabel, at.firstDay ? at.downloads : null], ['Downloads, last 30 days', c.monthlyDownloads], ['Weekly average', c.weeklyAvgDownloads], ['Episodes counted', s.episodes.length]]
       .map(([label, v]) => h('div', { class: 'stat-tile' }, h('span', { class: 'stat-value' }, fmtNum(v)), h('span', { class: 'stat-label' }, label))));
 
   // Last four weeks (OP3 lists them oldest first)

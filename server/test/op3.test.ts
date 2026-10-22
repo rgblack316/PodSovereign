@@ -175,7 +175,7 @@ test('daily downloads and countries: saved page by page, resumed after a failure
   // The daily view counts back from today (the real date), over what was synced up to `now`.
   const today = new Date();
   const expect = (from: number) => fake.downloads.filter((d) => Date.parse(d.time) >= Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - from) && Date.parse(d.time) < now.getTime()).length;
-  await db.query(`UPDATE podcasts SET op3_synced_until = NULL WHERE id = $1`, [show]);
+  await db.query(`UPDATE podcasts SET op3_synced_until = NULL, op3_backfill_until = NULL, op3_backfill_end = NULL, op3_history_at = NULL WHERE id = $1`, [show]);
   await db.query(`DELETE FROM op3_daily WHERE podcast_id = $1`, [show]);
 
   // OP3 fails partway (after the retry too): the pages already read are kept.
@@ -209,6 +209,28 @@ test('daily downloads and countries: saved page by page, resumed after a failure
   assert.equal((await admin.get(`/api/podcasts/${show}/op3/daily?days=365`)).json.total, expect(364));
   assert.equal((await admin.get(`/api/podcasts/${show}/op3/daily?days=12`)).status, 400);
 
+  // All time: the whole history (400 days here, older than the first year read) is in.
+  const all = fake.downloads.filter((d) => Date.parse(d.time) < now.getTime()).length;
+  let a = (await admin.get(`/api/podcasts/${show}/op3/daily?days=30`)).json;
+  assert.equal(a.allTime, all);
+  assert.equal(a.firstDay, day(400).slice(0, 10));
+  assert.equal(a.historyComplete, true);
+  assert.equal(a.backfillAt, null);
+
+  // A month later the whole history is re-read, picking up OP3's corrections (two old downloads now counted as bots).
+  fake.downloads.splice(fake.downloads.findIndex((d) => d.time.startsWith(day(380).slice(0, 10))), 1);
+  fake.downloads.splice(fake.downloads.findIndex((d) => d.time.startsWith(day(200).slice(0, 10))), 1);
+  await db.query(`UPDATE podcasts SET op3_history_at = now() - interval '31 days' WHERE id = $1`, [show]);
+  await syncOp3Daily(db, cfg(), show, { now, pageSize: 100, maxPages: 3 });
+  a = (await admin.get(`/api/podcasts/${show}/op3/daily?days=30`)).json;
+  assert.equal(a.historyComplete, false, 'being re-read');
+  assert.ok(a.backfillAt, 'shows how far back it has got');
+  assert.ok(a.allTime >= all - 2 && a.allTime <= all, 'what was saved stays shown while it’s re-read');
+  await syncOp3Daily(db, cfg(), show, { now, pageSize: 100 });
+  a = (await admin.get(`/api/podcasts/${show}/op3/daily?days=30`)).json;
+  assert.equal(a.allTime, all - 2);
+  assert.equal(a.historyComplete, true);
+
   // New downloads arrive; the next sync re-reads only from the last day it had.
   fake.downloads.push({ time: '2026-10-21T16:00:00.000Z', countryCode: 'CA' }, { time: '2026-10-22T09:00:00.000Z', countryCode: 'CA' });
   fake.requests.length = 0;
@@ -216,4 +238,25 @@ test('daily downloads and countries: saved page by page, resumed after a failure
   assert.ok(fake.requests.filter((q) => q.path.startsWith('/api/1/downloads')).every((q) => q.path.includes('start=2026-10-21T00%3A00%3A00.000Z') || q.path.includes('startAfter')));
   const c = (await db.query<{ n: number }>(`SELECT sum(downloads)::int AS n FROM op3_daily WHERE podcast_id = $1 AND country = 'CA'`, [show])).rows[0]!.n;
   assert.equal(c, 2, 'no double counting of the re-read day');
+});
+
+test('a new show: the last year first, then everything older, all in one go when there’s time', async () => {
+  const r = await admin.post('/api/podcasts', { title: 'History Show', slug: 'history-show' });
+  const id = r.json.podcast.id;
+  fake.guids.add(r.json.podcast.podcastGuid);
+  fake.requests.length = 0;
+  const now = new Date('2026-10-21T15:00:00Z');
+  await syncOp3Daily(db, cfg(), id, { now, pageSize: 100 });
+  const dl = fake.requests.filter((q) => q.path.startsWith('/api/1/downloads'));
+  assert.match(dl[0]!.path, /start=2025-10-20T00%3A00%3A00.000Z/, 'the last year first');
+  assert.ok(dl.some((q) => q.path.includes('start=2021-01-01T00%3A00%3A00.000Z')), 'then from the start of OP3');
+  const p = (await db.query<{ e: Date | null; h: Date | null }>(`SELECT op3_backfill_end AS e, op3_history_at AS h FROM podcasts WHERE id = $1`, [id])).rows[0]!;
+  assert.equal(p.e, null);
+  assert.ok(p.h);
+  const a = (await admin.get(`/api/podcasts/${id}/op3/daily?days=30`)).json;
+  assert.equal(a.allTime, fake.downloads.filter((d) => Date.parse(d.time) < now.getTime()).length);
+  assert.equal(a.historyComplete, true);
+  const st = (await admin.get(`/api/podcasts/${id}/op3`)).json;
+  assert.equal(st.allTime.downloads, a.allTime);
+  assert.equal(st.allTime.complete, true);
 });
