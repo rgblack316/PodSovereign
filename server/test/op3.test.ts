@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { after, before, test } from 'node:test';
 import type { Db } from '../src/db/db.js';
 import { createApp } from '../src/http/app.js';
-import { clearOp3Cache, syncOp3Daily } from '../src/stats/op3.js';
+import { isRefreshing, op3Timeouts, refreshDueOp3, refreshOp3, requestOp3Refresh, syncOp3Daily } from '../src/stats/op3.js';
 import { setupDb, tempDir, testConfig } from './support/env.js';
 import { startFakeOp3, type FakeOp3 } from './support/fake-op3.js';
 
@@ -86,77 +86,134 @@ test('admins save the token (checked, encrypted, never sent back)', async () => 
   assert.match(stored, /^enc:v1:/);
 });
 
-test('stats: found by podcast:guid, then downloads, episodes and apps', async () => {
-  requests.reset();
-  const r = await admin.get(`/api/podcasts/${show}/op3`);
+const waitForRefresh = async (id: string) => {
+  for (let i = 0; i < 200 && isRefreshing(id); i++) await new Promise((r) => setTimeout(r, 25));
+};
+
+test('first look starts a refresh; after that the saved numbers are shown without calling OP3', async () => {
+  fake.requests.length = 0;
+  let r = await admin.get(`/api/podcasts/${show}/op3`);
   assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.refreshing, true);
+  await waitForRefresh(show);
+  r = await admin.get(`/api/podcasts/${show}/op3`);
   const s = r.json;
-  assert.equal(s.showUuid, UUID);
-  assert.equal(s.monthlyDownloads, 1234);
-  assert.deepEqual(s.weeklyDownloads, [250, 280, 320, 350]);
+  assert.equal(s.refreshing, false);
+  assert.equal(s.counts.monthlyDownloads, 1234);
+  assert.deepEqual(s.counts.weeklyDownloads, [250, 280, 320, 350]);
   assert.equal(s.episodes.length, 2);
   assert.equal(s.episodes[1].downloadsAll, 410);
   assert.deepEqual(s.apps.map((a: { name: string }) => a.name), ['Apple Podcasts', 'Spotify', 'Overcast'], 'most downloads first');
   assert.equal(s.statsPageUrl, `https://op3.dev/show/${UUID}`);
+  assert.ok(s.countsAt && s.episodesAt && s.appsAt);
+  assert.equal(Date.parse(s.nextRefreshAt) - Date.parse(s.refreshedAt), 6 * 3600_000, 'next refresh in 6 hours');
   assert.ok(fake.requests.every((q) => q.auth === `Bearer ${TOKEN}`), 'the token goes in the Authorization header');
   assert.ok(fake.requests.some((q) => q.path === `/api/1/shows/${knownGuid}`));
   assert.equal((await db.query<{ u: string }>(`SELECT op3_show_uuid AS u FROM podcasts WHERE id = $1`, [show])).rows[0]!.u, UUID, 'OP3 show ID saved');
 
-  // Cached: a second look doesn't call OP3 again; refresh does.
-  requests.reset();
-  await viewer.get(`/api/podcasts/${show}/op3`).then((x) => assert.equal(x.status, 404, 'not on the team'));
+  fake.requests.length = 0;
+  assert.equal((await viewer.get(`/api/podcasts/${show}/op3`)).status, 404, 'not on the team');
   await admin.get(`/api/podcasts/${show}/op3`);
-  assert.equal(fake.requests.length, 0);
-  await admin.get(`/api/podcasts/${show}/op3?refresh=1`);
-  assert.ok(fake.requests.some((q) => q.path === `/api/1/shows/${UUID}`), 'uses the saved OP3 ID');
+  await admin.get(`/api/podcasts/${show}/op3/daily?days=30`);
+  assert.equal(fake.requests.length, 0, 'viewing never calls OP3');
+});
+
+test('one slow OP3 query doesn’t hold up or erase the others', async () => {
+  op3Timeouts.query = 300;
+  fake.delays.set('/api/1/queries/top-apps-for-show', 2000);
+  fake.episodes[0]!.downloadsAll = 999;
+  try {
+    await refreshOp3(db, cfg(), show);
+  } finally {
+    op3Timeouts.query = 90_000;
+    fake.delays.clear();
+  }
+  const s = (await admin.get(`/api/podcasts/${show}/op3`)).json;
+  assert.equal(s.episodes[0].downloadsAll, 999, 'episodes updated');
+  assert.match(s.appsError, /took too long/);
+  assert.equal(s.apps.length, 3, 'the apps saved last time are still shown');
+  assert.equal(s.countsError, null);
+});
+
+test('Refresh button: at most every 15 minutes', async () => {
+  assert.equal(await requestOp3Refresh(db, cfg(), show), false, 'just refreshed');
+  await db.query(`UPDATE podcasts SET op3_refreshed_at = now() - interval '20 minutes' WHERE id = $1`, [show]);
+  assert.equal(await requestOp3Refresh(db, cfg(), show), true);
+  await waitForRefresh(show);
+  assert.equal((await admin.post(`/api/podcasts/${show}/op3/refresh`)).json.started, false);
+});
+
+test('the schedule: every 6 hours per show, sooner while a year of history is still being read', async () => {
+  const now = new Date();
+  await db.query(`UPDATE podcasts SET op3_synced_until = $2 WHERE id = $1`, [show, now]);
+  await db.query(`UPDATE podcasts SET op3_refreshed_at = now() - interval '5 hours' WHERE id = $1`, [show]);
+  assert.equal(await refreshDueOp3(db, cfg(), { now }), null, 'not due after 5 hours');
+  await db.query(`UPDATE podcasts SET op3_refreshed_at = now() - interval '7 hours' WHERE id = $1`, [show]);
+  assert.equal(await refreshDueOp3(db, cfg(), { now }), show, 'due after 6');
+  // History still being read: picked up again after a short pause.
+  await db.query(`UPDATE podcasts SET op3_refreshed_at = now() - interval '10 minutes', op3_synced_until = now() - interval '200 days' WHERE id = $1`, [show]);
+  assert.equal(await refreshDueOp3(db, cfg(), { now, maxMs: 0 }), show);
 });
 
 test('a show OP3 hasn’t seen yet gets a plain explanation', async () => {
-  clearOp3Cache();
   const r = await admin.post('/api/podcasts', { title: 'Brand New', slug: 'brand-new' });
   const id = r.json.podcast.id;
-  const s = await admin.get(`/api/podcasts/${id}/op3`);
-  assert.equal(s.status, 404);
-  assert.equal(s.json.code, 'not_found');
-  assert.match(s.json.error, /hasn’t counted any downloads/);
-  // It tried the guid and then the feed address (base64url).
+  await assert.rejects(refreshOp3(db, cfg(), id), /hasn’t counted any downloads/);
+  const s = (await admin.get(`/api/podcasts/${id}/op3`)).json;
+  assert.equal(s.errorCode, 'not_found');
+  assert.match(s.error, /hasn’t counted any downloads/);
   assert.ok(fake.requests.some((q) => q.path === `/api/1/shows/${Buffer.from('http://feeds.mine.test/brand-new/feed.xml').toString('base64url')}`));
 });
 
-test('daily downloads and countries: summed from OP3’s records, then kept up to date', async () => {
+test('daily downloads and countries: saved page by page, resumed after a failure, no double counting', async () => {
   const now = new Date('2026-10-21T15:00:00Z');
   const day = (n: number, h = 12) => new Date(Date.UTC(2026, 9, 21 - n, h)).toISOString();
   fake.downloads.length = 0;
   // 400 days back (only a year is read), a few a day, US and GB, plus one with no country.
   for (let n = 400; n >= 0; n--) for (let i = 0; i < (n % 3) + 1; i++) fake.downloads.push({ time: day(n, 8 + i), countryCode: i === 2 ? 'GB' : 'US' });
   fake.downloads.push({ time: day(0, 14), countryCode: null });
-  const expect = (from: number) => fake.downloads.filter((d) => Date.parse(d.time) >= Date.UTC(2026, 9, 21 - from) && Date.parse(d.time) < now.getTime()).length;
+  // The daily view counts back from today (the real date), over what was synced up to `now`.
+  const today = new Date();
+  const expect = (from: number) => fake.downloads.filter((d) => Date.parse(d.time) >= Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - from) && Date.parse(d.time) < now.getTime()).length;
+  await db.query(`UPDATE podcasts SET op3_synced_until = NULL WHERE id = $1`, [show]);
+  await db.query(`DELETE FROM op3_daily WHERE podcast_id = $1`, [show]);
 
+  // OP3 fails partway (after the retry too): the pages already read are kept.
   fake.requests.length = 0;
-  // Small pages force paging (the real page is 20,000); cap the pages to also test resuming.
-  await syncOp3Daily(db, cfg(), show, { now, maxPages: 3, pageSize: 100 });
-  let st = (await db.query<{ u: Date }>(`SELECT op3_synced_until AS u FROM podcasts WHERE id = $1`, [show])).rows[0]!.u;
-  assert.ok(st.getTime() < now.getTime(), 'stopped part way');
-  await syncOp3Daily(db, cfg(), show, { now, maxPages: 1000, pageSize: 100 });
-  st = (await db.query<{ u: Date }>(`SELECT op3_synced_until AS u FROM podcasts WHERE id = $1`, [show])).rows[0]!.u;
+  let calls = 0;
+  const orig = fake.requests.push.bind(fake.requests);
+  fake.requests.push = (...items) => {
+    if (items[0]!.path.startsWith('/api/1/downloads') && ++calls === 4) fake.fail = { path: '/api/1/downloads', count: 2 };
+    return orig(...items);
+  };
+  await assert.rejects(syncOp3Daily(db, cfg(), show, { now, pageSize: 100 }), /OP3 answered 500/);
+  fake.requests.push = orig;
+  const partial = (await db.query<{ u: Date; e: string }>(`SELECT op3_synced_until AS u, op3_sync_error AS e FROM podcasts WHERE id = $1`, [show])).rows[0]!;
+  assert.ok(partial.u && partial.u.getTime() < now.getTime(), 'progress saved');
+  assert.match(partial.e, /500/);
+  const saved = (await db.query<{ n: number }>(`SELECT coalesce(sum(downloads), 0)::int AS n FROM op3_daily WHERE podcast_id = $1`, [show])).rows[0]!.n;
+  assert.ok(saved > 0, 'the pages read before the failure are kept');
+
+  // A time limit stops a long run cleanly; the next one carries on.
+  await syncOp3Daily(db, cfg(), show, { now, pageSize: 100, maxPages: 2 });
+  await syncOp3Daily(db, cfg(), show, { now, pageSize: 100 });
+  const st = (await db.query<{ u: Date }>(`SELECT op3_synced_until AS u FROM podcasts WHERE id = $1`, [show])).rows[0]!.u;
   assert.equal(st.toISOString(), now.toISOString());
   assert.ok(fake.requests.some((q) => q.path.includes('continuationToken=')), 'follows continuation tokens');
 
   const r = await admin.get(`/api/podcasts/${show}/op3/daily?days=90`);
   assert.equal(r.status, 200, r.text);
   assert.equal(r.json.days.length, 90);
-  assert.equal(r.json.days.at(-1).day, '2026-10-21');
   assert.equal(r.json.total, expect(89));
   assert.deepEqual(r.json.countries.map((c: { code: string }) => c.code), ['US', 'GB', '']);
-  const yr = await admin.get(`/api/podcasts/${show}/op3/daily?days=365`);
-  assert.equal(yr.json.total, expect(364));
+  assert.equal((await admin.get(`/api/podcasts/${show}/op3/daily?days=365`)).json.total, expect(364));
   assert.equal((await admin.get(`/api/podcasts/${show}/op3/daily?days=12`)).status, 400);
 
-  // New downloads arrive; the next sync only re-reads from the last day it had.
+  // New downloads arrive; the next sync re-reads only from the last day it had.
   fake.downloads.push({ time: '2026-10-21T16:00:00.000Z', countryCode: 'CA' }, { time: '2026-10-22T09:00:00.000Z', countryCode: 'CA' });
   fake.requests.length = 0;
-  await syncOp3Daily(db, cfg(), show, { now: new Date('2026-10-22T12:00:00Z'), maxPages: 1000, pageSize: 100 });
-  assert.ok(fake.requests.filter((q) => q.path.startsWith('/api/1/downloads')).every((q) => q.path.includes('start=2026-10-21T00%3A00%3A00.000Z') || q.path.includes('continuationToken')));
+  await syncOp3Daily(db, cfg(), show, { now: new Date('2026-10-22T12:00:00Z'), pageSize: 100 });
+  assert.ok(fake.requests.filter((q) => q.path.startsWith('/api/1/downloads')).every((q) => q.path.includes('start=2026-10-21T00%3A00%3A00.000Z') || q.path.includes('startAfter')));
   const c = (await db.query<{ n: number }>(`SELECT sum(downloads)::int AS n FROM op3_daily WHERE podcast_id = $1 AND country = 'CA'`, [show])).rows[0]!.n;
   assert.equal(c, 2, 'no double counting of the re-read day');
 });

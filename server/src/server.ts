@@ -11,6 +11,7 @@ import { createApp } from './http/app.js';
 import { startImportWorker } from './import/importer.js';
 import { cleanupUploads } from './media/uploads.js';
 import { startBackupWorker } from './backup/backups.js';
+import { startOp3Worker } from './stats/op3.js';
 import { startPodpingWorker } from './podping/podping.js';
 import { encryptStoredSecrets, loadSecretKey } from './crypto/secrets.js';
 
@@ -29,6 +30,8 @@ async function main() {
   const worker = process.env.DISABLE_WORKER === '1' ? null : startImportWorker({ db, config, log });
   const podping = startPodpingWorker({ db, config, log });
   const backups = startBackupWorker({ db, config, log });
+  // OP3 stats: each show using the OP3 prefix is refreshed every 6 hours.
+  const op3 = startOp3Worker({ db, config, log });
   // Abandoned uploads and uploaded files never saved into an episode.
   const housekeeping = setInterval(() => void cleanupUploads(db, config, log).catch((e) => log(`cleanup: ${e.message}`)), 3600_000);
   const server = http.createServer(createApp({ db, config, log }));
@@ -42,6 +45,7 @@ async function main() {
     server.close();
     clearInterval(housekeeping);
     backups.stop();
+    op3.stop();
     await worker?.stop();
     await podping.stop();
     await db.close();

@@ -780,9 +780,12 @@ function op3DailyPanels(p) {
     const ranges = h('div', { class: 'page-sizes', role: 'group', 'aria-label': 'Time range' },
       [[30, '30 days'], [90, '90 days'], [365, 'Year']].map(([n, label]) => h('button', { type: 'button', 'aria-pressed': String(n === days), onclick: () => { days = n; load(); } }, label)));
     const empty = !d.syncedUntil;
+    const behind = d.syncedUntil && Date.now() - Date.parse(d.syncedUntil) > 2 * 86_400_000;
     const status = d.syncing
-      ? h('p', { class: 'hint' }, h('span', { class: 'light warn' }, empty ? 'Reading download records from OP3 (the first time takes a little while)…' : 'Updating from OP3…'))
-      : d.error ? h('p', { class: 'error' }, `Couldn’t update from OP3: ${d.error}`) : null;
+      ? h('p', { class: 'hint' }, h('span', { class: 'light warn' }, empty ? 'Reading download records from OP3 (the first time takes a while; it’s saved as it goes)…' : 'Updating from OP3…'))
+      : d.error ? h('p', { class: 'warn-note' }, `The last update stopped partway (${d.error}). What was read is kept, and the next update carries on from there.`)
+        : empty ? h('p', { class: 'hint' }, 'Daily numbers appear after the next update from OP3.')
+          : behind ? h('p', { class: 'hint' }, `Counted up to ${fmtDate(d.syncedUntil)} so far; the rest of the history is read over the next few updates.`) : null;
     chartPanel.replaceChildren(...[
       h('div', { class: 'row', style: 'justify-content:space-between;align-items:flex-start' },
         h('div', null, h('h2', null, 'Downloads by day'),
@@ -809,10 +812,10 @@ function op3DailyPanels(p) {
   return [chartPanel, countryPanel];
 }
 
-async function tabOp3(p, canEdit, reload, refresh = false) {
+async function tabOp3(p, canEdit, reload) {
   let s;
   try {
-    s = await api('GET', `/api/podcasts/${p.id}/op3${refresh ? '?refresh=1' : ''}`);
+    s = await api('GET', `/api/podcasts/${p.id}/op3`);
   } catch (e) {
     const box = h('section', { class: 'panel' }, h('h2', null, 'OP3 Stats'));
     if (e.status === 409) {
@@ -827,19 +830,59 @@ async function tabOp3(p, canEdit, reload, refresh = false) {
   }
 
   const wrap = h('div', { class: 'op3' });
+  // While a refresh runs, check back every few seconds and redraw when it's done.
+  const poll = () => {
+    const t = setTimeout(async () => {
+      try {
+        const next = await api('GET', `/api/podcasts/${p.id}/op3`);
+        if (next.refreshing) return poll();
+        if (wrap.isConnected) wrap.replaceWith(await tabOp3(p, canEdit, reload));
+      } catch { /* leave what's shown */ }
+    }, 4000);
+    cleanup.push(() => clearTimeout(t));
+  };
+  if (s.refreshing) poll();
+
+  const hasData = s.counts || s.episodes.length || s.apps.length;
+  if (!hasData) {
+    const box = h('section', { class: 'panel' }, h('h2', null, 'OP3 Stats'));
+    if (s.refreshing) box.append(h('p', { class: 'hint' }, h('span', { class: 'light warn' }, 'Getting this show’s numbers from OP3 for the first time…')));
+    else if (s.error) box.append(h('p', null, s.error));
+    else box.append(h('p', null, 'No numbers from OP3 yet.'));
+    wrap.append(box);
+    return wrap;
+  }
+
+  const refreshMsg = h('span', { class: 'hint', role: 'status' });
   const refreshBtn = h('button', {
     type: 'button',
     class: 'quiet',
+    disabled: s.refreshing,
     onclick: async () => {
       refreshBtn.disabled = true;
-      refreshBtn.textContent = 'Refreshing…';
-      wrap.replaceWith(await tabOp3(p, canEdit, reload, true));
+      try {
+        const r = await api('POST', `/api/podcasts/${p.id}/op3/refresh`);
+        if (r.started || r.refreshing) {
+          refreshBtn.textContent = 'Refreshing…';
+          poll();
+        } else {
+          refreshMsg.textContent = 'Refreshed in the last 15 minutes.';
+          refreshBtn.disabled = false;
+        }
+      } catch (e) {
+        refreshMsg.textContent = e.message;
+        refreshBtn.disabled = false;
+      }
     },
-  }, 'Refresh');
+  }, s.refreshing ? 'Refreshing…' : 'Refresh now');
+  /** A note under a panel whose last update failed (its saved numbers stay). */
+  const partNote = (err, at) => (err ? h('p', { class: 'warn-note' }, `The last update of this part didn’t finish (${err}).${at ? ` Showing numbers from ${fmtDate(at, true)}.` : ''}`) : null);
 
   // Headline numbers
+  const c = s.counts ?? {};
+  s.weeklyDownloads = c.weeklyDownloads ?? [];
   const tiles = h('div', { class: 'stat-tiles' },
-    [['Downloads, last 30 days', s.monthlyDownloads], ['Weekly average', s.weeklyAvgDownloads], ['Episodes counted', s.episodes.length]]
+    [['Downloads, last 30 days', c.monthlyDownloads], ['Weekly average', c.weeklyAvgDownloads], ['Episodes counted', s.episodes.length]]
       .map(([label, v]) => h('div', { class: 'stat-tile' }, h('span', { class: 'stat-value' }, fmtNum(v)), h('span', { class: 'stat-label' }, label))));
 
   // Last four weeks (OP3 lists them oldest first)
@@ -894,14 +937,18 @@ async function tabOp3(p, canEdit, reload, refresh = false) {
     h('section', { class: 'panel' },
       h('div', { class: 'row', style: 'justify-content:space-between;align-items:flex-start' },
         h('div', null, h('h2', null, 'OP3 Stats'),
-          h('p', { class: 'hint' }, `Downloads made through the OP3 prefix, bots excluded. Updated ${fmtDate(s.asOf ?? s.fetchedAt, true)}. `,
-            h('a', { href: s.statsPageUrl, target: '_blank', rel: 'noopener' }, 'Open on op3.dev'))),
-        refreshBtn),
+          h('p', { class: 'hint' }, 'Downloads made through the OP3 prefix, bots excluded. ',
+            s.statsPageUrl ? h('a', { href: s.statsPageUrl, target: '_blank', rel: 'noopener' }, 'Open on op3.dev') : null),
+          h('p', { class: 'hint' }, s.refreshing ? 'Updating from OP3 now…'
+            : `Updated from OP3 ${fmtDate(s.refreshedAt, true)}. Updates every 6 hours; next around ${new Date(s.nextRefreshAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}.`)),
+        h('div', { style: 'text-align:right' }, refreshBtn, h('div', null, refreshMsg))),
+      s.error ? h('p', { class: 'warn-note' }, `The last update didn’t finish: ${s.error}`) : null,
+      partNote(s.countsError, s.countsAt),
       tiles),
     ...op3DailyPanels(p),
-    h('section', { class: 'panel' }, h('h2', null, 'Last four weeks'), weekChart),
-    h('section', { class: 'panel' }, h('h2', null, 'Episodes'), h('p', { class: 'hint' }, 'Downloads in each episode’s first day, week and month, and in total. Select a column to sort.'), tableBox),
-    h('section', { class: 'panel' }, h('h2', null, 'Apps'), h('p', { class: 'hint' }, 'Share of downloads by app over the last three months.'), appList));
+    h('section', { class: 'panel' }, h('h2', null, 'Last four weeks'), partNote(s.countsError, s.countsAt), weekChart),
+    h('section', { class: 'panel' }, h('h2', null, 'Episodes'), h('p', { class: 'hint' }, 'Downloads in each episode’s first day, week and month, and in total. Select a column to sort.'), partNote(s.episodesError, s.episodesAt), tableBox),
+    h('section', { class: 'panel' }, h('h2', null, 'Apps'), h('p', { class: 'hint' }, 'Share of downloads by app over the last three months.'), partNote(s.appsError, s.appsAt), appList));
   return wrap;
 }
 

@@ -11,6 +11,10 @@ export interface FakeOp3 {
   downloads: { time: string; countryCode: string | null }[];
   /** Rows for /queries/episode-download-counts (defaults to two sample episodes). */
   episodes: Record<string, unknown>[];
+  /** Answer 500 to the next `count` requests whose path starts with `path`. */
+  fail: { path: string; count: number } | null;
+  /** Wait this long before answering paths starting with the key. */
+  delays: Map<string, number>;
   close(): Promise<void>;
 }
 
@@ -22,9 +26,20 @@ export async function startFakeOp3(opts: { token: string; uuid: string; title?: 
     { itemGuid: 'ep-2', title: 'Tomatoes', pubdate: '2026-10-14T10:00:00.000Z', downloads1: 90, downloads3: 140, downloads7: 180, downloads30: 220, downloadsAll: 220 },
     { itemGuid: 'ep-1', title: 'Soil', pubdate: '2026-09-01T10:00:00.000Z', downloads1: 70, downloads3: 110, downloads7: 150, downloads30: 300, downloadsAll: 410 },
   ];
+  const state = { fail: null as FakeOp3['fail'], delays: new Map<string, number>() };
   const server = http.createServer((req, res) => {
     const url = new URL(req.url!, 'http://x');
     requests.push({ path: url.pathname + url.search, auth: req.headers.authorization });
+    const delay = [...state.delays].find(([k]) => url.pathname.startsWith(k))?.[1];
+    if (delay) {
+      const t = setTimeout(() => res.writeHead(200, { 'Content-Type': 'application/json' }).end('{}'), delay);
+      res.on('close', () => clearTimeout(t));
+      return;
+    }
+    if (state.fail && state.fail.count > 0 && url.pathname.startsWith(state.fail.path)) {
+      state.fail.count--;
+      return res.writeHead(500, { 'Content-Type': 'application/json' }).end('{"error":"Internal error"}');
+    }
     const json = (status: number, body: unknown) => res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(body));
     if (req.headers.authorization !== `Bearer ${opts.token}`) return json(401, { error: 'Unauthorized' });
     const m = /^\/api\/1\/shows\/(.+)$/.exec(url.pathname);
@@ -64,6 +79,9 @@ export async function startFakeOp3(opts: { token: string; uuid: string; title?: 
     guids,
     downloads,
     episodes,
+    get fail() { return state.fail; },
+    set fail(v) { state.fail = v; },
+    delays: state.delays,
     close: () => new Promise((r) => server.close(() => r())),
   };
 }
