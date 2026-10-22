@@ -22,6 +22,7 @@ import type { Person } from './people.js';
 import type { Place } from './location.js';
 import { applyFields, fieldTagLabels, fieldViews, isFieldTag } from './tag-fields.js';
 import { queuePing } from '../podping/podping.js';
+import { queueBuild } from '../sitebuild/sitebuild.js';
 import {
   addNamespaces,
   bool,
@@ -484,6 +485,9 @@ export async function updateEpisode(
   await invalidateFeedCache(q, podcastId);
   // A public episode changed or left the feed. (One that just appeared is announced by the worker.)
   if ((wasPublic && nowPublic && row.announced_at) || (wasPublic && !nowPublic)) await queuePing(q, config, podcastId, 'update');
+  // The website rebuilds on its own schedule of changes, whether or not Podping is on.
+  if (wasPublic && nowPublic && row.announced_at) await queueBuild(q, podcastId, 'edited');
+  if (wasPublic && !nowPublic) await queueBuild(q, podcastId, 'deleted');
 
   const keep = new Set(filesOf(ctx.slug, draft));
   return { dropped: filesOf(ctx.slug, before).filter((p) => !keep.has(p)) };
@@ -495,7 +499,10 @@ export async function deleteEpisode(q: Queryable, config: Config, podcastId: str
   const before = fromRow(row, await loadTags(q, row.id));
   await q.query(`DELETE FROM episodes WHERE id = $1`, [row.id]);
   await invalidateFeedCache(q, podcastId);
-  if (isPublic(before.status, before.pubDate)) await queuePing(q, config, podcastId, 'update');
+  if (isPublic(before.status, before.pubDate)) {
+    await queuePing(q, config, podcastId, 'update');
+    await queueBuild(q, podcastId, 'deleted');
+  }
   return { dropped: filesOf(ctx.slug, before) };
 }
 

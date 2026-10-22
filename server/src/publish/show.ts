@@ -11,6 +11,7 @@ import type { ItunesCategory, XmlNode } from '../feed/types.js';
 import { podcastGuidFor } from '../import/importer.js';
 import { ownMediaPaths } from '../media/prune.js';
 import { queuePing } from '../podping/podping.js';
+import { queueBuild } from '../sitebuild/sitebuild.js';
 import { feedPath, RESERVED_SLUGS } from '../urls.js';
 import { APPLE_CATEGORIES, MEDIUMS } from './categories.js';
 import { PERSON_TAXONOMY } from './people.js';
@@ -267,6 +268,7 @@ export async function updateShow(q: Queryable, config: Config, podcastId: string
   }
   await invalidateFeedCache(q, podcastId);
   await queuePing(q, config, podcastId, 'update');
+  await queueBuild(q, podcastId, 'show');
 
   const urlsOf = (row: Row, tags: XmlNode[]) => {
     const urls: (string | null)[] = [row.image_url, ...(row.description ?? '').split(/["'\s]/)];

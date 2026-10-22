@@ -42,6 +42,7 @@ import { BackupError, backupView, finishRun, runBackup, saveBackupSettings, star
 import { backupFileName, dumpStream, encryptStream, pgDumpVersion } from '../backup/dump.js';
 import { changeStorage, latestMove, MoveError } from '../storage/move.js';
 import { unseal } from '../crypto/secrets.js';
+import { buildView, queueManualBuild, saveBuildSettings, SiteBuildError, testBuild } from '../sitebuild/sitebuild.js';
 import { Op3Error, op3Daily, op3State, requestOp3Refresh, testOp3Token } from '../stats/op3.js';
 import { PROVIDERS, StorageConfigError, validateSettings, type StorageSettings } from '../storage/providers.js';
 import { localPath, storeFor, testConnection, type StorageState } from '../storage/store.js';
@@ -583,6 +584,33 @@ export function createApp(deps: AppDeps) {
     sendJson(ctx.res, 200, await podpingStatus(podcastId));
   });
 
+  // ───────────── website rebuilds ─────────────
+
+  router.get('/api/podcasts/:id/site-build', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'viewer');
+    sendJson(ctx.res, 200, await buildView(db, podcastId));
+  });
+
+  router.put('/api/podcasts/:id/site-build', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    const body = await readJson(ctx.req, 64 * 1024);
+    await db.tx((q) => saveBuildSettings(q, podcastId, body));
+    sendJson(ctx.res, 200, await buildView(db, podcastId));
+  });
+
+  router.post('/api/podcasts/:id/site-build/test', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    const body = await readJson(ctx.req, 64 * 1024);
+    const result = await testBuild(db, podcastId, body && Object.keys(body).length ? body : null);
+    sendJson(ctx.res, 200, { result, ...(await buildView(db, podcastId)) });
+  });
+
+  router.post('/api/podcasts/:id/site-build/run', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    await queueManualBuild(db, podcastId);
+    sendJson(ctx.res, 200, await buildView(db, podcastId));
+  });
+
   // ───────────── live items (<podcast:liveItem>) ─────────────
 
   router.get('/api/podcasts/:id/live', async (ctx) => {
@@ -1050,6 +1078,7 @@ export function createApp(deps: AppDeps) {
       }
       if (e instanceof HttpError) return sendJson(res, e.status, { error: e.message }, e.headers);
       if (e instanceof AuthError || e instanceof LiveError || e instanceof VerifyError || e instanceof PublishError || e instanceof TeamError || e instanceof BackupError) return sendJson(res, e.status, { error: e.message });
+      if (e instanceof SiteBuildError) return sendJson(res, e.status, { error: e.message });
       if (e instanceof Op3Error) return sendJson(res, e.status, { error: e.message, code: e.code ?? null });
       if (e instanceof UploadError) return sendJson(res, e.status, { error: e.message, ...e.extra });
       if (e instanceof ImportError || e instanceof PrefixError || e instanceof SettingsError || e instanceof StorageConfigError || e instanceof MoveError) {

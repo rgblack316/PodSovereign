@@ -2719,7 +2719,167 @@ async function tabPodping(p, canEdit, reload) {
         h('td', null, x.status === 'sent' ? h('span', { class: 'light on' }, 'Sent')
           : x.status === 'pending' ? h('span', { class: 'light warn' }, x.attempts ? `Retrying (${x.lastError})` : 'Waiting to send')
             : h('span', { class: 'light bad' }, `Gave up: ${x.lastError}`)),
-        h('td', { class: 'nowrap' }, fmtDate(x.sentAt ?? x.createdAt, true)))))))) : null);
+        h('td', { class: 'nowrap' }, fmtDate(x.sentAt ?? x.createdAt, true)))))))) : null,
+    await siteBuildPanel(p, canEdit));
+}
+
+// ───────────── website rebuilds ─────────────
+
+const BUILD_EVENT_LABELS = {
+  published: 'New episode published',
+  edited: 'Episode edited',
+  deleted: 'Episode deleted or unpublished',
+  scheduled: 'Scheduled episode goes live',
+  show: 'Show details changed',
+};
+
+async function siteBuildPanel(p, canEdit) {
+  const panel = h('section', { class: 'panel', id: 'section-rebuild' });
+  const draw = (b) => {
+    let service = b.service;
+    const values = {}; // field key → value typed in this session
+    let headers = (b.settings.headerNames ?? []).map((name) => ({ name, value: '' }));
+    const err = formError();
+    const testMsg = h('p', { class: 'hint', role: 'status' });
+
+    const enabled = h('input', { type: 'checkbox', role: 'switch', checked: b.enabled, disabled: !canEdit });
+    const select = h('select', { disabled: !canEdit }, b.services.map((sv) => h('option', { value: sv.id }, sv.name)));
+    select.value = service;
+    const fieldsBox = h('div');
+    const savedFor = (key) => b.service === service && (key === 'url' ? b.saved.url : key === 'token' ? b.saved.token : false);
+
+    const drawFields = () => {
+      const sv = b.services.find((x) => x.id === service);
+      const same = b.service === service;
+      const rows = sv.fields.map((f) => {
+        if (f.type === 'headers') {
+          const list = h('div', { class: 'header-rows' });
+          const drawHeaders = () => list.replaceChildren(...headers.map((hd, i) => h('div', { class: 'row header-row' },
+            h('input', { type: 'text', value: hd.name, placeholder: 'Header name', 'aria-label': 'Header name', spellcheck: 'false', oninput: (e) => { hd.name = e.target.value; } }),
+            h('input', { type: 'password', value: hd.value, autocomplete: 'off', 'aria-label': 'Header value',
+              placeholder: same && b.saved.headers.includes(hd.name) ? 'Saved. Leave blank to keep it.' : 'Value', oninput: (e) => { hd.value = e.target.value; } }),
+            h('button', { type: 'button', class: 'quiet', 'aria-label': `Remove header ${hd.name}`, onclick: () => { headers.splice(i, 1); drawHeaders(); } }, 'Remove'))),
+            h('button', { type: 'button', class: 'quiet', onclick: () => { headers.push({ name: '', value: '' }); drawHeaders(); } }, 'Add a header'));
+          drawHeaders();
+          return h('div', { class: 'field wide' }, h('label', null, f.label), list, f.hint ? h('p', { class: 'hint' }, f.hint) : null);
+        }
+        let input;
+        const current = values[f.key] ?? (same && !f.secret ? b.settings[f.key] ?? '' : '');
+        if (f.type === 'select') {
+          input = h('select', { onchange: (e) => { values[f.key] = e.target.value; } }, f.options.map((o) => h('option', { value: o }, o)));
+          input.value = current || f.default || f.options[0];
+        } else if (f.type === 'json') {
+          input = h('textarea', { rows: 3, placeholder: f.placeholder ?? '', spellcheck: 'false', oninput: (e) => { values[f.key] = e.target.value; } }, current);
+        } else {
+          input = h('input', {
+            type: f.secret ? 'password' : 'text', autocomplete: 'off', spellcheck: 'false', value: f.secret ? values[f.key] ?? '' : current,
+            placeholder: f.secret && savedFor(f.key) ? 'Saved. Leave blank to keep it.' : f.placeholder ?? f.default ?? '',
+            oninput: (e) => { values[f.key] = e.target.value; },
+          });
+        }
+        return field(f.label, input, f.hint);
+      });
+      fieldsBox.replaceChildren(
+        h('p', { class: 'hint' }, sv.help, sv.docsUrl ? [' ', h('a', { href: sv.docsUrl, target: '_blank', rel: 'noopener' }, 'Their guide')] : null),
+        h('div', { class: 'fields-grid' }, rows));
+    };
+    select.addEventListener('change', () => {
+      const had = b.service !== select.value && (b.saved.url || b.saved.token || b.saved.headers.length);
+      if (had && b.service === service && !confirm(`Switch to ${select.selectedOptions[0].textContent}? The saved ${b.services.find((x) => x.id === b.service).name} details are replaced when you save.`)) {
+        select.value = service;
+        return;
+      }
+      service = select.value;
+      for (const k of Object.keys(values)) delete values[k];
+      headers = service === b.service ? (b.settings.headerNames ?? []).map((name) => ({ name, value: '' })) : [];
+      testMsg.textContent = '';
+      drawFields();
+    });
+    drawFields();
+
+    const events = Object.entries(BUILD_EVENT_LABELS).map(([k, label]) => {
+      const cb = h('input', { type: 'checkbox', value: k, checked: b.events.includes(k), disabled: !canEdit });
+      return { k, cb, el: h('label', { class: 'check' }, cb, label) };
+    });
+    const body = () => ({
+      enabled: enabled.checked,
+      service,
+      fields: { ...values, headers: headers.filter((x) => x.name.trim()) },
+      events: events.filter((e) => e.cb.checked).map((e) => e.k),
+    });
+
+    const form = h('form', {
+      onsubmit: (ev) => {
+        ev.preventDefault();
+        err.hidden = true;
+        busy(form, async () => {
+          try {
+            const r = await api('PUT', `/api/podcasts/${p.id}/site-build`, body());
+            toast('Website rebuild settings saved');
+            draw(r);
+          } catch (e) {
+            showError(err, e);
+          }
+        });
+      },
+    },
+    h('label', { class: 'switch', style: 'margin:4px 0 16px' }, enabled, 'Rebuild the website when the feed changes'),
+    h('div', { class: 'fields-grid' }, field('Build service', select)),
+    fieldsBox,
+    h('div', { class: 'field' }, h('label', null, 'Rebuild when'), h('div', { class: 'check-list' }, events.map((e) => e.el))),
+    err,
+    canEdit ? h('div', { class: 'actions' },
+      h('button', { class: 'primary', type: 'submit' }, 'Save website rebuild'),
+      h('button', {
+        type: 'button',
+        onclick: async () => {
+          testMsg.className = 'hint';
+          testMsg.textContent = 'Sending a test…';
+          try {
+            const r = await api('POST', `/api/podcasts/${p.id}/site-build/test`, { service, fields: body().fields });
+            testMsg.className = r.result.ok ? 'hint' : 'error';
+            testMsg.textContent = r.result.ok ? `The build service answered ${r.result.detail}: a rebuild should be starting.` : `It didn’t work: ${r.result.detail}`;
+            historyBox.replaceChildren(history(r.history));
+          } catch (e) {
+            testMsg.className = 'error';
+            testMsg.textContent = e.message;
+          }
+        },
+      }, 'Test'),
+      b.saved.url || b.saved.token ? h('button', {
+        type: 'button',
+        onclick: async () => {
+          try {
+            const r = await api('POST', `/api/podcasts/${p.id}/site-build/run`);
+            toast('Rebuild requested');
+            historyBox.replaceChildren(history(r.history));
+          } catch (e) {
+            toast(e.message);
+          }
+        },
+      }, 'Rebuild now') : null) : null,
+    testMsg);
+
+    const trig = { auto: 'Feed changed', manual: 'Rebuild now', test: 'Test' };
+    const history = (list) => (list.length ? h('div', { class: 'table-wrap' }, h('table', null,
+      h('thead', null, h('tr', null, h('th', null, 'When'), h('th', null, 'Why'), h('th', null, 'Result'))),
+      h('tbody', null, list.map((x) => h('tr', null,
+        h('td', { class: 'nowrap' }, fmtDate(x.sentAt ?? x.createdAt, true)),
+        h('td', null, x.trigger === 'auto' ? x.events.map((e) => BUILD_EVENT_LABELS[e] ?? e).join(', ') : trig[x.trigger]),
+        h('td', null, x.status === 'sent' ? h('span', { class: 'light on' }, `Started (HTTP ${x.lastStatus})`)
+          : x.status === 'pending' ? h('span', { class: 'light warn' }, x.attempts ? `Retrying: ${x.lastError}` : `Waiting until ${new Date(x.nextTryAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`)
+            : h('span', { class: 'light bad' }, `Failed${x.attempts > 1 ? ` after ${x.attempts} tries` : ''}: ${x.lastError}`))))))) : h('p', { class: 'hint' }, 'No rebuilds yet.'));
+    const historyBox = h('div', null, history(b.history));
+
+    panel.replaceChildren(
+      h('h2', null, 'Website rebuild'),
+      h('p', { class: 'muted' }, 'When the feed changes, ask your website’s host to rebuild it, so new episodes appear on the site within a few minutes. Several quick changes make one rebuild, about 45 seconds after the last one. This works whether or not Podping is on.'),
+      form,
+      h('h3', { class: 'table-title', style: 'padding-left:0' }, 'Recent rebuilds'),
+      historyBox);
+  };
+  draw(await api('GET', `/api/podcasts/${p.id}/site-build`));
+  return panel;
 }
 
 // Live items

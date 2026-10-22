@@ -220,7 +220,7 @@ test('daily downloads and countries: saved page by page, resumed after a failure
   // A month later the whole history is re-read, picking up OP3's corrections (two old downloads now counted as bots).
   fake.downloads.splice(fake.downloads.findIndex((d) => d.time.startsWith(day(380).slice(0, 10))), 1);
   fake.downloads.splice(fake.downloads.findIndex((d) => d.time.startsWith(day(200).slice(0, 10))), 1);
-  await db.query(`UPDATE podcasts SET op3_history_at = now() - interval '31 days' WHERE id = $1`, [show]);
+  await db.query(`UPDATE podcasts SET op3_history_at = $2::timestamptz - interval '31 days' WHERE id = $1`, [show, now]);
   await syncOp3Daily(db, cfg(), show, { now, pageSize: 100, maxPages: 3 });
   a = (await admin.get(`/api/podcasts/${show}/op3/daily?days=30`)).json;
   assert.equal(a.historyComplete, false, 'being re-read');

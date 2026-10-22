@@ -655,3 +655,9 @@ table.op3-episodes th button.sort:focus-visible { outline: 2px solid var(--focus
 .ep-thumb { flex: 0 0 48px; width: 48px; height: 48px; border-radius: var(--r-sm); object-fit: cover; background: #cfd6d2; display: block; }
 .ep-thumb.empty { background: var(--console); border: 1px dashed var(--rule); }
 @media (max-width: 600px) { .ep-thumb { flex-basis: 36px; width: 36px; height: 36px; } .ep-cell { gap: var(--s2); } }
+
+/* Website rebuild */
+.check-list { display: grid; gap: var(--s2); margin-top: var(--s1); }
+.header-rows { display: grid; gap: var(--s2); justify-items: start; }
+.header-row { width: 100%; gap: var(--s2); align-items: center; }
+.header-row input { flex: 1 1 0; min-width: 0; }

@@ -12,6 +12,7 @@
 import type { Config } from '../config.js';
 import { maybeOne, type Db, type Queryable } from '../db/db.js';
 import { feedPath } from '../urls.js';
+import { queueBuild, sendDueBuilds } from '../sitebuild/sitebuild.js';
 
 /** Why the feed changed. Kept for the show's Podping history; the hub reads the feed itself. */
 export type PingReason = 'update' | 'live' | 'liveEnd';
@@ -45,11 +46,12 @@ export async function queuePing(q: Queryable, config: Config, podcastId: string,
  * (scheduled episodes going live). Returns the number of podcasts queued.
  */
 export async function announceDueEpisodes(db: Db, config: Config): Promise<number> {
-  const { rows } = await db.query<{ podcast_id: string }>(
+  // An episode whose release time came after it was last saved was scheduled; otherwise it was just published.
+  const { rows } = await db.query<{ podcast_id: string; scheduled: boolean }>(
     `UPDATE episodes SET announced_at = now()
       WHERE announced_at IS NULL AND status IN ('published', 'scheduled')
         AND (pub_date IS NULL OR pub_date <= now())
-      RETURNING podcast_id`,
+      RETURNING podcast_id, (pub_date IS NOT NULL AND pub_date > updated_at + interval '1 minute') AS scheduled`,
   );
   const ids = [...new Set(rows.map((r) => r.podcast_id))];
   if (ids.length) {
@@ -62,6 +64,12 @@ export async function announceDueEpisodes(db: Db, config: Config): Promise<numbe
   }
   let n = 0;
   for (const id of ids) if (await queuePing(db, config, id, 'update')) n++;
+  // Website rebuilds (independent of Podping).
+  for (const id of ids) {
+    const mine = rows.filter((r) => r.podcast_id === id);
+    if (mine.some((r) => !r.scheduled)) await queueBuild(db, id, 'published');
+    if (mine.some((r) => r.scheduled)) await queueBuild(db, id, 'scheduled');
+  }
   return n;
 }
 
@@ -165,6 +173,8 @@ export function startPodpingWorker(deps: { db: Db; config: Config; log?: (m: str
       await announceDueEpisodes(deps.db, deps.config);
       const r = await sendDuePings(deps.db, deps.config);
       if (r.sent || r.failed) deps.log?.(`podping: ${r.sent} sent, ${r.failed} failed`);
+      const b = await sendDueBuilds(deps.db);
+      if (b.sent || b.failed) deps.log?.(`website rebuild: ${b.sent} sent, ${b.failed} failed`);
     } catch (e) {
       deps.log?.(`podping worker error: ${(e as Error).message}`);
     }
