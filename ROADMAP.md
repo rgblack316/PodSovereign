@@ -27,7 +27,7 @@ Every tag already imports, round-trips and can be edited. Most have their own fo
 - [ ] `podcast:soundbite`: a form for each episode's highlight clips (start, duration, title)
 - [ ] `podcast:image`: artwork in several sizes, generated from the uploaded show and episode art (one artwork for now)
 - [ ] `podcast:chat`: manage the live chat link for live shows (imported chat tags are already kept)
-- [ ] Chapter editor in the dashboard (today chapters are uploaded as a JSON file)
+- [x] Chapter editor in the dashboard (JSON import, chapters read from and written into MP3 ID3 tags)
 
 ## Live shows
 
