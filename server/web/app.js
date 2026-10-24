@@ -965,7 +965,7 @@ async function tabOp3(p, canEdit, reload) {
       tiles),
     ...op3DailyPanels(p),
     h('section', { class: 'panel' }, h('h2', null, 'Last four weeks'), partNote(s.countsError, s.countsAt), weekChart),
-    h('section', { class: 'panel' }, h('h2', null, 'Episodes'), h('p', { class: 'hint' }, 'Downloads in each episode’s first day, week and month, and in total. Select a column to sort.'), partNote(s.episodesError, s.episodesAt), tableBox),
+    h('section', { class: 'panel' }, h('h2', null, 'Episodes'), h('p', { class: 'hint' }, 'Downloads in each episode’s first day, week and month, and in total. Select a column to sort. OP3’s own figures cover its most recent episodes; the rest are counted from its download records, so they fill in as the show’s history is read.'), partNote(s.episodesError, s.episodesAt), tableBox),
     h('section', { class: 'panel' }, h('h2', null, 'Apps'), h('p', { class: 'hint' }, 'Share of downloads by app over the last three months.'), partNote(s.appsError, s.appsAt), appList));
   return wrap;
 }

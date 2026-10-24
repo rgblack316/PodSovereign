@@ -260,3 +260,45 @@ test('a new show: the last year first, then everything older, all in one go when
   assert.equal(st.allTime.downloads, a.allTime);
   assert.equal(st.allTime.complete, true);
 });
+
+test('every episode gets its downloads, not only the recent ones OP3’s own query covers', async () => {
+  const r = await admin.post('/api/podcasts', { title: 'Back Catalog', slug: 'back-catalog' });
+  const id = r.json.podcast.id;
+  fake.guids.add(r.json.podcast.podcastGuid);
+  await admin.put(`/api/podcasts/${id}/prefixes`, { settings: [{ serviceKey: 'op3', enabled: true }] });
+  // Three episodes: an old one imported from another host, an older one matched by title, and a recent one OP3 covers itself.
+  await db.query(
+    `INSERT INTO episodes (podcast_id, guid, title, status, pub_date, enclosure_url) VALUES
+       ($1, 'old-guid', 'The First One', 'published', '2025-01-10T10:00:00Z', 'http://feeds.mine.test/back-catalog/media/audio/abc123-first.mp3'),
+       ($1, 'mid-guid', 'Middle: Episode Two!', 'published', '2025-06-01T10:00:00Z', 'http://feeds.mine.test/back-catalog/media/audio/def456-two.mp3'),
+       ($1, 'ep-2', 'Tomatoes', 'published', '2026-10-14T10:00:00Z', 'http://feeds.mine.test/back-catalog/media/audio/ghi789-tomatoes.mp3')`,
+    [id],
+  );
+  await db.query(
+    `INSERT INTO media_files (podcast_id, kind, original_url, public_path, status) VALUES ($1, 'audio', 'https://serve.oldhost.example/ep/first.mp3', '/back-catalog/media/audio/abc123-first.mp3', 'done')`,
+    [id],
+  );
+  const A = 'a'.repeat(64), B = 'b'.repeat(64), C = 'c'.repeat(64);
+  fake.showEpisodes.length = 0;
+  fake.showEpisodes.push({ id: B, title: 'Middle — Episode Two', pubdate: '2025-06-01T10:00:00Z' });
+  fake.downloads.length = 0;
+  const add = (ep: string, url: string, iso: string, n: number) => { for (let i = 0; i < n; i++) fake.downloads.push({ time: iso, countryCode: 'US', episodeId: ep, url }); };
+  // The first episode was downloaded from the old host before the move, then from here.
+  add(A, 'https://op3.dev/e/serve.oldhost.example/ep/first.mp3', '2025-01-10T12:00:00.000Z', 5); // day 1
+  add(A, 'https://op3.dev/e/serve.oldhost.example/ep/first.mp3', '2025-01-15T12:00:00.000Z', 3); // week 1
+  add(A, 'https://op3.dev/e/feeds.mine.test/back-catalog/media/audio/abc123-first.mp3', '2025-08-01T12:00:00.000Z', 2); // later
+  add(B, 'https://op3.dev/e/cdn.elsewhere.example/x.mp3', '2025-06-01T11:00:00.000Z', 4);
+  add(C, 'https://op3.dev/e/feeds.mine.test/back-catalog/media/audio/ghi789-tomatoes.mp3', '2026-10-14T11:00:00.000Z', 7);
+  fake.downloads.sort((x, y) => x.time.localeCompare(y.time));
+
+  await refreshOp3(db, cfg(), id, { now: new Date('2026-10-21T15:00:00Z'), pageSize: 100 });
+  const s = (await admin.get(`/api/podcasts/${id}/op3`)).json;
+  const by = Object.fromEntries(s.episodes.map((e: any) => [e.itemGuid, e]));
+  assert.deepEqual([by['old-guid'].downloads1, by['old-guid'].downloads7, by['old-guid'].downloadsAll, by['old-guid'].source], [5, 8, 10, 'records'], 'matched by the original file name from the old host');
+  assert.deepEqual([by['mid-guid'].downloadsAll, by['mid-guid'].source], [4, 'records'], 'matched by title');
+  assert.equal(by['ep-2'].source, 'op3', 'OP3’s own numbers for the recent episode');
+  assert.equal(by['ep-2'].downloadsAll, fake.episodes.find((e) => e.itemGuid === 'ep-2')!.downloadsAll);
+  // The episode list's Downloads column gets them too (same data).
+  const matched = (await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM op3_episodes WHERE podcast_id = $1 AND episode_id IS NOT NULL`, [id])).rows[0]!;
+  assert.equal(matched.n, 3);
+});

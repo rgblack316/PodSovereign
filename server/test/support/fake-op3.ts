@@ -8,7 +8,9 @@ export interface FakeOp3 {
   /** podcast:guid values the fake knows (all map to `uuid`). */
   guids: Set<string>;
   /** Download records served by /downloads/show (kept sorted by time). */
-  downloads: { time: string; countryCode: string | null }[];
+  downloads: { time: string; countryCode: string | null; episodeId?: string; url?: string }[];
+  /** The show's episode list (GET /shows/{id}?episodes=include). */
+  showEpisodes: { id: string; title: string; pubdate: string }[];
   /** Rows for /queries/episode-download-counts (defaults to two sample episodes). */
   episodes: Record<string, unknown>[];
   /** Answer 500 to the next `count` requests whose path starts with `path`. */
@@ -22,6 +24,7 @@ export async function startFakeOp3(opts: { token: string; uuid: string; title?: 
   const requests: FakeOp3['requests'] = [];
   const guids = new Set<string>();
   const downloads: FakeOp3['downloads'] = [];
+  const showEpisodes: FakeOp3['showEpisodes'] = [];
   const episodes: FakeOp3['episodes'] = [
     { itemGuid: 'ep-2', title: 'Tomatoes', pubdate: '2026-10-14T10:00:00.000Z', downloads1: 90, downloads3: 140, downloads7: 180, downloads30: 220, downloadsAll: 220 },
     { itemGuid: 'ep-1', title: 'Soil', pubdate: '2026-09-01T10:00:00.000Z', downloads1: 70, downloads3: 110, downloads7: 150, downloads30: 300, downloadsAll: 410 },
@@ -46,7 +49,8 @@ export async function startFakeOp3(opts: { token: string; uuid: string; title?: 
     if (m) {
       const key = decodeURIComponent(m[1]!);
       return guids.has(key) || key === opts.uuid
-        ? json(200, { showUuid: opts.uuid, title: opts.title ?? 'Garden Talk', podcastGuid: [...guids][0], statsPageUrl: `https://op3.dev/show/${opts.uuid}` })
+        ? json(200, { showUuid: opts.uuid, title: opts.title ?? 'Garden Talk', podcastGuid: [...guids][0], statsPageUrl: `https://op3.dev/show/${opts.uuid}`,
+          ...(url.searchParams.get('episodes') === 'include' ? { episodes: showEpisodes } : {}) })
         : json(404, { error: 'not found' });
     }
     if (url.pathname === '/api/1/queries/show-download-counts') {
@@ -65,7 +69,7 @@ export async function startFakeOp3(opts: { token: string; uuid: string; title?: 
         return (start === null || t >= start) && (after === null || t > after) && (end === null || t < end);
       });
       const offset = q.get('continuationToken') ? Number(q.get('continuationToken')) : 0;
-      const rows = all.slice(offset, offset + limit).map((d) => ({ time: d.time, showUuid: opts.uuid, countryCode: d.countryCode, agentName: 'Overcast' }));
+      const rows = all.slice(offset, offset + limit).map((d) => ({ time: d.time, showUuid: opts.uuid, countryCode: d.countryCode, agentName: 'Overcast', episodeId: d.episodeId ?? null, url: d.url ?? null }));
       const more = offset + limit < all.length;
       return json(200, { rows, count: rows.length, queryTime: 1, ...(more ? { continuationToken: String(offset + limit) } : {}) });
     }
@@ -78,6 +82,7 @@ export async function startFakeOp3(opts: { token: string; uuid: string; title?: 
     requests,
     guids,
     downloads,
+    showEpisodes,
     episodes,
     get fail() { return state.fail; },
     set fail(v) { state.fail = v; },

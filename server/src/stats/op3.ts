@@ -185,6 +185,20 @@ export async function refreshOp3(db: Db, config: Config, podcastId: string, opts
         .map(([name, downloads]) => ({ name, downloads: num(downloads) ?? 0 }))
         .sort((x, y) => y.downloads - x.downloads);
     });
+    // OP3's list of the show's episodes (ids, titles, dates), to match its download records to our episodes.
+    try {
+      const r = await op3Get<{ episodes?: { id?: string; title?: string; pubdate?: string }[] }>(config, token, `/shows/${id}`, { episodes: 'include' }, { timeoutMs: op3Timeouts.query });
+      for (const e of r.body?.episodes ?? []) {
+        if (!e.id) continue;
+        await db.query(
+          `INSERT INTO op3_episodes (podcast_id, op3_episode_id, title, pubdate) VALUES ($1, $2, $3, $4)
+           ON CONFLICT (podcast_id, op3_episode_id) DO UPDATE SET title = EXCLUDED.title, pubdate = EXCLUDED.pubdate`,
+          [podcastId, e.id, e.title ?? null, e.pubdate && !Number.isNaN(Date.parse(e.pubdate)) ? e.pubdate : null],
+        );
+      }
+    } catch (e) {
+      opts.log?.(`op3 episode list for ${podcastId}: ${(e as Error).message}`);
+    }
     await syncOp3Daily(db, config, podcastId, { now: opts.now, pageSize: opts.pageSize, maxMs: opts.maxMs, showUuid: id }).catch((e) => opts.log?.(`op3 daily for ${podcastId}: ${(e as Error).message}`));
   } finally {
     refreshing.delete(podcastId);
@@ -203,7 +217,7 @@ export interface Op3State {
   counts: { asof: string | null; monthlyDownloads: number | null; weeklyAvgDownloads: number | null; weeklyDownloads: number[] } | null;
   countsAt: string | null;
   countsError: string | null;
-  episodes: Op3Stats['episodes'];
+  episodes: (Op3Stats['episodes'][number] & { source: 'op3' | 'records' })[];
   episodesAt: string | null;
   episodesError: string | null;
   apps: Op3Stats['apps'];
@@ -258,7 +272,7 @@ export async function op3State(db: Db, config: Config, podcastId: string, opts: 
     counts: s?.counts ?? null,
     countsAt: iso(s?.counts_at),
     countsError: s?.counts_error ?? null,
-    episodes: s?.episodes ?? [],
+    episodes: await episodeCounts(db, config, podcastId, s?.episodes ?? []),
     episodesAt: iso(s?.episodes_at),
     episodesError: s?.episodes_error ?? null,
     apps: s?.apps ?? [],
@@ -266,6 +280,100 @@ export async function op3State(db: Db, config: Config, podcastId: string, opts: 
     appsError: s?.apps_error ?? null,
     allTime: await allTimeOf(db, podcastId),
   };
+}
+
+const fileOf = (url: string | null | undefined) => {
+  if (!url) return null;
+  try {
+    const last = new URL(url).pathname.split('/').pop() ?? '';
+    return decodeURIComponent(last).toLowerCase() || null;
+  } catch {
+    return null;
+  }
+};
+const normTitle = (t: string | null | undefined) => (t ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+/**
+ * Match OP3's episodes (from its download records and episode list) to this
+ * show's episodes: by the audio file's name (ours, or the original from the old
+ * host), else by title. A match is remembered, so it survives the audio moving.
+ */
+export async function matchOp3Episodes(db: Db, config: Config, podcastId: string): Promise<number> {
+  const { rows: open } = await db.query<{ op3_episode_id: string; url: string | null; title: string | null; pubdate: Date | null }>(
+    `SELECT op3_episode_id, url, title, pubdate FROM op3_episodes WHERE podcast_id = $1 AND episode_id IS NULL`, [podcastId],
+  );
+  if (!open.length) return 0;
+  const { rows: eps } = await db.query<{ id: string; title: string; pub_date: Date | null; enclosure_url: string | null; original_url: string | null }>(
+    `SELECT e.id, e.title, e.pub_date, e.enclosure_url,
+            (SELECT m.original_url FROM media_files m WHERE m.podcast_id = e.podcast_id AND m.original_url IS NOT NULL
+               AND $2 || m.public_path = e.enclosure_url LIMIT 1) AS original_url
+       FROM episodes e WHERE e.podcast_id = $1`,
+    [podcastId, config.mediaBaseUrl],
+  );
+  const byFile = new Map<string, string[]>();
+  const byTitle = new Map<string, typeof eps>();
+  for (const e of eps) {
+    for (const f of new Set([fileOf(e.enclosure_url), fileOf(e.original_url)])) if (f) byFile.set(f, [...(byFile.get(f) ?? []), e.id]);
+    const t = normTitle(e.title);
+    if (t) byTitle.set(t, [...(byTitle.get(t) ?? []), e]);
+  }
+  let n = 0;
+  for (const o of open) {
+    const f = fileOf(o.url);
+    let match: string | null = null;
+    const files = f ? byFile.get(f) : undefined;
+    if (files && new Set(files).size === 1) match = files[0]!;
+    if (!match && o.title) {
+      const same = byTitle.get(normTitle(o.title)) ?? [];
+      const day = (d: Date | null) => (d ? new Date(d).toISOString().slice(0, 10) : null);
+      const pick = same.length === 1 ? same[0] : same.find((e) => day(e.pub_date) === day(o.pubdate));
+      if (pick) match = pick.id;
+    }
+    if (match) {
+      await db.query(`UPDATE op3_episodes SET episode_id = $3 WHERE podcast_id = $1 AND op3_episode_id = $2`, [podcastId, o.op3_episode_id, match]);
+      n++;
+    }
+  }
+  return n;
+}
+
+/**
+ * Downloads for every episode, from OP3's download records (first day, 3 days,
+ * week and month after it came out, and in total). OP3's own numbers are used
+ * where it has them (its per-episode query covers the most recent episodes).
+ */
+async function episodeCounts(db: Db, config: Config, podcastId: string, fromOp3: Op3Stats['episodes']): Promise<(Op3Stats['episodes'][number] & { source: 'op3' | 'records' })[]> {
+  await matchOp3Episodes(db, config, podcastId);
+  const { rows } = await db.query<{ guid: string; title: string; pub: Date | null; d1: number; d3: number; d7: number; d30: number; total: number }>(
+    `SELECT e.guid, e.title, x.p AS pub,
+            sum(h.downloads) FILTER (WHERE h.hour < x.p + interval '1 day')::int AS d1,
+            sum(h.downloads) FILTER (WHERE h.hour < x.p + interval '3 days')::int AS d3,
+            sum(h.downloads) FILTER (WHERE h.hour < x.p + interval '7 days')::int AS d7,
+            sum(h.downloads) FILTER (WHERE h.hour < x.p + interval '30 days')::int AS d30,
+            sum(h.downloads)::int AS total
+       FROM episodes e
+       JOIN op3_episodes oe ON oe.podcast_id = e.podcast_id AND oe.episode_id = e.id
+       JOIN op3_episode_hours h ON h.podcast_id = oe.podcast_id AND h.op3_episode_id = oe.op3_episode_id
+       CROSS JOIN LATERAL (SELECT COALESCE(e.pub_date, oe.pubdate) AS p) x
+      WHERE e.podcast_id = $1
+      GROUP BY e.id, e.guid, e.title, x.p`,
+    [podcastId],
+  );
+  const own = new Map(fromOp3.map((e) => [e.itemGuid, e]));
+  const out = rows.map((r) => {
+    const o = own.get(r.guid);
+    if (o) return { ...o, source: 'op3' as const };
+    const n = (v: number | null) => (r.pub ? v ?? 0 : null);
+    return {
+      itemGuid: r.guid, title: r.title, pubdate: r.pub ? new Date(r.pub).toISOString() : null,
+      downloads1: n(r.d1), downloads3: n(r.d3), downloads7: n(r.d7), downloads30: n(r.d30), downloadsAll: r.total ?? 0,
+      source: 'records' as const,
+    };
+  });
+  // OP3's recent episodes that the records don't cover yet (still being read).
+  const have = new Set(out.map((e) => e.itemGuid));
+  for (const o of fromOp3) if (!have.has(o.itemGuid)) out.push({ ...o, source: 'op3' as const });
+  return out;
 }
 
 function startRefresh(db: Db, config: Config, podcastId: string, log?: (m: string) => void) {
@@ -340,7 +448,7 @@ const utcDay = (t: number) => new Date(Math.floor(t / DAY_MS) * DAY_MS);
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
 const nextIsoDay = (day: string) => isoDay(new Date(Date.parse(`${day}T00:00:00Z`) + DAY_MS));
 
-interface DownloadRow { time?: string; countryCode?: string | null }
+interface DownloadRow { time?: string; countryCode?: string | null; episodeId?: string | null; url?: string | null }
 interface DownloadsPage { rows?: DownloadRow[]; count?: number; continuationToken?: string | null }
 
 /**
@@ -376,10 +484,17 @@ async function readRecords(db: Db, config: Config, a: {
     const r = await op3Get<DownloadsPage>(config, a.token, `/downloads/show/${a.showUuid}`, params, { timeoutMs: op3Timeouts.page, retries: 1 });
     const rows = r.body?.rows ?? [];
     const counts = new Map<string, number>();
+    const hours = new Map<string, number>(); // episode|hour → downloads
+    const urls = new Map<string, string>(); // episode → an address it was downloaded from
     for (const d of rows) {
       if (!d.time) continue;
       const key = `${d.time.slice(0, 10)}|${(d.countryCode ?? '').toUpperCase().slice(0, 2)}`;
       counts.set(key, (counts.get(key) ?? 0) + 1);
+      if (d.episodeId && /^[0-9a-f]{16,128}$/i.test(d.episodeId)) {
+        const hk = `${d.episodeId}|${d.time.slice(0, 13)}:00:00Z`;
+        hours.set(hk, (hours.get(hk) ?? 0) + 1);
+        if (d.url) urls.set(d.episodeId, d.url.slice(0, 2000));
+      }
       last = d.time;
     }
     continuationToken = r.body?.continuationToken || null;
@@ -387,7 +502,32 @@ async function readRecords(db: Db, config: Config, a: {
     // Days up to here are now read (or being read): clear the ones not yet cleared in this run.
     const clearTo = complete ? lastEndDay : last ? last.slice(0, 10) : cleared;
     await db.tx(async (q) => {
-      if (clearTo > cleared) await q.query(`DELETE FROM op3_daily WHERE podcast_id = $1 AND day > $2 AND day <= $3`, [a.podcastId, cleared, clearTo]);
+      if (clearTo > cleared) {
+        await q.query(`DELETE FROM op3_daily WHERE podcast_id = $1 AND day > $2 AND day <= $3`, [a.podcastId, cleared, clearTo]);
+        await q.query(`DELETE FROM op3_episode_hours WHERE podcast_id = $1 AND hour >= $2::timestamptz AND hour < $3::timestamptz`,
+          [a.podcastId, `${nextIsoDay(cleared)}T00:00:00Z`, `${nextIsoDay(clearTo)}T00:00:00Z`]);
+      }
+      const hourEntries = [...hours];
+      for (let i = 0; i < hourEntries.length; i += 500) {
+        const vals: unknown[] = [a.podcastId];
+        const tuples = hourEntries.slice(i, i + 500).map(([k, n]) => {
+          const [ep, hour] = k.split('|');
+          vals.push(ep, hour, n);
+          return `($1, $${vals.length - 2}, $${vals.length - 1}::timestamptz, $${vals.length})`;
+        });
+        await q.query(
+          `INSERT INTO op3_episode_hours (podcast_id, op3_episode_id, hour, downloads) VALUES ${tuples.join(', ')}
+           ON CONFLICT (podcast_id, op3_episode_id, hour) DO UPDATE SET downloads = op3_episode_hours.downloads + EXCLUDED.downloads`,
+          vals,
+        );
+      }
+      for (const [ep, url] of urls) {
+        await q.query(
+          `INSERT INTO op3_episodes (podcast_id, op3_episode_id, url) VALUES ($1, $2, $3)
+           ON CONFLICT (podcast_id, op3_episode_id) DO UPDATE SET url = EXCLUDED.url`,
+          [a.podcastId, ep, url],
+        );
+      }
       const entries = [...counts];
       for (let i = 0; i < entries.length; i += 500) {
         const vals: unknown[] = [a.podcastId];
