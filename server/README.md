@@ -99,7 +99,7 @@ The dashboard is served at `/`. It's plain JavaScript and CSS in `web/`, with no
 
 Security: the pages are served with a strict Content Security Policy (scripts only from this server), all feed content is shown as plain text, and every change goes through the same API checks as before.
 
-The typeface (Archivo) loads from Google Fonts. Without internet access, the dashboard falls back to the system font.
+The typeface (Atkinson Hyperlegible Next) is served from this server, so the dashboard needs no outside font service.
 
 Migrations run automatically on startup. The **first account registered becomes the admin**. After that, the admin creates accounts unless `ALLOW_REGISTRATION=1`.
 

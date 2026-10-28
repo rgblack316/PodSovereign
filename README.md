@@ -136,4 +136,4 @@ PodSovereign is free software: you can redistribute it and/or modify it under th
 
 In short: you can use, change and share it freely. If you run a modified version as a service for other people, you must offer them the source code of your version under the same license. The dashboard links to the source for this reason.
 
-The dashboard font, Archivo, is under the SIL Open Font License (`server/web/ARCHIVO-OFL.txt`).
+The dashboard font, Atkinson Hyperlegible Next, is under the SIL Open Font License (`server/web/ATKINSON-OFL.txt`).
