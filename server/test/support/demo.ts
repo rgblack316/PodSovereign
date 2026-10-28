@@ -141,7 +141,6 @@ await loadSiteSettings(db, config);
 await db.query(`UPDATE podcasts SET auphonic_enabled = true, auphonic_preset = 'preset-podcast', auphonic_preset_name = 'Podcast -16 LUFS' WHERE id = $1`, [creek]);
 auph.outputs.set('mp3', { body: mp3(800), format: 'mp3', ending: 'mp3', filename: 'creekside-processed.mp3' });
 auph.outputs.set('srt', { body: Buffer.from('1\n00:00:00,000 --> 00:00:03,000\nWelcome to Creekside.\n'), format: 'subtitle', ending: 'srt', filename: 'creekside.srt' });
-auph.outputs.set('webvtt', { body: Buffer.from('WEBVTT\n\n00:00.000 --> 00:03.000\nWelcome to Creekside.\n'), format: 'subtitle', ending: 'webvtt', filename: 'creekside.vtt' });
 auph.outputs.set('txt', { body: Buffer.from('Welcome to Creekside.\n'), format: 'transcript', ending: 'txt', filename: 'creekside.txt' });
 setInterval(() => {
   for (const p of auph.productions) if (p.status === 4 && !(p as { seen?: boolean }).seen) {

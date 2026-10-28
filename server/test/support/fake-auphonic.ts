@@ -36,7 +36,12 @@ export async function startFakeAuphonic(key: string): Promise<FakeAuphonic> {
       if (url.pathname === '/api/user.json') return json(200, { username: 'randy' });
       if (url.pathname === '/api/presets.json') return json(200, [{ uuid: 'preset-podcast', preset_name: 'Podcast -16 LUFS' }, { uuid: 'preset-mono', preset_name: 'Mono talk' }]);
       if (url.pathname === '/api/productions.json' && req.method === 'POST') {
-        const p: FakeProduction = { uuid: `prod${productions.length + 1}`, request: JSON.parse(body), status: 4, status_string: 'Audio Processing' };
+        const request = JSON.parse(body);
+        // Like the real API: only these endings are accepted (it refuses "webvtt" despite the docs).
+        const ok: Record<string, string[]> = { subtitle: ['srt'], transcript: ['txt', 'html'], speech: ['json', 'xml'] };
+        const bad = (request.output_files ?? []).find((f: any) => ok[f.format] && !ok[f.format]!.includes(f.ending));
+        if (bad) return json(400, null, { error_message: '', form_errors: { ending: [`Select a valid ending choice. ${bad.ending} is not one of the available choices.`] } });
+        const p: FakeProduction = { uuid: `prod${productions.length + 1}`, request, status: 4, status_string: 'Audio Processing' };
         productions.push(p);
         return json(200, { uuid: p.uuid, status: p.status, status_string: p.status_string });
       }

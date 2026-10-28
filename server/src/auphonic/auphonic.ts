@@ -202,7 +202,9 @@ export async function productionRequest(db: Db, config: Config, podcastId: strin
     req.speech_recognition = { language: speechLanguage(s.language), ...(auto ? { shownotes: true } : {}) };
   }
   if (s.auphonic_transcripts) {
-    outputFiles.push({ format: 'subtitle', ending: 'srt' }, { format: 'subtitle', ending: 'webvtt' }, { format: 'transcript', ending: 'txt' });
+    // Only SRT and TXT are asked for (Auphonic's API refuses some documented endings, such as "webvtt");
+    // VTT and Podcasting 2.0 JSON are made here from the SRT.
+    outputFiles.push({ format: 'subtitle', ending: 'srt' }, { format: 'transcript', ending: 'txt' });
   }
   if (config.auphonicHookToken) req.webhook = `${config.publicBaseUrl}/hooks/auphonic/${config.auphonicHookToken}`;
   return req;
@@ -410,21 +412,35 @@ async function storeFile(db: Db, config: Config, podcastId: string, slug: string
   return m.id;
 }
 
-/** SRT → Podcasting 2.0 JSON transcript. */
-export function srtToJson(srt: string): string {
+function srtCues(srt: string): { startTime: number; endTime: number; body: string }[] {
   const t = (s: string) => {
     const m = /(\d+):(\d+):(\d+)[,.](\d+)/.exec(s);
     return m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) + Number(m[4]!.padEnd(3, '0').slice(0, 3)) / 1000 : 0;
   };
-  const segments = srt.replace(/\r/g, '').split(/\n{2,}/).map((block) => {
+  return srt.replace(/^\uFEFF/, '').replace(/\r/g, '').split(/\n{2,}/).flatMap((block) => {
     const lines = block.trim().split('\n');
     const i = lines.findIndex((l) => l.includes('-->'));
-    if (i < 0) return null;
+    if (i < 0) return [];
     const [a, b] = lines[i]!.split('-->');
     const body = lines.slice(i + 1).join(' ').trim();
-    return body ? { startTime: t(a!), endTime: t(b!), body } : null;
-  }).filter(Boolean);
-  return JSON.stringify({ version: '1.0.0', segments }, null, 1);
+    return body ? [{ startTime: t(a!), endTime: t(b!), body }] : [];
+  });
+}
+
+/** SRT → Podcasting 2.0 JSON transcript. */
+export function srtToJson(srt: string): string {
+  return JSON.stringify({ version: '1.0.0', segments: srtCues(srt) }, null, 1);
+}
+
+/** SRT → WebVTT. */
+export function srtToVtt(srt: string): string {
+  const ts = (s: number) => hms(s);
+  return 'WEBVTT\n\n' + srtCues(srt).map((c) => `${ts(c.startTime)} --> ${ts(c.endTime)}\n${c.body}`).join('\n\n') + '\n';
+}
+
+/** SRT → plain text, one cue per line. */
+export function srtToText(srt: string): string {
+  return srtCues(srt).map((c) => c.body).join('\n') + '\n';
 }
 
 async function importResults(db: Db, config: Config, j: Job, p: Production, log?: (m: string) => void) {
@@ -455,17 +471,24 @@ async function importResults(db: Db, config: Config, j: Job, p: Production, log?
       srtText = await readFile(f, 'utf8');
       transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, f, 'transcript', 'transcripts', `${stem}.srt`, 'application/x-subrip'), type: 'application/x-subrip', rel: 'captions' });
     }
-    if (vtt) {
-      transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, await fetchTo(vtt), 'transcript', 'transcripts', `${stem}.vtt`, 'text/vtt'), type: 'text/vtt', rel: 'captions' });
+    const made = async (ext: string, content: string) => {
+      const f = path.join(staging(config), `${randomBytes(8).toString('hex')}.${ext}`);
+      tmp.push(f);
+      await writeFile(f, content);
+      return f;
+    };
+    // VTT, JSON and (if Auphonic sent none) TXT are made from the SRT.
+    const vttFile = vtt ? await fetchTo(vtt) : srtText ? await made('vtt', srtToVtt(srtText)) : null;
+    if (vttFile) {
+      transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, vttFile, 'transcript', 'transcripts', `${stem}.vtt`, 'text/vtt'), type: 'text/vtt', rel: 'captions' });
     }
     if (srtText) {
-      const jf = path.join(staging(config), `${randomBytes(8).toString('hex')}.json`);
-      tmp.push(jf);
-      await writeFile(jf, srtToJson(srtText));
+      const jf = await made('json', srtToJson(srtText));
       transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, jf, 'transcript', 'transcripts', `${stem}.json`, 'application/json'), type: 'application/json' });
     }
-    if (txt) {
-      transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, await fetchTo(txt), 'transcript', 'transcripts', `${stem}.txt`, 'text/plain'), type: 'text/plain' });
+    const txtFile = txt ? await fetchTo(txt) : srtText ? await made('txt', srtToText(srtText)) : null;
+    if (txtFile) {
+      transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, txtFile, 'transcript', 'transcripts', `${stem}.txt`, 'text/plain'), type: 'text/plain' });
     }
     for (const t of transcripts) t.language = language ?? null;
 

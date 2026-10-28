@@ -4,7 +4,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
-import { srtToJson } from '../src/auphonic/auphonic.js';
+import { srtToVtt, srtToText, srtToJson } from '../src/auphonic/auphonic.js';
 import type { Db } from '../src/db/db.js';
 import { createApp } from '../src/http/app.js';
 import { startFakeAuphonic, type FakeAuphonic } from './support/fake-auphonic.js';
@@ -56,7 +56,6 @@ before(async () => {
   fake = await startFakeAuphonic('auph-key-12345');
   fake.outputs.set('mp3', { body: PROCESSED, format: 'mp3', ending: 'mp3', filename: 'garden-talk-12-tomatoes.mp3' });
   fake.outputs.set('srt', { body: Buffer.from(SRT), format: 'subtitle', ending: 'srt', filename: 'garden-talk-12-tomatoes.srt' });
-  fake.outputs.set('webvtt', { body: Buffer.from('WEBVTT\n\n00:00.000 --> 00:02.500\nWelcome to Garden Talk.\n'), format: 'subtitle', ending: 'webvtt', filename: 'garden-talk-12-tomatoes.vtt' });
   fake.outputs.set('txt', { body: Buffer.from('Welcome to Garden Talk. Today: tomatoes.\n'), format: 'transcript', ending: 'txt', filename: 'garden-talk-12-tomatoes.txt' });
   config = testConfig({ mediaDir, publicBaseUrl: 'http://feeds.mine.test', mediaBaseUrl: 'http://feeds.mine.test', auphonicUrl: fake.url });
   server = http.createServer(createApp({ db, config }));
@@ -118,7 +117,7 @@ test('sending an episode: its metadata, art and chapters go with the preset; Pub
   }, 'only these; summary, genre and the rest come from the preset');
   assert.equal(sent.image, art.url);
   assert.deepEqual(sent.chapters, [{ start: '00:00:00.000', title: 'Intro' }, { start: '00:01:05.500', title: 'Staking', url: 'https://example.com/stakes' }]);
-  assert.deepEqual(sent.output_files, [{ format: 'mp3', bitrate: '128' }, { format: 'subtitle', ending: 'srt' }, { format: 'subtitle', ending: 'webvtt' }, { format: 'transcript', ending: 'txt' }]);
+  assert.deepEqual(sent.output_files, [{ format: 'mp3', bitrate: '128' }, { format: 'subtitle', ending: 'srt' }, { format: 'transcript', ending: 'txt' }], 'only endings Auphonic accepts');
   assert.deepEqual(sent.speech_recognition, { language: 'en-US' });
   assert.equal(sent.webhook, `http://feeds.mine.test/hooks/auphonic/${config.auphonicHookToken}`);
 
@@ -145,6 +144,8 @@ test('when Auphonic calls back: the processed MP3 and four transcripts go in, th
   assert.deepEqual(ep.transcripts.map((t: any) => t.type).sort(), ['application/json', 'application/x-subrip', 'text/plain', 'text/vtt']);
   const json = JSON.parse(await readFile(disk(ep.transcripts.find((t: any) => t.type === 'application/json').url), 'utf8'));
   assert.deepEqual(json.segments[1], { startTime: 2.5, endTime: 5, body: 'Today: tomatoes.' });
+  const vtt = await readFile(disk(ep.transcripts.find((t: any) => t.type === 'text/vtt').url), 'utf8');
+  assert.equal(vtt, 'WEBVTT\n\n00:00:00.000 --> 00:00:02.500\nWelcome to Garden Talk.\n\n00:00:02.500 --> 00:00:05.000\nToday: tomatoes.\n', 'VTT made from the SRT');
   const xml = await feed();
   assert.equal((xml.match(/<podcast:transcript /g) ?? []).length, 4);
   assert.ok(await stat(disk(original.url)), 'the original upload is kept for reprocessing');
@@ -206,5 +207,7 @@ test('Auphonic writes the chapters and show notes when asked; its show notes fil
 });
 
 test('SRT to Podcasting 2.0 JSON', () => {
+  assert.equal(srtToText(SRT), 'Welcome to Garden Talk.\nToday: tomatoes.\n');
+  assert.match(srtToVtt(SRT), /^WEBVTT\n\n00:00:00\.000 --> 00:00:02\.500\nWelcome/);
   assert.deepEqual(JSON.parse(srtToJson(SRT)), { version: '1.0.0', segments: [{ startTime: 0, endTime: 2.5, body: 'Welcome to Garden Talk.' }, { startTime: 2.5, endTime: 5, body: 'Today: tomatoes.' }] });
 });

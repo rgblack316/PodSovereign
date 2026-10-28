@@ -46,6 +46,6 @@ Only these fields are sent. Everything else (genre, summary, URL, license, …) 
 | Show language | `speech_recognition.language` |
 | "Let Auphonic create chapters" or "write show notes" | `speech_recognition.shownotes: true` (one Auphonic feature; paid plans; needs speech recognition) |
 
-Output files: `mp3` at `128`; with transcripts also `subtitle` (`srt`, `webvtt`) and `transcript` (`txt`).
+Output files: `mp3` at `128`; with transcripts also `subtitle` (`srt`) and `transcript` (`txt`). The VTT and Podcasting 2.0 JSON transcripts are made from the SRT here (Auphonic’s API refuses the documented `webvtt` ending).
 
 Not sent: season, episode type, explicit, people, value, funding, text records.
