@@ -18,7 +18,7 @@ import type { Config } from '../config.js';
 import { maybeOne, one, type Db, type Queryable } from '../db/db.js';
 import { probeFile } from '../media/probe.js';
 import { pruneMedia } from '../media/prune.js';
-import { getChapters, saveChapters } from '../publish/chapters.js';
+import { getChapters, saveChapters, startMp3ChapterWrite } from '../publish/chapters.js';
 import { updateEpisode } from '../publish/episodes.js';
 import { activeStore } from '../storage/store.js';
 import { mediaPath } from '../urls.js';
@@ -542,12 +542,20 @@ async function importResults(db: Db, config: Config, j: Job, p: Production, log?
       input.status = 'published';
       input.pubDate = when;
     }
+    let fixMp3Chapters = false;
     // Chapters: Auphonic's replace the editor's when the podcaster chose them; otherwise they only fill an empty list.
     const have = await getChapters(db, config, j.podcast_id, j.episode_id);
     const found = (p.chapters ?? []).filter((c) => c.title);
     if (found.length && (j.options?.chapters === 'auphonic' || !have.chapters.length)) {
-      const list = found.map((c) => ({ startTime: c.start_output_sec ?? c.start_sec ?? 0, title: c.title!, url: c.url ?? null, img: c.image ?? null }));
-      const droppedCh = await saveChapters(db, config, j.podcast_id, j.episode_id, list).catch((err) => { log?.(`auphonic chapters: ${(err as Error).message}`); return []; });
+      const list = found.map((c) => ({ startTime: c.start_output_sec ?? c.start_sec ?? 0, title: c.title!, url: c.url ?? null, img: c.image ?? null }))
+        .sort((x, y) => x.startTime - y.startTime);
+      // The first chapter always starts at 00:00:00 (Apple Podcasts and others expect it); the MP3's own chapters
+      // are rewritten to match once the processed file is the episode's audio.
+      if (list[0]!.startTime > 0) {
+        list[0]!.startTime = 0;
+        fixMp3Chapters = true;
+      }
+      const droppedCh = await saveChapters(db, config, j.podcast_id, j.episode_id, list).catch((err) => { log?.(`auphonic chapters: ${(err as Error).message}`); fixMp3Chapters = false; return []; });
       await pruneMedia(db, config, j.podcast_id, droppedCh, log);
     }
     const dropped = await db.tx(async (q) => {
@@ -557,6 +565,7 @@ async function importResults(db: Db, config: Config, j: Job, p: Production, log?
       return r.dropped;
     });
     await pruneMedia(db, config, j.podcast_id, dropped, log);
+    if (fixMp3Chapters) startMp3ChapterWrite(db, config, j.podcast_id, j.episode_id, log);
 
     log?.(`auphonic: episode ${j.episode_id} processed`);
   } finally {

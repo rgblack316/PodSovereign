@@ -179,13 +179,14 @@ test('Auphonic writes the chapters and show notes when asked; its show notes fil
   assert.equal(sent.chapters, undefined, 'Auphonic makes the chapters');
   assert.deepEqual(sent.speech_recognition, { language: 'en', shownotes: true });
   fake.finish('prod3', {
-    chapters: [{ start: '00:00:00.000', start_output_sec: 0, title: 'Welcome' }, { start: '00:02:00.000', start_output_sec: 120, title: 'Pruning' }],
+    chapters: [{ start: '00:02:00.000', start_output_sec: 120, title: 'Pruning' }, { start: '00:00:04.200', start_output_sec: 4.2, title: 'Welcome' }],
     shownotes: { summaries: { long: ['Randy talks tomatoes.', 'Then pruning & staking.'], brief: ['Tomatoes.'], subtitle: ['Tomato time'] }, tags: ['garden'] },
   });
   await fetch(`${base}/hooks/auphonic/${config.auphonicHookToken}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uuid: 'prod3' }) });
   await waitFor(async () => (await processing()).status === 'done');
   const ch = (await req('GET', `/api/podcasts/${show}/episodes/${episode}/chapters`)).json.chapters;
   assert.deepEqual(ch.map((c: any) => c.title), ['Welcome', 'Pruning']);
+  assert.deepEqual(ch.map((c: any) => c.startTime), [0, 120], 'sorted, and the first chapter moved to 00:00:00');
   let p = await processing();
   assert.equal(p.shownotesApplied, false, 'the episode already had show notes, so they wait');
   assert.equal(p.shownotes.long, '<p>Randy talks tomatoes.</p>\n<p>Then pruning &amp; staking.</p>');
