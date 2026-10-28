@@ -75,7 +75,7 @@ test('without a token, the stats say an administrator needs to add one', async (
 });
 
 test('admins save the token (checked, encrypted, never sent back)', async () => {
-  assert.equal((await admin.post('/api/admin/site/test-op3', { token: 'wrong-token-xyz' })).status, 502);
+  assert.equal((await admin.post('/api/admin/site/test-op3', { token: 'wrong-token-xyz' })).status, 424);
   assert.equal((await admin.post('/api/admin/site/test-op3', { token: TOKEN })).json.ok, true);
   assert.equal((await viewer.put('/api/admin/site', { op3Token: TOKEN })).status, 403);
   const r = await admin.put('/api/admin/site', { op3Token: TOKEN });

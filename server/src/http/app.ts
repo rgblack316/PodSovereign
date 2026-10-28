@@ -1228,18 +1228,25 @@ export function createApp(deps: AppDeps) {
       if (m === 'method') throw new HttpError(405, 'Method not allowed');
       await m.handler({ req, res, url, params: m.params });
     } catch (e) {
+      // An outside service (Auphonic, OP3, email, a feed) failing is reported as 424, never 502/503/504:
+      // Cloudflare replaces those with its own HTML error page, which hides the message from the dashboard.
+      const fail = (status: number, body: unknown, headers?: Record<string, string>) =>
+        sendJson(res, status >= 502 && status <= 504 ? 424 : status, body, headers);
       if (res.headersSent) {
         res.destroy();
         return;
       }
-      if (e instanceof HttpError) return sendJson(res, e.status, { error: e.message }, e.headers);
-      if (e instanceof AuthError || e instanceof LiveError || e instanceof VerifyError || e instanceof PublishError || e instanceof TeamError || e instanceof BackupError) return sendJson(res, e.status, { error: e.message });
-      if (e instanceof AuphonicError) return sendJson(res, e.status, { error: e.message });
-      if (e instanceof SiteBuildError) return sendJson(res, e.status, { error: e.message });
-      if (e instanceof Op3Error) return sendJson(res, e.status, { error: e.message, code: e.code ?? null });
-      if (e instanceof UploadError) return sendJson(res, e.status, { error: e.message, ...e.extra });
+      if (e instanceof HttpError) return fail(e.status, { error: e.message }, e.headers);
+      if (e instanceof AuthError || e instanceof LiveError || e instanceof VerifyError || e instanceof PublishError || e instanceof TeamError || e instanceof BackupError) return fail(e.status, { error: e.message });
+      if (e instanceof AuphonicError) {
+        deps.log?.(`auphonic: ${req.method} ${url.pathname}: ${e.message}`);
+        return fail(e.status, { error: e.message });
+      }
+      if (e instanceof SiteBuildError) return fail(e.status, { error: e.message });
+      if (e instanceof Op3Error) return fail(e.status, { error: e.message, code: e.code ?? null });
+      if (e instanceof UploadError) return fail(e.status, { error: e.message, ...e.extra });
       if (e instanceof ImportError || e instanceof PrefixError || e instanceof SettingsError || e instanceof StorageConfigError || e instanceof MoveError) {
-        return sendJson(res, 400, { error: e.message });
+        return fail(400, { error: e.message });
       }
       deps.log?.(`500 ${req.method} ${url.pathname}: ${(e as Error).stack ?? e}`);
       sendJson(res, 500, { error: 'Something went wrong' });

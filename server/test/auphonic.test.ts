@@ -73,7 +73,7 @@ after(async () => {
 });
 
 test('the API key: checked, encrypted, never sent back', async () => {
-  assert.equal((await req('POST', '/api/admin/site/test-auphonic', { key: 'wrong-key-123' })).status, 502);
+  assert.equal((await req('POST', '/api/admin/site/test-auphonic', { key: 'wrong-key-123' })).status, 424);
   assert.equal((await req('POST', '/api/admin/site/test-auphonic', { key: fake.key })).json.account, 'randy');
   const r = await req('PUT', '/api/admin/site', { auphonicKey: fake.key });
   assert.equal(r.status, 200, r.text);

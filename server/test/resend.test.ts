@@ -122,7 +122,7 @@ describe('Resend in Site settings and verification', () => {
     assert.deepEqual(fake.sent.at(-1)!.body.to, ['randy@johnscreekstudios.com']);
     await api('PUT', '/api/admin/site', { resend: { from: 'podcasts@unverified.test' } });
     const bad = await api('POST', '/api/admin/site/test-email', {});
-    assert.equal(bad.status, 502);
+    assert.equal(bad.status, 424);
     assert.match(bad.json.error, /Verify unverified\.test at resend\.com\/domains/);
     await api('PUT', '/api/admin/site', { resend: { from: 'Johns Creek Studios <podcasts@johnscreekstudios.com>' } });
   });
@@ -150,7 +150,7 @@ describe('Resend in Site settings and verification', () => {
     const start = await api('POST', '/api/imports', { url: `${host.base}/feeds/show2.xml` });
     await runImportJob({ db, config }, (await claimNextJob(db))!);
     const r = await api('POST', `/api/imports/${start.json.job.id}/send-code`);
-    assert.equal(r.status, 502);
+    assert.equal(r.status, 424);
     assert.match(r.json.error, /The code couldn’t be sent: .*Use the feed tag instead/);
   });
 

@@ -434,7 +434,7 @@ describe('episodes', () => {
       config.nominatimUrl = 'http://127.0.0.1:1/';
     }
     const down = await alice.get('/api/places?q=Austin');
-    assert.equal(down.status, 502);
+    assert.equal(down.status, 424);
     assert.match(down.json.error, /type the details in/);
   });
 

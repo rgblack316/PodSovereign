@@ -43,7 +43,15 @@ async function api(method, path, body) {
   }
   const res = await fetch(path, opts);
   const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    // A web page instead of data: usually a proxy in front of the server (such as Cloudflare) answering for it.
+    throw new ApiError(res.status, res.ok
+      ? 'The server sent back a web page instead of data. Reload the page and try again.'
+      : `The server couldn’t be reached properly (error ${res.status}${res.status >= 520 && res.status <= 530 ? ' from Cloudflare' : ''}). Check that PodSovereign is running, then try again.`);
+  }
   if (!res.ok) throw new ApiError(res.status, data?.error ?? `Request failed (${res.status})`);
   return data;
 }
@@ -2065,6 +2073,8 @@ const TRANSCRIPT_TYPES = [
 ];
 
 async function viewEpisode(p, canEdit, episodeId) {
+  const flash = state.flash;
+  state.flash = null;
   const isNew = episodeId === 'new';
   const epNew = isNew
     ? { status: 'draft', inFeed: false, title: '', description: '', link: null, enclosure: null, duration: null, season: null, episode: null,
@@ -2546,8 +2556,14 @@ async function viewEpisode(p, canEdit, episodeId) {
           // Chapters are saved on their own, once the episode exists.
           if (chEd.dirty()) await chEd.save(e.id, { noMp3: !!sendIt });
           if (sendIt) {
-            await api('POST', `/api/podcasts/${p.id}/episodes/${e.id}/process`, { mediaId: enclosure.mediaId, publish: intent, chapters: procChapters.value, shownotes: procNotes.checked });
-            toast(intent ? 'Sent to Auphonic. It publishes when processing finishes.' : 'Sent to Auphonic');
+            try {
+              await api('POST', `/api/podcasts/${p.id}/episodes/${e.id}/process`, { mediaId: enclosure.mediaId, publish: intent, chapters: procChapters.value, shownotes: procNotes.checked });
+              toast(intent ? 'Sent to Auphonic. It publishes when processing finishes.' : 'Sent to Auphonic');
+            } catch (pe) {
+              // Auphonic didn't take it: keep the upload as the episode's audio (still a draft) so nothing is lost.
+              await api('PATCH', `/api/podcasts/${p.id}/episodes/${e.id}`, { enclosure: { mediaId: enclosure.mediaId } });
+              state.flash = `Auphonic didn’t take this episode: ${pe.message} It’s saved as a draft with the unprocessed audio. Fix the problem, then use “Reprocess with Auphonic”.`;
+            }
           }
           dirty = false;
           if (!sendIt) toast(e.status === 'draft' ? 'Draft saved' : !e.inFeed ? `Scheduled for ${fmtDate(e.pubDate, true)}` : ep.inFeed ? 'Saved' : 'Published');
@@ -2635,6 +2651,7 @@ async function viewEpisode(p, canEdit, episodeId) {
   return h('div', null,
     h('nav', { class: 'crumbs', 'aria-label': 'Breadcrumb' }, h('a', { href: `#/show/${p.id}/episodes` }, 'Episodes'), h('span', { 'aria-hidden': 'true' }, ' / '),
       h('span', null, isNew ? 'New episode' : ep.title)),
+    flash ? h('p', { class: 'warn-note', role: 'alert', style: 'margin-bottom:16px' }, flash) : null,
     op3Slot,
     form);
 }
