@@ -1304,12 +1304,25 @@ function chaptersEditor({ p, episodeId, canEdit, audio, markDirty }) {
   }
 
   // JSON import (read in the browser; saved with the episode).
-  const jsonInput = h('input', { type: 'file', accept: '.json,application/json', hidden: true, onchange: async () => {
+  const jsonInput = h('input', { type: 'file', accept: '.json,.txt,application/json,text/plain', hidden: true, onchange: async () => {
     const f = jsonInput.files[0];
     jsonInput.value = '';
     if (!f) return;
     try {
-      const doc = JSON.parse(await f.text());
+      const text = await f.text();
+      // Plain text (as Auphonic, mp4chaps and many editors use): "00:01:05.500 Title <https://link>" per line.
+      if (!text.trim().startsWith('{')) {
+        const list = text.split(/\r?\n/).map((line) => {
+          const m = /^\s*(\d+(?::\d{1,2}){1,2}(?:\.\d+)?)\s+(.*?)\s*(?:<(https?:\/\/[^>]+)>)?\s*$/.exec(line);
+          return m ? { startTime: parseTime(m[1]), title: m[2], url: m[3] ?? null } : null;
+        }).filter((c) => c && c.startTime !== null && c.title);
+        if (!list.length) throw new Error('No chapters found. Each line needs a time and a title, like 00:05:30 Interview.');
+        if (rows.length && !confirm(`Replace the ${rows.length} chapters here with the ${list.length} in ${f.name}?`)) return;
+        load(list);
+        toast(`${rows.length} chapters imported. Save the episode to keep them.`);
+        return;
+      }
+      const doc = JSON.parse(text);
       if (!Array.isArray(doc?.chapters)) throw new Error('That JSON file has no "chapters" list. Use the Podcast Namespace chapters format.');
       if (rows.length && !confirm(`Replace the ${rows.length} chapters here with the ${doc.chapters.length} in ${f.name}?`)) return;
       load(doc.chapters.filter((c) => typeof c?.startTime === 'number').map((c) => ({ startTime: c.startTime, title: c.title ?? '', url: c.url ?? null, img: c.img ?? null, toc: c.toc })));
@@ -1354,7 +1367,7 @@ function chaptersEditor({ p, episodeId, canEdit, audio, markDirty }) {
     list,
     notes,
     canEdit ? h('div', { class: 'actions', style: 'margin-top:8px' }, addBtn,
-      h('button', { type: 'button', class: 'quiet', onclick: () => jsonInput.click() }, 'Import JSON file'), audioBtn,
+      h('button', { type: 'button', class: 'quiet', onclick: () => jsonInput.click() }, 'Import chapters file (.txt or .json)'), audioBtn,
       h('button', { type: 'button', class: 'quiet', onclick: () => { if (rows.length && confirm('Remove all chapters?')) { rows = []; changed(); draw(); } } }, 'Remove all')) : null,
     jsonInput,
     writeRow,
@@ -1398,13 +1411,13 @@ function chaptersEditor({ p, episodeId, canEdit, audio, markDirty }) {
           h('button', { type: 'button', onclick: () => fromAudio(m.id, m.id3Chapters) }, 'Use them')));
       }
     },
-    async save(id) {
+    async save(id, opts = {}) {
       const errs = validate();
       if (errs.length) throw new Error(`Chapters: ${errs[0]}`);
       const a = audio();
       const r = await api('PUT', `/api/podcasts/${p.id}/episodes/${id}/chapters`, {
         chapters: rows.map((r2) => ({ startTime: r2.startTime, title: r2.title, url: r2.url || null, img: r2.imgRef, toc: r2.toc })),
-        writeToMp3: !!(a?.mp3 && writeMp3.checked && rows.length),
+        writeToMp3: !opts.noMp3 && !!(a?.mp3 && writeMp3.checked && rows.length),
       });
       saved = r;
       isDirty = false;
@@ -2053,12 +2066,18 @@ const TRANSCRIPT_TYPES = [
 
 async function viewEpisode(p, canEdit, episodeId) {
   const isNew = episodeId === 'new';
-  const ep = isNew
+  const epNew = isNew
     ? { status: 'draft', inFeed: false, title: '', description: '', link: null, enclosure: null, duration: null, season: null, episode: null,
         episodeType: 'full', explicit: null, imageUrl: null, block: false, transcripts: [], chapters: null, people: [], locations: [],
         value: [], funding: [], license: null, txt: [], otherTags: '', itunesTitle: null }
-    : (await api('GET', `/api/podcasts/${p.id}/episodes/${episodeId}`)).episode;
+    : null;
+  const epResp = isNew ? null : await api('GET', `/api/podcasts/${p.id}/episodes/${episodeId}`);
+  const ep = epNew ?? epResp.episode;
+  let processing = epResp?.processing ?? null;
   const showInfo = await api('GET', `/api/podcasts/${p.id}/details`);
+  // Auphonic processing for this show (editors only).
+  const auph = canEdit ? await api('GET', `/api/podcasts/${p.id}/auphonic`).catch(() => null) : null;
+  const auphOn = !!(auph?.configured && auph.settings.enabled && auph.settings.preset);
 
   const unsaved = new Set(); // uploads not yet saved into the episode
   let dirty = false;
@@ -2103,6 +2122,12 @@ async function viewEpisode(p, canEdit, episodeId) {
       drawAudio();
       toast('Audio uploaded');
       chEd.audioChanged(m);
+      if (auphOn && m.kind === 'audio') {
+        processNew = true;
+        processCb.checked = true;
+        drawProcess();
+        drawMode();
+      }
     },
   });
   const useLink = h('details', { class: 'use-link' }, h('summary', null, 'Use a file hosted somewhere else'),
@@ -2140,6 +2165,60 @@ async function viewEpisode(p, canEdit, episodeId) {
   }
   drawAudio();
   audioSlot.append(drop, up.el, useLink);
+
+  // ── Auphonic processing ──
+  let processNew = false; // a new upload waiting to be sent
+  const processCb = h('input', { type: 'checkbox', checked: true, onchange: () => drawMode() });
+  const processBox = h('div', { class: 'process-box' });
+  const willProcess = () => (processNew && processCb.checked) || (processing && ['starting', 'processing', 'importing'].includes(processing.status));
+  function drawProcess() {
+    const running = processing && ['starting', 'processing', 'importing'].includes(processing.status);
+    const parts = [];
+    if (processNew) {
+      parts.push(h('label', { class: 'check' }, processCb, h('span', null, `Process with Auphonic before publishing (preset: ${auph.settings.presetName})`,
+        h('span', { class: 'hint' }, auph.settings.transcripts ? ' Transcripts are made too.' : ''))));
+    }
+    if (processing) {
+      parts.push(h('p', { class: 'hint' },
+        running ? h('span', { class: 'light warn' }, `Processing with Auphonic${processing.stage ? ` (${processing.stage})` : ''}…${processing.publishWhenDone ? ' It publishes when finished.' : ''}`)
+          : processing.status === 'done' ? h('span', { class: 'light on' }, `Processed with Auphonic ${fmtDate(processing.finishedAt, true)}`)
+            : h('span', { class: 'light bad' }, `Auphonic processing didn’t finish: ${processing.error}`)));
+    }
+    if (!isNew && auphOn && !running && !processNew && (ep.enclosure || processing?.hasOriginal)) {
+      parts.push(h('div', { class: 'actions', style: 'margin-top:4px' }, h('button', {
+        type: 'button',
+        onclick: async () => {
+          if (!confirm('Process this episode’s original audio with Auphonic again? It uses Auphonic credits. The current audio stays until the new file is ready.')) return;
+          try {
+            const r = await api('POST', `/api/podcasts/${p.id}/episodes/${ep.id}/process`, { reprocess: true });
+            processing = r.processing;
+            drawProcess();
+            pollProcess();
+            toast('Sent to Auphonic');
+          } catch (e) {
+            toast(e.message);
+          }
+        },
+      }, 'Reprocess with Auphonic')));
+    }
+    processBox.replaceChildren(...parts);
+  }
+  function pollProcess() {
+    const t = setTimeout(async () => {
+      try {
+        const r = await api('GET', `/api/podcasts/${p.id}/episodes/${ep.id}/process`);
+        processing = r.processing;
+        if (processing && ['starting', 'processing', 'importing'].includes(processing.status)) return pollProcess();
+        if (processing?.status === 'done' && !dirty) return render(); // shows the new audio and transcripts
+        drawProcess();
+        drawMode();
+      } catch { /* stop */ }
+    }, 5000);
+    cleanup.push(() => clearTimeout(t));
+  }
+  if (auphOn || processing) drawProcess();
+  if (processing && ['starting', 'processing', 'importing'].includes(processing.status)) pollProcess();
+  audioSlot.append(processBox);
 
   // ── Details ──
   const title = h('input', { type: 'text', required: true, value: ep.title, maxlength: 1000 });
@@ -2349,9 +2428,10 @@ async function viewEpisode(p, canEdit, episodeId) {
       radio('schedule', 'Schedule', h('small', null, when)));
     liveDate.disabled = mode.value !== 'live';
     when.disabled = mode.value !== 'schedule';
+    const waits = willProcess() && !published;
     save.textContent = mode.value === 'draft' ? (isNew || ep.status === 'draft' ? 'Save draft' : 'Move to drafts')
-      : mode.value === 'schedule' ? (ep.status === 'scheduled' ? 'Save changes' : 'Schedule')
-        : published ? 'Save changes' : 'Publish now';
+      : mode.value === 'schedule' ? (waits ? 'Schedule after processing' : ep.status === 'scheduled' ? 'Save changes' : 'Schedule')
+        : published ? 'Save changes' : waits ? 'Publish when processing finishes' : 'Publish now';
   }
   drawMode();
 
@@ -2413,15 +2493,31 @@ async function viewEpisode(p, canEdit, episodeId) {
       busy(form, async () => {
         try {
           const b = body();
+          // A new upload going to Auphonic: the episode keeps its current audio (or none) until the processed file
+          // is ready, and an episode that isn't public yet publishes when processing finishes.
+          const sendIt = processNew && processCb.checked && enclosure?.mediaId;
+          let intent = null;
+          if (sendIt) {
+            delete b.enclosure;
+            if (!(ep.inFeed && !isNew) && b.status === 'published') {
+              intent = { pubDate: b.pubDate ?? null };
+              b.status = 'draft';
+              delete b.pubDate;
+            }
+          }
           const r = isNew
             ? await api('POST', `/api/podcasts/${p.id}/episodes`, b)
             : await api('PATCH', `/api/podcasts/${p.id}/episodes/${ep.id}`, b);
           unsaved.clear();
           const e = r.episode;
           // Chapters are saved on their own, once the episode exists.
-          if (chEd.dirty()) await chEd.save(e.id);
+          if (chEd.dirty()) await chEd.save(e.id, { noMp3: !!sendIt });
+          if (sendIt) {
+            await api('POST', `/api/podcasts/${p.id}/episodes/${e.id}/process`, { mediaId: enclosure.mediaId, publish: intent });
+            toast(intent ? 'Sent to Auphonic. It publishes when processing finishes.' : 'Sent to Auphonic');
+          }
           dirty = false;
-          toast(e.status === 'draft' ? 'Draft saved' : !e.inFeed ? `Scheduled for ${fmtDate(e.pubDate, true)}` : ep.inFeed ? 'Saved' : 'Published');
+          if (!sendIt) toast(e.status === 'draft' ? 'Draft saved' : !e.inFeed ? `Scheduled for ${fmtDate(e.pubDate, true)}` : ep.inFeed ? 'Saved' : 'Published');
           await refreshPodcasts();
           go(`#/show/${p.id}/episodes/${e.id}`);
         } catch (e) {
@@ -3447,9 +3543,54 @@ async function feedAndDelete(p) {
 }
 
 /** Settings: Podping, stats prefixes, the team, feed facts and (owners) deleting the show. */
+async function auphonicShowPanel(p, canEdit) {
+  const panel = h('section', { class: 'panel' });
+  const draw = async () => {
+    const a = await api('GET', `/api/podcasts/${p.id}/auphonic?presets=1`);
+    const head = [h('h2', null, 'Auphonic processing'),
+      h('p', { class: 'muted' }, 'Run new uploads through Auphonic before they’re published: noise reduction and loudness come from your Auphonic preset, and PodSovereign sends the episode’s title, number, art and chapters. The processed MP3 (128 kbps stereo) and transcripts (SRT, VTT, TXT and JSON) come back into the episode. The original upload is kept, so you can reprocess.')];
+    if (!a.configured) {
+      panel.replaceChildren(...head, h('p', { class: 'hint' }, state.me.isAdmin ? ['Add your Auphonic API key in ', h('a', { href: '#/site' }, 'Site settings'), ' first.'] : 'An administrator adds the Auphonic API key in Site settings first.'));
+      return;
+    }
+    const enabled = h('input', { type: 'checkbox', role: 'switch', checked: a.settings.enabled, disabled: !canEdit });
+    const preset = h('select', { disabled: !canEdit }, h('option', { value: '' }, 'Choose a preset'), a.presets.map((x) => h('option', { value: x.uuid }, x.name)));
+    preset.value = a.settings.preset ?? '';
+    if (a.settings.preset && !a.presets.some((x) => x.uuid === a.settings.preset)) preset.append(h('option', { value: a.settings.preset }, a.settings.presetName ?? a.settings.preset));
+    preset.value = a.settings.preset ?? '';
+    const transcripts = h('input', { type: 'checkbox', checked: a.settings.transcripts, disabled: !canEdit });
+    const err = formError();
+    const form = h('form', {
+      onsubmit: (ev) => {
+        ev.preventDefault();
+        err.hidden = true;
+        busy(form, async () => {
+          try {
+            await api('PUT', `/api/podcasts/${p.id}/auphonic`, { enabled: enabled.checked, preset: preset.value || null, transcripts: transcripts.checked });
+            toast('Auphonic settings saved');
+          } catch (e) {
+            showError(err, e);
+          }
+        });
+      },
+    },
+    h('label', { class: 'switch', style: 'margin:4px 0 12px' }, enabled, 'Process new uploads for this show'),
+    h('div', { class: 'fields-grid' }, field('Preset', preset, 'Your presets in Auphonic. Episode details sent from here replace the preset’s own title, artist and so on.')),
+    h('label', { class: 'check' }, transcripts, 'Make transcripts (uses Auphonic’s speech recognition)'),
+    a.error ? h('p', { class: 'warn-note' }, a.error) : null,
+    err,
+    canEdit ? h('div', { class: 'actions' }, h('button', { class: 'primary', type: 'submit' }, 'Save Auphonic settings')) : null);
+    panel.replaceChildren(...head, form);
+  };
+  panel.append(h('h2', null, 'Auphonic processing'), h('p', { class: 'hint' }, 'Loading…'));
+  draw().catch((e) => panel.replaceChildren(h('h2', null, 'Auphonic processing'), h('p', { class: 'error' }, e.message)));
+  return panel;
+}
+
 async function tabSettings(p, canEdit, reload) {
   const parts = [
     ['podping', 'Podping', await tabPodping(p, canEdit, reload)],
+    ['auphonic', 'Auphonic', await auphonicShowPanel(p, canEdit)],
     ['prefixes', 'Stats prefixes', await tabPrefixes(p, canEdit, reload)],
     ['team', 'Team', await tabTeam(p, canEdit, reload)],
     ['feed', 'Feed', null],
@@ -3787,6 +3928,7 @@ async function viewSite() {
     verifyPanel(s),
     backupsPanel(backups),
     op3Panel(s),
+    auphonicSitePanel(s),
     h('section', { class: 'panel' },
       h('h2', null, 'Sign-ups'),
       h('label', { class: 'switch', style: 'margin-top:12px' }, reg, 'Anyone can create an account'),
@@ -4079,6 +4221,67 @@ function backupsPanel(b) {
     h('p', { class: 'hint', style: 'margin-top:12px' }, 'To restore, see “Backups and restore” in the README. Saved passwords and API keys in a backup are encrypted with data/secret.key, so keep a copy of that file too.'),
   ].filter(Boolean));
   return panel;
+}
+
+// ───────────── Auphonic key ─────────────
+
+function auphonicSitePanel(s) {
+  const err = formError();
+  const msg = h('p', { class: 'hint', role: 'status' });
+  const key = h('input', { type: 'password', autocomplete: 'off', placeholder: s.auphonic.keySet ? 'Saved. Leave blank to keep it.' : 'Your Auphonic API key' });
+  const form = h('form', {
+    onsubmit: (ev) => {
+      ev.preventDefault();
+      err.hidden = true;
+      if (!key.value.trim()) return showError(err, 'Paste the key first');
+      busy(form, async () => {
+        try {
+          const t = await api('POST', '/api/admin/site/test-auphonic', { key: key.value });
+          await api('PUT', '/api/admin/site', { auphonicKey: key.value });
+          toast(`Auphonic connected (${t.account})`);
+          render();
+        } catch (e) {
+          showError(err, e);
+        }
+      });
+    },
+  },
+  h('div', { class: 'fields-grid' }, field('Auphonic API key', key)),
+  err,
+  h('div', { class: 'actions' },
+    h('button', { class: 'primary', type: 'submit' }, 'Check and save key'),
+    s.auphonic.keySet ? h('button', {
+      type: 'button',
+      onclick: async () => {
+        msg.className = 'hint';
+        msg.textContent = 'Checking…';
+        try {
+          const t = await api('POST', '/api/admin/site/test-auphonic', {});
+          msg.textContent = `Connected to Auphonic as ${t.account}.`;
+        } catch (e) {
+          msg.className = 'error';
+          msg.textContent = e.message;
+        }
+      },
+    }, 'Check saved key') : null,
+    s.auphonic.keySet ? h('button', {
+      type: 'button',
+      class: 'quiet',
+      onclick: async () => {
+        if (!confirm('Remove the Auphonic key? Shows will stop processing new uploads.')) return;
+        await api('PUT', '/api/admin/site', { auphonicKey: null });
+        toast('Auphonic key removed');
+        render();
+      },
+    }, 'Remove') : null),
+  msg);
+  return h('section', { class: 'panel' },
+    h('h2', null, 'Auphonic'),
+    h('p', { class: 'muted' }, 'Process episode audio with your Auphonic presets and get transcripts back. Turn it on for each show under its Settings. Auphonic tells this site when a file is ready, so the site address must be reachable from the internet (your Cloudflare Tunnel does this).'),
+    h('p', { class: 'hint', style: 'margin-bottom:12px' }, s.auphonic.keySet
+      ? h('span', { class: 'light on' }, 'Key saved')
+      : ['Find your API key in your Auphonic account settings (', h('a', { href: 'https://auphonic.com/accounts/settings/#api-key', target: '_blank', rel: 'noopener' }, 'auphonic.com'), ').']),
+    form);
 }
 
 // ───────────── OP3 token ─────────────

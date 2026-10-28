@@ -4,7 +4,7 @@
  * applied onto the shared Config at startup and on every save, so the rest of
  * the app reads them like any other setting.
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Config } from '../config.js';
@@ -38,6 +38,8 @@ interface Row {
   mail_provider: 'smtp' | 'resend';
   resend_api_key: string | null;
   op3_token: string | null;
+  auphonic_key: string | null;
+  auphonic_hook_token: string | null;
   updated_at: Date;
 }
 
@@ -92,6 +94,8 @@ export function applyRow(config: Config, row: Row): void {
           }
         : null;
   config.op3Token = unseal(row.op3_token, 'the OP3 API token');
+  config.auphonicKey = unseal(row.auphonic_key, 'the Auphonic API key');
+  config.auphonicHookToken = row.auphonic_hook_token;
   config.siteVersion = new Date(row.updated_at).getTime();
 }
 
@@ -125,6 +129,7 @@ export async function siteSettingsView(db: Db, config: Config) {
       from: row.smtp_from ?? '',
     },
     op3: { tokenSet: !!config.op3Token },
+    auphonic: { keySet: !!config.auphonicKey },
     hasLogo: !!row.logo_file,
     hasFavicon: !!row.favicon_file,
     previousHosts: config.previousHosts,
@@ -163,6 +168,8 @@ export interface SettingsInput {
   resend?: unknown;
   /** OP3 API token; '' or null removes it. */
   op3Token?: unknown;
+  /** Auphonic API key; '' or null removes it. */
+  auphonicKey?: unknown;
 }
 
 export interface SaveResult {
@@ -241,6 +248,14 @@ export async function saveSiteSettings(db: Db, config: Config, input: SettingsIn
     const t = typeof input.op3Token === 'string' ? input.op3Token.trim() : '';
     if (t && !/^[A-Za-z0-9._~+/=-]{8,500}$/.test(t)) throw new SettingsError('That doesn’t look like an OP3 API token');
     set('op3_token', seal(t || null));
+  }
+  if (input.auphonicKey !== undefined) {
+    const t = typeof input.auphonicKey === 'string' ? input.auphonicKey.trim() : '';
+    if (t && !/^[A-Za-z0-9._~+/=-]{8,500}$/.test(t)) throw new SettingsError('That doesn’t look like an Auphonic API key');
+    set('auphonic_key', seal(t || null));
+    // The callback address's secret, made once.
+    const row = await getRow(db);
+    if (t && !row.auphonic_hook_token) set('auphonic_hook_token', randomBytes(24).toString('hex'));
   }
   if (!sets.length) return { addressChanged: false, rewrittenShows: 0 };
 

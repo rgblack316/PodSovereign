@@ -9,7 +9,7 @@ Found a bug or want to help? [Open an issue](https://github.com/rgblack316/podso
 Optional helpers for publishing an episode, each using an outside service with its own API key (set in Site settings). Details, services and costs to be researched when it's time to build.
 - [ ] **Transcription:** transcribe uploaded episodes with OpenAI Whisper or another AI transcription service, saved as the episode's `podcast:transcript` (SRT/VTT)
 - [ ] **AI show notes, titles and chapters:** suggest show notes, title ideas and chapter markers from the transcript, for the podcaster to review and edit before publishing (chapters saved as `podcast:chapters`)
-- [ ] **Auphonic processing:** send uploaded audio through Auphonic's API (leveling, loudness, noise reduction) and store the processed file in media storage (R2) instead of the original
+- [x] **Auphonic processing:** per show, send new uploads through the show's Auphonic preset with the episode's title, number, artwork and chapters; the 128 kbps stereo MP3 and transcripts (SRT, VTT, JSON, TXT) replace the upload, and the episode publishes when processing finishes. See [docs/auphonic.md](docs/auphonic.md)
 
 ## Media storage providers
 

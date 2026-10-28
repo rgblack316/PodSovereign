@@ -12,6 +12,7 @@ import { startImportWorker } from './import/importer.js';
 import { cleanupUploads } from './media/uploads.js';
 import { startBackupWorker } from './backup/backups.js';
 import { startOp3Worker } from './stats/op3.js';
+import { startAuphonicWorker } from './auphonic/auphonic.js';
 import { startRedirectWorker } from './http/redirect-check.js';
 import { startPodpingWorker } from './podping/podping.js';
 import { encryptStoredSecrets, loadSecretKey } from './crypto/secrets.js';
@@ -33,6 +34,8 @@ async function main() {
   const backups = startBackupWorker({ db, config, log });
   // OP3 stats: each show using the OP3 prefix is refreshed every 6 hours.
   const op3 = startOp3Worker({ db, config, log });
+  // Auphonic productions are checked each minute in case a callback doesn't arrive.
+  const auphonic = startAuphonicWorker({ db, config, log });
   // Old feeds confirmed to redirect here are re-checked weekly.
   const redirects = startRedirectWorker({ db, config, log });
   // Abandoned uploads and uploaded files never saved into an episode.
@@ -49,6 +52,7 @@ async function main() {
     clearInterval(housekeeping);
     backups.stop();
     op3.stop();
+    auphonic.stop();
     redirects.stop();
     await worker?.stop();
     await podping.stop();

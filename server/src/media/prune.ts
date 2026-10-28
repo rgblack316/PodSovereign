@@ -21,7 +21,11 @@ export async function isReferenced(q: Queryable, podcastId: string, publicPath: 
                 position($2 in coalesce(image_url, '')) > 0 OR position($2 in coalesce(description, '')) > 0))
          OR EXISTS (SELECT 1 FROM tag_elements WHERE podcast_id = $1 AND (
                 position($2 in attributes::text) > 0 OR position($2 in coalesce(children::text, '')) > 0
-             OR position($2 in coalesce(value, '')) > 0)) AS used`,
+             OR position($2 in coalesce(value, '')) > 0))
+         -- The original upload of an episode's latest Auphonic processing, kept for reprocessing.
+         OR EXISTS (SELECT 1 FROM (SELECT DISTINCT ON (episode_id) original_media_id FROM auphonic_jobs
+                                    WHERE podcast_id = $1 ORDER BY episode_id, created_at DESC) j
+                      JOIN media_files m ON m.id = j.original_media_id WHERE m.public_path = $2) AS used`,
     [podcastId, publicPath],
   );
   return rows[0]?.used ?? true;

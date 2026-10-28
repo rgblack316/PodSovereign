@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { rm, stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -43,6 +43,7 @@ import { backupFileName, dumpStream, encryptStream, pgDumpVersion } from '../bac
 import { changeStorage, latestMove, MoveError } from '../storage/move.js';
 import { unseal } from '../crypto/secrets.js';
 import { buildView, queueManualBuild, saveBuildSettings, SiteBuildError, testBuild } from '../sitebuild/sitebuild.js';
+import { handleWebhook, isRunning, latestJob, listPresets, processingView, saveShowSettings, setPublishIntent, showSettings, startProcessing, testAuphonicKey, AuphonicError } from '../auphonic/auphonic.js';
 import { chaptersFromAudio, getChapters, isWritingMp3, saveChapters, startMp3ChapterWrite } from '../publish/chapters.js';
 import { Op3Error, op3Daily, op3State, requestOp3Refresh, testOp3Token } from '../stats/op3.js';
 import { PROVIDERS, StorageConfigError, validateSettings, type StorageSettings } from '../storage/providers.js';
@@ -459,21 +460,106 @@ export function createApp(deps: AppDeps) {
     const { podcastId } = await requirePodcast(ctx, 'editor');
     const body = await readJson(ctx.req, 1024 * 1024);
     const id = await db.tx((q) => createEpisode(q, config, podcastId, body));
-    sendJson(ctx.res, 201, { episode: await getEpisode(db, podcastId, id) });
+    sendJson(ctx.res, 201, { episode: await getEpisode(db, podcastId, id), processing: null });
   });
 
   router.get('/api/podcasts/:id/episodes/:episodeId', async (ctx) => {
     const { podcastId } = await requirePodcast(ctx, 'viewer');
-    sendJson(ctx.res, 200, { episode: await getEpisode(db, podcastId, ctx.params.episodeId!) });
+    sendJson(ctx.res, 200, { episode: await getEpisode(db, podcastId, ctx.params.episodeId!), processing: await processingView(db, ctx.params.episodeId!) });
   });
 
   /** Only the fields sent are changed. */
   router.patch('/api/podcasts/:id/episodes/:episodeId', async (ctx) => {
     const { podcastId } = await requirePodcast(ctx, 'editor');
     const body = await readJson(ctx.req, 1024 * 1024);
-    const { dropped } = await db.tx((q) => updateEpisode(q, config, podcastId, ctx.params.episodeId!, body));
+    const episodeId = ctx.params.episodeId!;
+    // While Auphonic processes an episode that isn't public yet, Publish waits for it.
+    const job = await latestJob(db, episodeId);
+    if (isRunning(job)) {
+      const cur = await getEpisode(db, podcastId, episodeId);
+      if (!cur.inFeed && body.status === 'published') {
+        await setPublishIntent(db, episodeId, { pubDate: typeof body.pubDate === 'string' ? body.pubDate : null });
+        body.status = 'draft';
+        delete body.pubDate;
+      } else if (body.status === 'draft') await setPublishIntent(db, episodeId, null);
+    }
+    const { dropped } = await db.tx((q) => updateEpisode(q, config, podcastId, episodeId, body));
     await pruneMedia(db, config, podcastId, dropped, deps.log);
-    sendJson(ctx.res, 200, { episode: await getEpisode(db, podcastId, ctx.params.episodeId!) });
+    sendJson(ctx.res, 200, { episode: await getEpisode(db, podcastId, episodeId), processing: await processingView(db, episodeId) });
+  });
+
+  // ───────────── Auphonic ─────────────
+
+  router.get('/api/podcasts/:id/auphonic', async (ctx) => {
+    const { podcastId, role } = await requirePodcast(ctx, 'viewer');
+    const settings = await showSettings(db, podcastId);
+    let presets: { uuid: string; name: string }[] = [];
+    let error: string | null = null;
+    if (config.auphonicKey && role !== 'viewer' && ctx.url.searchParams.get('presets') === '1') {
+      try {
+        presets = await listPresets(config);
+      } catch (e) {
+        error = (e as Error).message;
+      }
+    }
+    sendJson(ctx.res, 200, { configured: !!config.auphonicKey, settings, presets, error });
+  });
+
+  router.put('/api/podcasts/:id/auphonic', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    await saveShowSettings(db, config, podcastId, await readJson(ctx.req));
+    sendJson(ctx.res, 200, { configured: !!config.auphonicKey, settings: await showSettings(db, podcastId) });
+  });
+
+  /** Send the episode's audio to Auphonic (after it's saved, with its chapters), or reprocess the kept original. */
+  router.post('/api/podcasts/:id/episodes/:episodeId/process', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    const body = await readJson(ctx.req);
+    const episodeId = ctx.params.episodeId!;
+    const publish = body.publish && typeof body.publish === 'object' ? body.publish as { pubDate?: unknown } : null;
+    await startProcessing(db, config, podcastId, episodeId, {
+      reprocess: body.reprocess === true,
+      mediaId: typeof body.mediaId === 'string' ? body.mediaId : undefined,
+      publishIntent: publish ? { pubDate: typeof publish.pubDate === 'string' ? publish.pubDate : null } : null,
+      log: deps.log,
+    });
+    sendJson(ctx.res, 200, { processing: await processingView(db, episodeId) });
+  });
+
+  router.get('/api/podcasts/:id/episodes/:episodeId/process', async (ctx) => {
+    await requirePodcast(ctx, 'viewer');
+    sendJson(ctx.res, 200, { processing: await processingView(db, ctx.params.episodeId!) });
+  });
+
+  router.post('/api/admin/site/test-auphonic', async (ctx) => {
+    await requireAdmin(ctx);
+    const body = await readJson(ctx.req);
+    const key = typeof body.key === 'string' && body.key.trim() ? body.key.trim() : config.auphonicKey;
+    if (!key) throw new HttpError(400, 'Enter the Auphonic API key first');
+    sendJson(ctx.res, 200, { ok: true, account: await testAuphonicKey(config, key) });
+  });
+
+  /** Auphonic's callback when a production finishes (outside /api: no cookies, a secret in the address). */
+  router.post('/hooks/auphonic/:token', async (ctx) => {
+    const expected = config.auphonicHookToken ?? '';
+    const got = ctx.params.token ?? '';
+    if (!expected || got.length !== expected.length || !timingSafeEqual(Buffer.from(got), Buffer.from(expected))) throw new HttpError(404, 'Not found');
+    const chunks: Buffer[] = [];
+    let n = 0;
+    for await (const c of ctx.req) {
+      n += (c as Buffer).length;
+      if (n > 64 * 1024) throw new HttpError(413, 'Too large');
+      chunks.push(c as Buffer);
+    }
+    const raw = Buffer.concat(chunks).toString('utf8');
+    let uuid: string | null = null;
+    try {
+      uuid = (JSON.parse(raw) as { uuid?: string }).uuid ?? null;
+    } catch {
+      uuid = new URLSearchParams(raw).get('uuid');
+    }
+    if (uuid) await handleWebhook(db, config, uuid, deps.log);
+    sendJson(ctx.res, 200, { ok: true });
   });
 
   // ───────────── chapters ─────────────
@@ -1140,6 +1226,7 @@ export function createApp(deps: AppDeps) {
       }
       if (e instanceof HttpError) return sendJson(res, e.status, { error: e.message }, e.headers);
       if (e instanceof AuthError || e instanceof LiveError || e instanceof VerifyError || e instanceof PublishError || e instanceof TeamError || e instanceof BackupError) return sendJson(res, e.status, { error: e.message });
+      if (e instanceof AuphonicError) return sendJson(res, e.status, { error: e.message });
       if (e instanceof SiteBuildError) return sendJson(res, e.status, { error: e.message });
       if (e instanceof Op3Error) return sendJson(res, e.status, { error: e.message, code: e.code ?? null });
       if (e instanceof UploadError) return sendJson(res, e.status, { error: e.message, ...e.extra });

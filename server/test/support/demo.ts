@@ -10,6 +10,8 @@ import { claimNextJob, enqueueImport, runImportJob, startImportWorker } from '..
 import { startFakeS3 } from './fake-storage.js';
 import { startFakeSmtp } from './fake-smtp.js';
 import { startFakeOp3 } from './fake-op3.js';
+import { startFakeAuphonic } from './fake-auphonic.js';
+import { mp3 } from './media-samples.js';
 import { loadSiteSettings, saveSiteSettings } from '../../src/site/settings.js';
 import { createLiveItem, setLiveStatus } from '../../src/live/live.js';
 import { setShowPodping } from '../../src/podping/podping.js';
@@ -130,6 +132,26 @@ for (let n = 365; n >= 0; n--) {
 }
 op3.downloads.sort((a, b) => a.time.localeCompare(b.time));
 await db.query(`INSERT INTO podcast_prefixes (podcast_id, service_key, enabled, position) VALUES ($1, 'op3', true, 0) ON CONFLICT DO NOTHING`, [creek]);
+
+// Auphonic for Creekside: productions finish a few seconds after they start.
+const auph = await startFakeAuphonic('demo-auphonic-key');
+config.auphonicUrl = auph.url;
+await saveSiteSettings(db, config, { auphonicKey: 'demo-auphonic-key' });
+await loadSiteSettings(db, config);
+await db.query(`UPDATE podcasts SET auphonic_enabled = true, auphonic_preset = 'preset-podcast', auphonic_preset_name = 'Podcast -16 LUFS' WHERE id = $1`, [creek]);
+auph.outputs.set('mp3', { body: mp3(800), format: 'mp3', ending: 'mp3', filename: 'creekside-processed.mp3' });
+auph.outputs.set('srt', { body: Buffer.from('1\n00:00:00,000 --> 00:00:03,000\nWelcome to Creekside.\n'), format: 'subtitle', ending: 'srt', filename: 'creekside.srt' });
+auph.outputs.set('webvtt', { body: Buffer.from('WEBVTT\n\n00:00.000 --> 00:03.000\nWelcome to Creekside.\n'), format: 'subtitle', ending: 'webvtt', filename: 'creekside.vtt' });
+auph.outputs.set('txt', { body: Buffer.from('Welcome to Creekside.\n'), format: 'transcript', ending: 'txt', filename: 'creekside.txt' });
+setInterval(() => {
+  for (const p of auph.productions) if (p.status === 4 && !(p as { seen?: boolean }).seen) {
+    (p as { seen?: boolean }).seen = true;
+    setTimeout(() => {
+      auph.finish(p.uuid);
+      void fetch(`http://127.0.0.1:${port}/hooks/auphonic/${config.auphonicHookToken}`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: `uuid=${p.uuid}` });
+    }, 6000);
+  }
+}, 1000).unref();
 
 const server = http.createServer(createApp({ db, config, log: console.log }));
 server.listen(port, '127.0.0.1', () => console.log(`demo ready on http://127.0.0.1:${port}  (randy@johnscreekstudios.com / demo password 123)`));
