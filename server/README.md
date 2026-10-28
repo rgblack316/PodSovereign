@@ -140,6 +140,7 @@ Migrations run automatically on startup. The **first account registered becomes 
 | `SITE_DIR` | `/var/lib/podsovereign/site` | Where the uploaded logo and favicon are stored |
 | `PODPING_HUB_URL` | `https://hub.podcastindex.org/pubnotify` | The Podcast Index hub endpoint |
 | `PODPING_DELAY_SEC` | `30` | Wait before sending, so a burst of edits becomes one ping |
+| `AUPHONIC_URL` | `https://auphonic.com` | Auphonic API address (only changed for testing) |
 
 ### Public URLs
 
@@ -160,6 +161,16 @@ When a feed changes, the server tells Podcast Index's open hub, which checks the
 - **When it pings (switch on):** when an episode is published or a scheduled one's time arrives; when a public episode is edited, unpublished or deleted; when show details or stats prefixes change; when a live show starts or ends. Imports never ping.
 - **What else it does:** a burst of changes is sent as one ping, and failures are retried with backoff (30s, 1m, 2m, 4m, 8m) before giving up. Feeds include `<podcast:podping usesPodping="true"/>` while the show's switch is on; the old host's tag is dropped on import.
 - **Status:** `GET /api/podcasts/:id/podping` shows recent pings.
+
+## Auphonic processing
+
+Optional. New uploads can go through [Auphonic](https://auphonic.com) before they're published. Full details, including exactly which episode fields are sent, are in [`docs/auphonic.md`](../docs/auphonic.md).
+
+- **Setup:** an admin adds the Auphonic API key under **Site settings → Auphonic** (encrypted in the database). Each show turns it on under **Settings → Auphonic** and picks one of the account's presets. Defaults for transcripts, chapters (chapter editor or Auphonic) and Auphonic-written show notes are set there too; each upload can change the chapters and show-notes choices.
+- **What's sent:** the preset, plus title, episode number (track), author (artist), podcast name (album), owner (publisher), the current year, episode artwork and chapters. Everything else comes from the preset.
+- **What comes back:** a 128 kbps stereo MP3 (it replaces the upload; the original is kept for **Reprocess**), SRT, VTT and TXT transcripts plus a Podcasting 2.0 JSON transcript, and, if chosen, Auphonic's chapters and show notes. Show notes fill an empty description; otherwise the editor offers them with **Use as the description**.
+- **Publishing waits:** an episode set to Publish or Schedule stays a draft until processing finishes, then goes live by itself.
+- **Your server must be reachable:** Auphonic fetches the upload from the media address and reports back to `<web address>/hooks/auphonic/<token>`. If that callback can't arrive, the server checks running jobs every minute instead.
 
 ## Live shows (`podcast:liveItem`)
 
@@ -275,6 +286,10 @@ All `/api` calls use a session cookie. Requests that change something must send 
 | POST | `/api/podcasts/:id/redirect-check` (is the old feed 301-redirecting here?) | editor+ |
 | PUT | `/api/podcasts/:id/prefixes` | editor+ |
 | GET · PUT | `/api/podcasts/:id/podping` (status · show switch) | viewer+ · editor+ |
+| GET · PUT | `/api/podcasts/:id/auphonic` (show settings; `?presets=1` lists the account's presets) | viewer+ · editor+ |
+| GET · POST | `/api/podcasts/:id/episodes/:episodeId/process` `{mediaId?, reprocess?, publish?, chapters?, shownotes?}` · POST `/process/use-shownotes` | viewer+ · editor+ |
+| POST | `/api/admin/site/test-auphonic` | admin |
+| POST | `/hooks/auphonic/:token` (Auphonic's callback) | Auphonic |
 | GET · POST | `/api/podcasts/:id/live` (list · create) | viewer+ · editor+ |
 | PATCH · DELETE | `/api/podcasts/:id/live/:liveId` | editor+ |
 | POST | `/api/podcasts/:id/live/:liveId/status` `{status}` | editor+ |
