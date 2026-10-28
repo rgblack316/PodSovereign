@@ -35,10 +35,21 @@ export async function startFakeAuphonic(key: string): Promise<FakeAuphonic> {
       if (req.headers.authorization !== `bearer ${key}`) return json(401, null, { error_message: 'Unauthorized' });
       if (url.pathname === '/api/user.json') return json(200, { username: 'randy' });
       if (url.pathname === '/api/presets.json') return json(200, [{ uuid: 'preset-podcast', preset_name: 'Podcast -16 LUFS' }, { uuid: 'preset-mono', preset_name: 'Mono talk' }]);
+      const pm = /^\/api\/preset\/([^/]+)\.json$/.exec(url.pathname);
+      if (pm) {
+        if (pm[1] === 'preset-podcast') {
+          return json(200, { uuid: 'preset-podcast', preset_name: 'Podcast -16 LUFS', output_files: [
+            { format: 'mp3', bitrate: '192', ending: 'mp3', suffix: '', mono_mixdown: false, split_on_chapters: false, filename: null },
+            { format: 'subtitle', ending: 'srt', bitrate: null, suffix: '', mono_mixdown: false, split_on_chapters: false },
+            { format: 'transcript', ending: 'html', bitrate: null, suffix: '', mono_mixdown: false, split_on_chapters: false },
+          ] });
+        }
+        return pm[1] === 'preset-mono' ? json(200, { uuid: 'preset-mono', preset_name: 'Mono talk', output_files: [] }) : json(404, null, { error_message: 'not found' });
+      }
       if (url.pathname === '/api/productions.json' && req.method === 'POST') {
         const request = JSON.parse(body);
-        // Like the real API: only these endings are accepted (it refuses "webvtt" despite the docs).
-        const ok: Record<string, string[]> = { subtitle: ['srt'], transcript: ['txt', 'html'], speech: ['json', 'xml'] };
+        // Like the real API: some documented endings ("webvtt", "txt") are refused; the ones its presets use are fine.
+        const ok: Record<string, string[]> = { subtitle: ['srt', 'vtt'], transcript: ['html'], speech: ['json'] };
         const bad = (request.output_files ?? []).find((f: any) => ok[f.format] && !ok[f.format]!.includes(f.ending));
         if (bad) return json(400, null, { error_message: '', form_errors: { ending: [`Select a valid ending choice. ${bad.ending} is not one of the available choices.`] } });
         const p: FakeProduction = { uuid: `prod${productions.length + 1}`, request, status: 4, status_string: 'Audio Processing' };

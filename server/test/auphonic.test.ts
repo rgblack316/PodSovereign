@@ -4,7 +4,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
-import { srtToVtt, srtToText, srtToJson } from '../src/auphonic/auphonic.js';
+import { srtToVtt, srtToText, srtToJson, vttToSrt } from '../src/auphonic/auphonic.js';
 import type { Db } from '../src/db/db.js';
 import { createApp } from '../src/http/app.js';
 import { startFakeAuphonic, type FakeAuphonic } from './support/fake-auphonic.js';
@@ -117,7 +117,11 @@ test('sending an episode: its metadata, art and chapters go with the preset; Pub
   }, 'only these; summary, genre and the rest come from the preset');
   assert.equal(sent.image, art.url);
   assert.deepEqual(sent.chapters, [{ start: '00:00:00.000', title: 'Intro' }, { start: '00:01:05.500', title: 'Staking', url: 'https://example.com/stakes' }]);
-  assert.deepEqual(sent.output_files, [{ format: 'mp3', bitrate: '128' }, { format: 'subtitle', ending: 'srt' }, { format: 'transcript', ending: 'txt' }], 'only endings Auphonic accepts');
+  assert.deepEqual(sent.output_files, [
+    { format: 'mp3', bitrate: '128', mono_mixdown: false },
+    { format: 'subtitle', ending: 'srt', mono_mixdown: false, split_on_chapters: false },
+    { format: 'transcript', ending: 'html', mono_mixdown: false, split_on_chapters: false },
+  ], "the preset's output files, with its MP3 replaced by 128 kbps stereo");
   assert.deepEqual(sent.speech_recognition, { language: 'en-US' });
   assert.equal(sent.webhook, `http://feeds.mine.test/hooks/auphonic/${config.auphonicHookToken}`);
 
@@ -208,6 +212,8 @@ test('Auphonic writes the chapters and show notes when asked; its show notes fil
 
 test('SRT to Podcasting 2.0 JSON', () => {
   assert.equal(srtToText(SRT), 'Welcome to Garden Talk.\nToday: tomatoes.\n');
+  assert.equal(vttToSrt('WEBVTT\n\n00:01.000 --> 00:02.500 align:start\n<v Randy>Hi there\n\n01:00:00.000 --> 01:00:01.000\nBye\n'),
+    '1\n00:00:01,000 --> 00:00:02,500\nHi there\n\n2\n01:00:00,000 --> 01:00:01,000\nBye\n');
   assert.match(srtToVtt(SRT), /^WEBVTT\n\n00:00:00\.000 --> 00:00:02\.500\nWelcome/);
   assert.deepEqual(JSON.parse(srtToJson(SRT)), { version: '1.0.0', segments: [{ startTime: 0, endTime: 2.5, body: 'Welcome to Garden Talk.' }, { startTime: 2.5, endTime: 5, body: 'Today: tomatoes.' }] });
 });

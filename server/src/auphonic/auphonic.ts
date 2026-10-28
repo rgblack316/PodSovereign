@@ -134,6 +134,30 @@ export async function saveShowSettings(db: Db, config: Config, podcastId: string
 
 // ───────────── building the production ─────────────
 
+/**
+ * The output files: the preset's own (transcripts, other formats, as set up in Auphonic), with its MP3
+ * replaced by ours (128 kbps stereo). Sending output_files replaces the preset's list, so it's copied here.
+ */
+async function outputFilesFor(config: Config, preset: string | null): Promise<Record<string, unknown>[]> {
+  const ours = { format: 'mp3', bitrate: '128', mono_mixdown: false };
+  let theirs: Record<string, unknown>[] = [];
+  if (preset) {
+    try {
+      const p = await call<{ output_files?: Record<string, unknown>[] }>(config, 'GET', `/api/preset/${encodeURIComponent(preset)}.json`);
+      theirs = (p?.output_files ?? []).map((f) => {
+        const out: Record<string, unknown> = {};
+        for (const k of ['format', 'ending', 'bitrate', 'suffix', 'mono_mixdown', 'split_on_chapters']) {
+          if (f[k] !== null && f[k] !== undefined && f[k] !== '') out[k] = f[k];
+        }
+        return out;
+      }).filter((f) => f.format && f.format !== 'mp3');
+    } catch {
+      /* the preset couldn't be read: just the MP3 (speech recognition still adds transcripts) */
+    }
+  }
+  return [ours, ...theirs];
+}
+
 const plain = (html: string | null) =>
   (html ?? '').replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|li|h\d)>/gi, '\n').replace(/<[^>]+>/g, '')
     .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
@@ -180,7 +204,7 @@ export async function productionRequest(db: Db, config: Config, podcastId: strin
   for (const k of Object.keys(metadata)) if (metadata[k] === undefined || metadata[k] === '') delete metadata[k];
 
   const { chapters } = await getChapters(db, config, podcastId, episodeId);
-  const outputFiles: Record<string, unknown>[] = [{ format: 'mp3', bitrate: '128' }];
+  const outputFiles = await outputFilesFor(config, s.auphonic_preset);
   const req: Record<string, unknown> = {
     preset: s.auphonic_preset,
     metadata,
@@ -201,11 +225,9 @@ export async function productionRequest(db: Db, config: Config, podcastId: strin
   if (s.auphonic_transcripts || auto) {
     req.speech_recognition = { language: speechLanguage(s.language), ...(auto ? { shownotes: true } : {}) };
   }
-  if (s.auphonic_transcripts) {
-    // Only SRT and TXT are asked for (Auphonic's API refuses some documented endings, such as "webvtt");
-    // VTT and Podcasting 2.0 JSON are made here from the SRT.
-    outputFiles.push({ format: 'subtitle', ending: 'srt' }, { format: 'transcript', ending: 'txt' });
-  }
+  // Transcript files aren't requested: Auphonic adds them itself when speech recognition is on, and its API
+  // refuses several documented endings ("webvtt", "txt") when they're asked for. Whatever comes back (SRT or
+  // VTT) is used, and the missing formats are made here.
   if (config.auphonicHookToken) req.webhook = `${config.publicBaseUrl}/hooks/auphonic/${config.auphonicHookToken}`;
   return req;
 }
@@ -414,22 +436,29 @@ async function storeFile(db: Db, config: Config, podcastId: string, slug: string
 
 function srtCues(srt: string): { startTime: number; endTime: number; body: string }[] {
   const t = (s: string) => {
-    const m = /(\d+):(\d+):(\d+)[,.](\d+)/.exec(s);
-    return m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) + Number(m[4]!.padEnd(3, '0').slice(0, 3)) / 1000 : 0;
+    const m = /(?:(\d+):)?(\d+):(\d+)[,.](\d+)/.exec(s); // SRT 00:00:01,000 or VTT 00:01.000
+    return m ? Number(m[1] ?? 0) * 3600 + Number(m[2]) * 60 + Number(m[3]) + Number(m[4]!.padEnd(3, '0').slice(0, 3)) / 1000 : 0;
   };
   return srt.replace(/^\uFEFF/, '').replace(/\r/g, '').split(/\n{2,}/).flatMap((block) => {
     const lines = block.trim().split('\n');
     const i = lines.findIndex((l) => l.includes('-->'));
     if (i < 0) return [];
-    const [a, b] = lines[i]!.split('-->');
+    const [a, b0] = lines[i]!.split('-->');
+    const b = b0!.trim().split(/\s+/)[0]; // VTT cue settings may follow the end time
     const body = lines.slice(i + 1).join(' ').trim();
-    return body ? [{ startTime: t(a!), endTime: t(b!), body }] : [];
+    return body ? [{ startTime: t(a!), endTime: t(b!), body: body.replace(/<[^>]+>/g, '') }] : [];
   });
 }
 
 /** SRT → Podcasting 2.0 JSON transcript. */
 export function srtToJson(srt: string): string {
   return JSON.stringify({ version: '1.0.0', segments: srtCues(srt) }, null, 1);
+}
+
+/** WebVTT (or SRT) → SRT. */
+export function vttToSrt(vtt: string): string {
+  const ts = (s: number) => hms(s).replace('.', ',');
+  return srtCues(vtt).map((c, i) => `${i + 1}\n${ts(c.startTime)} --> ${ts(c.endTime)}\n${c.body}`).join('\n\n') + '\n';
 }
 
 /** SRT → WebVTT. */
@@ -452,7 +481,9 @@ async function importResults(db: Db, config: Config, j: Job, p: Production, log?
   const srt = pick((f) => f.ending === 'srt');
   const vtt = pick((f) => f.ending === 'webvtt' || f.ending === 'vtt');
   const txt = pick((f) => f.format === 'transcript' && f.ending === 'txt');
-  const { slug, language } = await one<{ slug: string; language: string | null }>(db, `SELECT slug, language FROM podcasts WHERE id = $1`, [j.podcast_id]);
+  log?.(`auphonic: production ${p.uuid} returned ${files.map((f) => `${f.format ?? '?'}/${f.ending ?? '?'}`).join(', ') || 'no files'}`);
+  const { slug, language, auphonic_transcripts: wantTranscripts } = await one<{ slug: string; language: string | null; auphonic_transcripts: boolean }>(
+    db, `SELECT slug, language, auphonic_transcripts FROM podcasts WHERE id = $1`, [j.podcast_id]);
   const tmp: string[] = [];
   const fetchTo = async (f: NonNullable<typeof mp3>) => {
     const dest = path.join(staging(config), `${randomBytes(8).toString('hex')}-${path.basename(f.filename ?? 'file')}`);
@@ -466,19 +497,23 @@ async function importResults(db: Db, config: Config, j: Job, p: Production, log?
     const transcripts: Record<string, unknown>[] = [];
     const stem = base.replace(/\.mp3$/i, '');
     let srtText: string | null = null;
-    if (srt) {
-      const f = await fetchTo(srt);
-      srtText = await readFile(f, 'utf8');
-      transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, f, 'transcript', 'transcripts', `${stem}.srt`, 'application/x-subrip'), type: 'application/x-subrip', rel: 'captions' });
-    }
     const made = async (ext: string, content: string) => {
       const f = path.join(staging(config), `${randomBytes(8).toString('hex')}.${ext}`);
       tmp.push(f);
       await writeFile(f, content);
       return f;
     };
-    // VTT, JSON and (if Auphonic sent none) TXT are made from the SRT.
-    const vttFile = vtt ? await fetchTo(vtt) : srtText ? await made('vtt', srtToVtt(srtText)) : null;
+    // Auphonic's SRT, or one made from its VTT; then VTT, JSON and TXT (whichever weren't sent) from the SRT.
+    const vttFetched = wantTranscripts && vtt ? await fetchTo(vtt) : null;
+    const srtFile = !wantTranscripts ? null : srt ? await fetchTo(srt) : vttFetched ? await made('srt', vttToSrt(await readFile(vttFetched, 'utf8'))) : null;
+    if (srtFile) {
+      srtText = await readFile(srtFile, 'utf8');
+      if (!srtCues(srtText).length) srtText = null;
+    }
+    if (srtFile && srtText) {
+      transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, srtFile, 'transcript', 'transcripts', `${stem}.srt`, 'application/x-subrip'), type: 'application/x-subrip', rel: 'captions' });
+    }
+    const vttFile = vttFetched ?? (srtText ? await made('vtt', srtToVtt(srtText)) : null);
     if (vttFile) {
       transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, vttFile, 'transcript', 'transcripts', `${stem}.vtt`, 'text/vtt'), type: 'text/vtt', rel: 'captions' });
     }
@@ -486,7 +521,7 @@ async function importResults(db: Db, config: Config, j: Job, p: Production, log?
       const jf = await made('json', srtToJson(srtText));
       transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, jf, 'transcript', 'transcripts', `${stem}.json`, 'application/json'), type: 'application/json' });
     }
-    const txtFile = txt ? await fetchTo(txt) : srtText ? await made('txt', srtToText(srtText)) : null;
+    const txtFile = !wantTranscripts ? null : txt ? await fetchTo(txt) : srtText ? await made('txt', srtToText(srtText)) : null;
     if (txtFile) {
       transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, txtFile, 'transcript', 'transcripts', `${stem}.txt`, 'text/plain'), type: 'text/plain' });
     }
