@@ -169,11 +169,14 @@ const hms = (s: number) => {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(rest).padStart(3, '0')}`;
 };
 
-/** "en-us" → "en-US"; Auphonic takes codes like "en" or "de-DE". */
-const speechLanguage = (lang: string | null) => {
-  if (!lang) return 'en';
-  const [a, b] = lang.split('-');
-  return b ? `${a!.toLowerCase()}-${b.toUpperCase()}` : a!.toLowerCase();
+/** Languages Auphonic's speech recognition accepts (from its error message); anything else is sent as "auto". */
+const SPEECH_LANGUAGES = new Set(('af sq am ar hy as az ba eu be bn bs br bg my es ca zh hr cs da nl en et fo fi fr gl ka de el gu ht ha haw he hi hu is id it ja jw '
+  + 'kn kk km ko lo la lv lb ln lt mk mg ms ml mt mi mr ro mn ne no nn oc pa ps fa pl pt ru sa sr sn sd si sk sl so su sw sv tl tg ta tt te th bo tr tk uk ur uz vi cy yi yo').split(' '));
+
+/** "en-us" → "en": Auphonic takes base language codes only. */
+export const speechLanguage = (lang: string | null) => {
+  const base = (lang ?? '').split(/[-_]/)[0]!.toLowerCase();
+  return SPEECH_LANGUAGES.has(base) ? base : 'auto';
 };
 
 interface EpisodeData {

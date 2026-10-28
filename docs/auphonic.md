@@ -43,7 +43,7 @@ Only these fields are sent. Everything else (genre, summary, URL, license, …) 
 | (nothing) | `metadata.summary` is not sent |
 | Episode art (the show's art when the episode has none, as in the feed) | `image` |
 | Chapter editor: typed, imported from .txt/.json, or read from the MP3 | `chapters` (`start` HH:MM:SS.mmm, `title`, `url`, `image`); not sent when Auphonic makes the chapters |
-| Show language | `speech_recognition.language` |
+| Show language, base code only (`en-us` → `en`; `auto` if Auphonic doesn't list it) | `speech_recognition.language` |
 | "Let Auphonic create chapters" or "write show notes" | `speech_recognition.shownotes: true` (one Auphonic feature; paid plans; needs speech recognition) |
 
 Output files: the preset's own output files (read with `GET /api/preset/{uuid}.json`) are sent as they are, with any MP3 entry replaced by `mp3` at `128` kbps, stereo (sending `output_files` replaces the preset's list, so it's copied). Transcript files are never added by PodSovereign itself: Auphonic's API refuses documented endings (`webvtt`, `txt`) when they're requested, and speech recognition adds the transcripts anyway. PodSovereign uses the SRT (or VTT) that comes back and makes the missing SRT, VTT, TXT and Podcasting 2.0 JSON files from it (only when the show's "Make transcripts" is on). The server log lists which files each production returned.

@@ -4,7 +4,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
-import { srtToVtt, srtToText, srtToJson, vttToSrt } from '../src/auphonic/auphonic.js';
+import { speechLanguage, srtToVtt, srtToText, srtToJson, vttToSrt } from '../src/auphonic/auphonic.js';
 import type { Db } from '../src/db/db.js';
 import { createApp } from '../src/http/app.js';
 import { startFakeAuphonic, type FakeAuphonic } from './support/fake-auphonic.js';
@@ -122,7 +122,7 @@ test('sending an episode: its metadata, art and chapters go with the preset; Pub
     { format: 'subtitle', ending: 'srt', mono_mixdown: false, split_on_chapters: false },
     { format: 'transcript', ending: 'html', mono_mixdown: false, split_on_chapters: false },
   ], "the preset's output files, with its MP3 replaced by 128 kbps stereo");
-  assert.deepEqual(sent.speech_recognition, { language: 'en-US' });
+  assert.deepEqual(sent.speech_recognition, { language: 'en' });
   assert.equal(sent.webhook, `http://feeds.mine.test/hooks/auphonic/${config.auphonicHookToken}`);
 
   // Publishing while it processes waits; sending it again is refused.
@@ -177,7 +177,7 @@ test('Auphonic writes the chapters and show notes when asked; its show notes fil
   assert.equal(r.status, 200, r.text);
   let sent = fake.productions[2]!.request;
   assert.equal(sent.chapters, undefined, 'Auphonic makes the chapters');
-  assert.deepEqual(sent.speech_recognition, { language: 'en-US', shownotes: true });
+  assert.deepEqual(sent.speech_recognition, { language: 'en', shownotes: true });
   fake.finish('prod3', {
     chapters: [{ start: '00:00:00.000', start_output_sec: 0, title: 'Welcome' }, { start: '00:02:00.000', start_output_sec: 120, title: 'Pruning' }],
     shownotes: { summaries: { long: ['Randy talks tomatoes.', 'Then pruning & staking.'], brief: ['Tomatoes.'], subtitle: ['Tomato time'] }, tags: ['garden'] },
@@ -200,7 +200,7 @@ test('Auphonic writes the chapters and show notes when asked; its show notes fil
   r = await req('POST', `/api/podcasts/${show}/episodes/${episode}/process`, { reprocess: true, chapters: 'ours', shownotes: true });
   sent = fake.productions[3]!.request;
   assert.deepEqual(sent.chapters.map((c: any) => c.title), ['Welcome', 'Pruning']);
-  assert.deepEqual(sent.speech_recognition, { language: 'en-US', shownotes: true });
+  assert.deepEqual(sent.speech_recognition, { language: 'en', shownotes: true });
   fake.finish('prod4', { chapters: [{ start_output_sec: 5, title: 'Other' }], shownotes: { summaries: { long: 'Fresh notes.' } } });
   await fetch(`${base}/hooks/auphonic/${config.auphonicHookToken}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uuid: 'prod4' }) });
   await waitFor(async () => (await processing()).status === 'done');
@@ -211,6 +211,7 @@ test('Auphonic writes the chapters and show notes when asked; its show notes fil
 });
 
 test('SRT to Podcasting 2.0 JSON', () => {
+  assert.deepEqual(['en-us', 'pt-BR', 'fr', 'xx-yy', null].map(speechLanguage), ['en', 'pt', 'fr', 'auto', 'auto']);
   assert.equal(srtToText(SRT), 'Welcome to Garden Talk.\nToday: tomatoes.\n');
   assert.equal(vttToSrt('WEBVTT\n\n00:01.000 --> 00:02.500 align:start\n<v Randy>Hi there\n\n01:00:00.000 --> 01:00:01.000\nBye\n'),
     '1\n00:00:01,000 --> 00:00:02,500\nHi there\n\n2\n01:00:00,000 --> 01:00:01,000\nBye\n');
