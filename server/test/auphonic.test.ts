@@ -90,7 +90,8 @@ test('per-show settings: a preset from the account, transcripts on or off', asyn
   assert.equal((await req('PUT', `/api/podcasts/${show}/auphonic`, { enabled: true })).status, 400, 'needs a preset');
   assert.equal((await req('PUT', `/api/podcasts/${show}/auphonic`, { enabled: true, preset: 'nope' })).status, 400);
   r = await req('PUT', `/api/podcasts/${show}/auphonic`, { enabled: true, preset: 'preset-podcast' });
-  assert.deepEqual(r.json.settings, { enabled: true, preset: 'preset-podcast', presetName: 'Podcast -16 LUFS', transcripts: true });
+  assert.deepEqual(r.json.settings, { enabled: true, preset: 'preset-podcast', presetName: 'Podcast -16 LUFS', transcripts: true, chapters: 'ours', shownotes: false });
+  assert.equal((await req('PUT', `/api/podcasts/${show}/auphonic`, { chapters: 'robots' })).status, 400);
 });
 
 test('sending an episode: its metadata, art and chapters go with the preset; Publish waits', async () => {
@@ -113,9 +114,8 @@ test('sending an episode: its metadata, art and chapters go with the preset; Pub
   assert.equal(sent.action, 'start');
   assert.equal(sent.input_file, original.url, 'Auphonic fetches the original from its public address');
   assert.deepEqual(sent.metadata, {
-    title: 'Tomatoes', track: 12, artist: 'Johns Creek Studios', album: 'Garden Talk', year: new Date().getUTCFullYear(), genre: 'Podcast',
-    summary: 'Staking tomatoes & more.', publisher: 'Randy Black', url: 'https://gardentalk.example.com/12',
-  });
+    title: 'Tomatoes', track: 12, artist: 'Johns Creek Studios', album: 'Garden Talk', publisher: 'Randy Black', year: new Date().getFullYear(),
+  }, 'only these; summary, genre and the rest come from the preset');
   assert.equal(sent.image, art.url);
   assert.deepEqual(sent.chapters, [{ start: '00:00:00.000', title: 'Intro' }, { start: '00:01:05.500', title: 'Staking', url: 'https://example.com/stakes' }]);
   assert.deepEqual(sent.output_files, [{ format: 'mp3', bitrate: '128' }, { format: 'subtitle', ending: 'srt' }, { format: 'subtitle', ending: 'webvtt' }, { format: 'transcript', ending: 'txt' }]);
@@ -164,6 +164,45 @@ test('Reprocess sends the kept original again, with the current metadata', async
   await waitFor(async () => (await processing()).status === 'failed');
   assert.match((await processing()).error, /could not be read/);
   assert.equal((await req('GET', `/api/podcasts/${show}/episodes/${episode}`)).json.episode.inFeed, true, 'still up with the last good audio');
+});
+
+test('Auphonic writes the chapters and show notes when asked; its show notes fill an empty description or wait to be used', async () => {
+  // Per episode: Auphonic's chapters and show notes. The editor's chapters aren't sent and are replaced.
+  let r = await req('POST', `/api/podcasts/${show}/episodes/${episode}/process`, { reprocess: true, chapters: 'auphonic', shownotes: true });
+  assert.equal(r.status, 200, r.text);
+  let sent = fake.productions[2]!.request;
+  assert.equal(sent.chapters, undefined, 'Auphonic makes the chapters');
+  assert.deepEqual(sent.speech_recognition, { language: 'en-US', shownotes: true });
+  fake.finish('prod3', {
+    chapters: [{ start: '00:00:00.000', start_output_sec: 0, title: 'Welcome' }, { start: '00:02:00.000', start_output_sec: 120, title: 'Pruning' }],
+    shownotes: { summaries: { long: ['Randy talks tomatoes.', 'Then pruning & staking.'], brief: ['Tomatoes.'], subtitle: ['Tomato time'] }, tags: ['garden'] },
+  });
+  await fetch(`${base}/hooks/auphonic/${config.auphonicHookToken}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uuid: 'prod3' }) });
+  await waitFor(async () => (await processing()).status === 'done');
+  const ch = (await req('GET', `/api/podcasts/${show}/episodes/${episode}/chapters`)).json.chapters;
+  assert.deepEqual(ch.map((c: any) => c.title), ['Welcome', 'Pruning']);
+  let p = await processing();
+  assert.equal(p.shownotesApplied, false, 'the episode already had show notes, so they wait');
+  assert.equal(p.shownotes.long, '<p>Randy talks tomatoes.</p>\n<p>Then pruning &amp; staking.</p>');
+  assert.match((await req('GET', `/api/podcasts/${show}/episodes/${episode}`)).json.episode.description, /Staking/);
+  r = await req('POST', `/api/podcasts/${show}/episodes/${episode}/process/use-shownotes`, {});
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.processing.shownotesApplied, true);
+  assert.match((await req('GET', `/api/podcasts/${show}/episodes/${episode}`)).json.episode.description, /Randy talks tomatoes/);
+
+  // An empty description is filled straight away; chapters from the editor are sent and kept.
+  await req('PATCH', `/api/podcasts/${show}/episodes/${episode}`, { description: '' });
+  r = await req('POST', `/api/podcasts/${show}/episodes/${episode}/process`, { reprocess: true, chapters: 'ours', shownotes: true });
+  sent = fake.productions[3]!.request;
+  assert.deepEqual(sent.chapters.map((c: any) => c.title), ['Welcome', 'Pruning']);
+  assert.deepEqual(sent.speech_recognition, { language: 'en-US', shownotes: true });
+  fake.finish('prod4', { chapters: [{ start_output_sec: 5, title: 'Other' }], shownotes: { summaries: { long: 'Fresh notes.' } } });
+  await fetch(`${base}/hooks/auphonic/${config.auphonicHookToken}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uuid: 'prod4' }) });
+  await waitFor(async () => (await processing()).status === 'done');
+  p = await processing();
+  assert.equal(p.shownotesApplied, true);
+  assert.equal((await req('GET', `/api/podcasts/${show}/episodes/${episode}`)).json.episode.description, '<p>Fresh notes.</p>');
+  assert.deepEqual((await req('GET', `/api/podcasts/${show}/episodes/${episode}/chapters`)).json.chapters.map((c: any) => c.title), ['Welcome', 'Pruning']);
 });
 
 test('SRT to Podcasting 2.0 JSON', () => {

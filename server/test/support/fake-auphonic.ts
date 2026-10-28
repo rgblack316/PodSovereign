@@ -2,7 +2,7 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-export interface FakeProduction { uuid: string; request: any; status: number; status_string: string; error_message?: string; chapters?: any[] }
+export interface FakeProduction { uuid: string; request: any; status: number; status_string: string; error_message?: string; chapters?: any[]; shownotes?: any }
 
 export interface FakeAuphonic {
   url: string;
@@ -11,7 +11,7 @@ export interface FakeAuphonic {
   /** Files served for a finished production (by ending). */
   outputs: Map<string, { body: Buffer; format: string; ending: string; filename: string }>;
   /** Mark a production done (or failed). */
-  finish(uuid: string, opts?: { error?: string; chapters?: any[] }): void;
+  finish(uuid: string, opts?: { error?: string; chapters?: any[]; shownotes?: any }): void;
   close(): Promise<void>;
 }
 
@@ -45,7 +45,7 @@ export async function startFakeAuphonic(key: string): Promise<FakeAuphonic> {
         const p = productions.find((x) => x.uuid === m[1]);
         if (!p) return json(404, null, { error_message: 'not found' });
         const files = p.status === 3 ? [...outputs.values()].map((f) => ({ format: f.format, ending: f.ending, filename: f.filename, download_url: `${base}/download/${p.uuid}/${f.ending}` })) : [];
-        return json(200, { uuid: p.uuid, status: p.status, status_string: p.status_string, error_message: p.error_message ?? '', output_files: files, chapters: p.chapters ?? [] });
+        return json(200, { uuid: p.uuid, status: p.status, status_string: p.status_string, error_message: p.error_message ?? '', output_files: files, chapters: p.chapters ?? [], ...(p.shownotes ? { shownotes: p.shownotes } : {}) });
       }
       json(404, null, { error_message: 'unknown' });
     });
@@ -60,7 +60,7 @@ export async function startFakeAuphonic(key: string): Promise<FakeAuphonic> {
     finish(uuid, opts = {}) {
       const p = productions.find((x) => x.uuid === uuid)!;
       if (opts.error) Object.assign(p, { status: 2, status_string: 'Error', error_message: opts.error });
-      else Object.assign(p, { status: 3, status_string: 'Done', chapters: opts.chapters ?? [] });
+      else Object.assign(p, { status: 3, status_string: 'Done', chapters: opts.chapters ?? [], shownotes: opts.shownotes });
     },
     close: () => new Promise((r) => server.close(() => r())),
   };

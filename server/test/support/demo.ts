@@ -147,7 +147,11 @@ setInterval(() => {
   for (const p of auph.productions) if (p.status === 4 && !(p as { seen?: boolean }).seen) {
     (p as { seen?: boolean }).seen = true;
     setTimeout(() => {
-      auph.finish(p.uuid);
+      const ai = p.request.speech_recognition?.shownotes;
+      auph.finish(p.uuid, ai ? {
+        chapters: p.request.chapters ? [] : [{ start_output_sec: 0, title: 'Welcome to the creek' }, { start_output_sec: 1.5, title: 'This week’s guest' }],
+        shownotes: { summaries: { long: ['Randy opens the season at the creek and talks with this week’s guest about restoring the trail.', 'They cover volunteer days, the spring cleanup and how to get involved.'], brief: ['Trail restoration with this week’s guest.'], subtitle: ['Restoring the creek trail'] }, tags: ['creek', 'trail'] },
+      } : {});
       void fetch(`http://127.0.0.1:${port}/hooks/auphonic/${config.auphonicHookToken}`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: `uuid=${p.uuid}` });
     }, 6000);
   }

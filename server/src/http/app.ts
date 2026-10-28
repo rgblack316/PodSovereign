@@ -43,7 +43,7 @@ import { backupFileName, dumpStream, encryptStream, pgDumpVersion } from '../bac
 import { changeStorage, latestMove, MoveError } from '../storage/move.js';
 import { unseal } from '../crypto/secrets.js';
 import { buildView, queueManualBuild, saveBuildSettings, SiteBuildError, testBuild } from '../sitebuild/sitebuild.js';
-import { handleWebhook, isRunning, latestJob, listPresets, processingView, saveShowSettings, setPublishIntent, showSettings, startProcessing, testAuphonicKey, AuphonicError } from '../auphonic/auphonic.js';
+import { applyShownotes, handleWebhook, isRunning, latestJob, listPresets, processingView, saveShowSettings, setPublishIntent, showSettings, startProcessing, testAuphonicKey, AuphonicError } from '../auphonic/auphonic.js';
 import { chaptersFromAudio, getChapters, isWritingMp3, saveChapters, startMp3ChapterWrite } from '../publish/chapters.js';
 import { Op3Error, op3Daily, op3State, requestOp3Refresh, testOp3Token } from '../stats/op3.js';
 import { PROVIDERS, StorageConfigError, validateSettings, type StorageSettings } from '../storage/providers.js';
@@ -521,9 +521,17 @@ export function createApp(deps: AppDeps) {
       reprocess: body.reprocess === true,
       mediaId: typeof body.mediaId === 'string' ? body.mediaId : undefined,
       publishIntent: publish ? { pubDate: typeof publish.pubDate === 'string' ? publish.pubDate : null } : null,
+      ai: { chapters: body.chapters, shownotes: body.shownotes },
       log: deps.log,
     });
     sendJson(ctx.res, 200, { processing: await processingView(db, episodeId) });
+  });
+
+  /** Use the show notes Auphonic wrote as the episode's description. */
+  router.post('/api/podcasts/:id/episodes/:episodeId/process/use-shownotes', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    await applyShownotes(db, config, podcastId, ctx.params.episodeId!);
+    sendJson(ctx.res, 200, { processing: await processingView(db, ctx.params.episodeId!) });
   });
 
   router.get('/api/podcasts/:id/episodes/:episodeId/process', async (ctx) => {

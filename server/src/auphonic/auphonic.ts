@@ -80,16 +80,39 @@ export async function listPresets(config: Config): Promise<{ uuid: string; name:
 // ───────────── show settings ─────────────
 
 export async function showSettings(q: Queryable, podcastId: string) {
-  const r = (await maybeOne<{ auphonic_enabled: boolean; auphonic_preset: string | null; auphonic_preset_name: string | null; auphonic_transcripts: boolean }>(
-    q, `SELECT auphonic_enabled, auphonic_preset, auphonic_preset_name, auphonic_transcripts FROM podcasts WHERE id = $1`, [podcastId],
+  const r = (await maybeOne<{ auphonic_enabled: boolean; auphonic_preset: string | null; auphonic_preset_name: string | null; auphonic_transcripts: boolean; auphonic_chapters: ChapterSource; auphonic_shownotes: boolean }>(
+    q, `SELECT auphonic_enabled, auphonic_preset, auphonic_preset_name, auphonic_transcripts, auphonic_chapters, auphonic_shownotes FROM podcasts WHERE id = $1`, [podcastId],
   ))!;
-  return { enabled: r.auphonic_enabled, preset: r.auphonic_preset, presetName: r.auphonic_preset_name, transcripts: r.auphonic_transcripts };
+  return {
+    enabled: r.auphonic_enabled, preset: r.auphonic_preset, presetName: r.auphonic_preset_name, transcripts: r.auphonic_transcripts,
+    chapters: r.auphonic_chapters, shownotes: r.auphonic_shownotes,
+  };
 }
 
-export async function saveShowSettings(db: Db, config: Config, podcastId: string, input: { enabled?: unknown; preset?: unknown; transcripts?: unknown }) {
+export type ChapterSource = 'ours' | 'auphonic';
+export interface AiOptions { chapters: ChapterSource; shownotes: boolean }
+
+const chapterSource = (v: unknown, fallback: ChapterSource): ChapterSource => {
+  if (v === undefined || v === null) return fallback;
+  if (v !== 'ours' && v !== 'auphonic') throw new AuphonicError('Chapters come from "ours" or "auphonic"');
+  return v;
+};
+
+/** The per-episode choice, defaulting to the show's settings. */
+export async function aiOptions(q: Queryable, podcastId: string, input: { chapters?: unknown; shownotes?: unknown } = {}): Promise<AiOptions> {
+  const s = await showSettings(q, podcastId);
+  return {
+    chapters: chapterSource(input.chapters, s.chapters),
+    shownotes: input.shownotes === undefined || input.shownotes === null ? s.shownotes : input.shownotes === true,
+  };
+}
+
+export async function saveShowSettings(db: Db, config: Config, podcastId: string, input: { enabled?: unknown; preset?: unknown; transcripts?: unknown; chapters?: unknown; shownotes?: unknown }) {
   const cur = await showSettings(db, podcastId);
   const enabled = input.enabled === undefined ? cur.enabled : input.enabled === true;
   const transcripts = input.transcripts === undefined ? cur.transcripts : input.transcripts === true;
+  const chapters = chapterSource(input.chapters, cur.chapters);
+  const shownotes = input.shownotes === undefined ? cur.shownotes : input.shownotes === true;
   let preset = cur.preset;
   let presetName = cur.presetName;
   if (input.preset !== undefined) {
@@ -104,8 +127,8 @@ export async function saveShowSettings(db: Db, config: Config, podcastId: string
   }
   if (enabled && !preset) throw new AuphonicError('Choose the Auphonic preset to use');
   await db.query(
-    `UPDATE podcasts SET auphonic_enabled = $2, auphonic_preset = $3, auphonic_preset_name = $4, auphonic_transcripts = $5 WHERE id = $1`,
-    [podcastId, enabled, preset, presetName, transcripts],
+    `UPDATE podcasts SET auphonic_enabled = $2, auphonic_preset = $3, auphonic_preset_name = $4, auphonic_transcripts = $5, auphonic_chapters = $6, auphonic_shownotes = $7 WHERE id = $1`,
+    [podcastId, enabled, preset, presetName, transcripts, chapters, shownotes],
   );
 }
 
@@ -138,34 +161,21 @@ interface ShowData {
   language: string | null; auphonic_preset: string | null; auphonic_transcripts: boolean;
 }
 
-async function tag(q: Queryable, podcastId: string, episodeId: string | null, name: string) {
-  return maybeOne<{ attributes: Record<string, string>; value: string | null }>(
-    q,
-    `SELECT attributes, value FROM tag_elements WHERE podcast_id = $1 AND episode_id IS NOT DISTINCT FROM $2 AND ns_prefix = 'podcast' AND name = $3 ORDER BY sort_order LIMIT 1`,
-    [podcastId, episodeId, name],
-  );
-}
-
-/** The production request for an episode (exported for tests and for reviewing the mapping). */
-export async function productionRequest(db: Db, config: Config, podcastId: string, episodeId: string, inputUrl: string) {
+/**
+ * The production request for an episode (exported for tests and for reviewing the mapping).
+ * Only these fields are sent; everything else (genre, summary, URL, ...) comes from the preset.
+ */
+export async function productionRequest(db: Db, config: Config, podcastId: string, episodeId: string, inputUrl: string, ai?: AiOptions) {
   const e = (await maybeOne<EpisodeData>(db, `SELECT * FROM episodes WHERE id = $1 AND podcast_id = $2`, [episodeId, podcastId]))!;
   const s = (await maybeOne<ShowData>(db, `SELECT * FROM podcasts WHERE id = $1`, [podcastId]))!;
-  const license = (await tag(db, podcastId, episodeId, 'license')) ?? (await tag(db, podcastId, null, 'license'));
-  const loc = await tag(db, podcastId, episodeId, 'location');
-  const geo = /^geo:(-?[\d.]+),(-?[\d.]+)/.exec(loc?.attributes?.geo ?? '');
+  const opts = ai ?? await aiOptions(db, podcastId);
   const metadata: Record<string, unknown> = {
-    title: e.title,
-    track: e.itunes_episode ?? undefined,
-    artist: s.itunes_author ?? undefined,
-    album: s.title,
-    year: (e.pub_date ? new Date(e.pub_date) : new Date()).getUTCFullYear(),
-    genre: 'Podcast',
-    summary: plain(e.description) || undefined,
-    publisher: s.itunes_owner_name ?? undefined,
-    url: e.link ?? s.link ?? undefined,
-    license: license?.value || undefined,
-    license_url: license?.attributes?.url || undefined,
-    location: geo ? { latitude: geo[1], longitude: geo[2] } : undefined,
+    title: e.title,                           // Title ← episode title
+    track: e.itunes_episode ?? undefined,     // Track ← episode number
+    artist: s.itunes_author ?? undefined,     // Artist ← author name
+    album: s.title,                           // Album ← podcast name
+    publisher: s.itunes_owner_name ?? undefined, // Publisher ← owner name
+    year: new Date().getFullYear(),           // Year ← the current year
   };
   for (const k of Object.keys(metadata)) if (metadata[k] === undefined || metadata[k] === '') delete metadata[k];
 
@@ -179,13 +189,19 @@ export async function productionRequest(db: Db, config: Config, podcastId: strin
     output_files: outputFiles,
     action: 'start',
   };
+  // Cover ← episode art (the show's art when the episode has none, as in the feed).
   const image = e.itunes_image_url ?? s.image_url;
   if (image) req.image = image;
-  if (chapters.length) {
+  // Chapters ← the chapter editor (typed, imported from .txt/.json, or read from the MP3), unless Auphonic makes them.
+  if (opts.chapters === 'ours' && chapters.length) {
     req.chapters = chapters.map((c) => ({ start: hms(c.startTime), title: c.title, ...(c.url ? { url: c.url } : {}), ...(c.img ? { image: c.img } : {}) }));
   }
+  // Auphonic's automatic chapters and show notes are one feature that needs speech recognition.
+  const auto = opts.chapters === 'auphonic' || opts.shownotes;
+  if (s.auphonic_transcripts || auto) {
+    req.speech_recognition = { language: speechLanguage(s.language), ...(auto ? { shownotes: true } : {}) };
+  }
   if (s.auphonic_transcripts) {
-    req.speech_recognition = { language: speechLanguage(s.language) };
     outputFiles.push({ format: 'subtitle', ending: 'srt' }, { format: 'subtitle', ending: 'webvtt' }, { format: 'transcript', ending: 'txt' });
   }
   if (config.auphonicHookToken) req.webhook = `${config.publicBaseUrl}/hooks/auphonic/${config.auphonicHookToken}`;
@@ -198,7 +214,10 @@ interface Job {
   id: string; podcast_id: string; episode_id: string; original_media_id: string | null; production_uuid: string | null;
   status: 'starting' | 'processing' | 'importing' | 'done' | 'failed'; status_string: string | null; error: string | null;
   publish_intent: { pubDate: string | null } | null; created_at: Date; finished_at: Date | null;
+  options: AiOptions | null; shownotes: Shownotes | null; shownotes_applied: boolean;
 }
+
+export interface Shownotes { long: string | null; brief: string | null; subtitle: string | null; tags: string[] }
 
 export const RUNNING = ['starting', 'processing', 'importing'];
 
@@ -215,6 +234,8 @@ export async function processingView(q: Queryable, episodeId: string) {
   return {
     status: j.status, stage: j.status_string, error: j.error, publishWhenDone: !!j.publish_intent,
     startedAt: j.created_at, finishedAt: j.finished_at, hasOriginal: !!j.original_media_id,
+    chapters: j.options?.chapters ?? 'ours', makesShownotes: !!j.options?.shownotes,
+    shownotes: j.shownotes, shownotesApplied: j.shownotes_applied,
   };
 }
 
@@ -246,7 +267,7 @@ const isPublicNow = (e: { status: string; pub_date: Date | null }) => e.status =
  * Send an episode to Auphonic. `publishIntent` is set when Publish was chosen
  * for an episode that isn't public yet: it's published once processing is done.
  */
-export async function startProcessing(db: Db, config: Config, podcastId: string, episodeId: string, opts: { reprocess?: boolean; mediaId?: string; publishIntent?: { pubDate: string | null } | null; log?: (m: string) => void } = {}): Promise<void> {
+export async function startProcessing(db: Db, config: Config, podcastId: string, episodeId: string, opts: { reprocess?: boolean; mediaId?: string; publishIntent?: { pubDate: string | null } | null; ai?: { chapters?: unknown; shownotes?: unknown }; log?: (m: string) => void } = {}): Promise<void> {
   const running = await latestJob(db, episodeId);
   if (isRunning(running)) throw new AuphonicError('This episode is already being processed', 409);
   const e = await maybeOne<EpisodeData>(db, `SELECT * FROM episodes WHERE id = $1 AND podcast_id = $2`, [episodeId, podcastId]);
@@ -262,13 +283,14 @@ export async function startProcessing(db: Db, config: Config, podcastId: string,
     if (!m || m.kind !== 'audio') throw new AuphonicError('That audio file wasn’t found. Upload it again.');
     input = { id: m.id, url: config.mediaBaseUrl + m.public_path };
   } else input = await inputMedia(db, config, podcastId, e, !!opts.reprocess);
+  const ai = await aiOptions(db, podcastId, opts.ai);
   const job = await one<{ id: string }>(
     db,
-    `INSERT INTO auphonic_jobs (podcast_id, episode_id, original_media_id, publish_intent) VALUES ($1, $2, $3, $4) RETURNING id`,
-    [podcastId, episodeId, input.id, opts.publishIntent ? JSON.stringify(opts.publishIntent) : null],
+    `INSERT INTO auphonic_jobs (podcast_id, episode_id, original_media_id, publish_intent, options) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+    [podcastId, episodeId, input.id, opts.publishIntent ? JSON.stringify(opts.publishIntent) : null, JSON.stringify(ai)],
   );
   try {
-    const req = await productionRequest(db, config, podcastId, episodeId, input.url);
+    const req = await productionRequest(db, config, podcastId, episodeId, input.url, ai);
     const p = await call<{ uuid: string; status_string?: string }>(config, 'POST', '/api/productions.json', req);
     await db.query(`UPDATE auphonic_jobs SET production_uuid = $2, status = 'processing', status_string = $3, updated_at = now() WHERE id = $1`, [job.id, p.uuid, p.status_string ?? null]);
   } catch (err) {
@@ -293,6 +315,34 @@ interface Production {
   uuid: string; status: number; status_string?: string; error_message?: string; warning_message?: string;
   output_files?: { format?: string; ending?: string; download_url?: string; filename?: string; size?: number }[];
   chapters?: { start?: string; start_output_sec?: number; start_sec?: number; title?: string; url?: string; image?: string }[];
+  shownotes?: { summaries?: { long?: string[] | string; brief?: string[] | string; subtitle?: string[] | string }; tags?: string[] };
+}
+
+const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const joined = (v: string[] | string | undefined) => (Array.isArray(v) ? v.join('\n\n') : v ?? '').trim() || null;
+
+/** Auphonic's generated show notes, with the long summary as HTML paragraphs for the episode description. */
+export function readShownotes(p: Pick<Production, 'shownotes'>): Shownotes | null {
+  const sn = p.shownotes;
+  const long = joined(sn?.summaries?.long);
+  const brief = joined(sn?.summaries?.brief);
+  const subtitle = joined(sn?.summaries?.subtitle);
+  if (!long && !brief && !subtitle) return null;
+  return {
+    long: long ? long.split(/\n{2,}/).map((para) => `<p>${esc(para.trim()).replace(/\n/g, '<br>')}</p>`).join('\n') : null,
+    brief, subtitle, tags: (sn?.tags ?? []).filter((t) => typeof t === 'string'),
+  };
+}
+
+/** Put Auphonic's show notes into the episode's description (the editor's "Use these show notes"). */
+export async function applyShownotes(db: Db, config: Config, podcastId: string, episodeId: string): Promise<void> {
+  const j = await latestJob(db, episodeId);
+  const html = j?.shownotes?.long ?? j?.shownotes?.brief;
+  if (!j || !html) throw new AuphonicError('Auphonic didn’t write show notes for this episode', 404);
+  await db.tx(async (q) => {
+    await updateEpisode(q, config, podcastId, episodeId, { description: html });
+    await q.query(`UPDATE auphonic_jobs SET shownotes_applied = true WHERE id = $1`, [j.id]);
+  });
 }
 
 const checking = new Set<string>();
@@ -419,29 +469,34 @@ async function importResults(db: Db, config: Config, j: Job, p: Production, log?
     }
     for (const t of transcripts) t.language = language ?? null;
 
-    const e = (await maybeOne<{ status: string; pub_date: Date | null }>(db, `SELECT status, pub_date FROM episodes WHERE id = $1`, [j.episode_id]))!;
+    const e = (await maybeOne<{ status: string; pub_date: Date | null; description: string | null }>(db, `SELECT status, pub_date, description FROM episodes WHERE id = $1`, [j.episode_id]))!;
     const input: Record<string, unknown> = { enclosure: { mediaId: audioId } };
     if (transcripts.length) input.transcripts = transcripts;
+    // Show notes Auphonic wrote fill an empty description; otherwise they wait in the editor to be used or ignored.
+    const notes = j.options?.shownotes ? readShownotes(p) : null;
+    const fill = !!notes && !plain(e.description) && !!(notes.long ?? notes.brief);
+    if (fill) input.description = notes!.long ?? notes!.brief;
     if (j.publish_intent && !isPublicNow(e)) {
       const when = j.publish_intent.pubDate && Date.parse(j.publish_intent.pubDate) > Date.now() ? j.publish_intent.pubDate : null;
       input.status = 'published';
       input.pubDate = when;
     }
-    const dropped = await db.tx(async (q) => {
-      const r = await updateEpisode(q, config, j.podcast_id, j.episode_id, input);
-      await q.query(`UPDATE auphonic_jobs SET status = 'done', error = NULL, updated_at = now(), finished_at = now() WHERE id = $1`, [j.id]);
-      return r.dropped;
-    });
-    await pruneMedia(db, config, j.podcast_id, dropped, log);
-
-    // Chapters Auphonic found in the file, when the episode had none.
+    // Chapters: Auphonic's replace the editor's when the podcaster chose them; otherwise they only fill an empty list.
     const have = await getChapters(db, config, j.podcast_id, j.episode_id);
     const found = (p.chapters ?? []).filter((c) => c.title);
-    if (!have.chapters.length && found.length) {
+    if (found.length && (j.options?.chapters === 'auphonic' || !have.chapters.length)) {
       const list = found.map((c) => ({ startTime: c.start_output_sec ?? c.start_sec ?? 0, title: c.title!, url: c.url ?? null, img: c.image ?? null }));
       const droppedCh = await saveChapters(db, config, j.podcast_id, j.episode_id, list).catch((err) => { log?.(`auphonic chapters: ${(err as Error).message}`); return []; });
       await pruneMedia(db, config, j.podcast_id, droppedCh, log);
     }
+    const dropped = await db.tx(async (q) => {
+      const r = await updateEpisode(q, config, j.podcast_id, j.episode_id, input);
+      await q.query(`UPDATE auphonic_jobs SET status = 'done', error = NULL, shownotes = $2, shownotes_applied = $3, updated_at = now(), finished_at = now() WHERE id = $1`,
+        [j.id, notes ? JSON.stringify(notes) : null, fill]);
+      return r.dropped;
+    });
+    await pruneMedia(db, config, j.podcast_id, dropped, log);
+
     log?.(`auphonic: episode ${j.episode_id} processed`);
   } finally {
     for (const f of tmp) await rm(f, { force: true });

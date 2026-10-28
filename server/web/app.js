@@ -2168,7 +2168,12 @@ async function viewEpisode(p, canEdit, episodeId) {
 
   // ── Auphonic processing ──
   let processNew = false; // a new upload waiting to be sent
-  const processCb = h('input', { type: 'checkbox', checked: true, onchange: () => drawMode() });
+  const processCb = h('input', { type: 'checkbox', checked: true, onchange: () => { drawMode(); drawProcess(); } });
+  const procChapters = h('select', null,
+    h('option', { value: 'ours' }, 'From the chapter editor below'),
+    h('option', { value: 'auphonic' }, 'Let Auphonic create them'));
+  procChapters.value = auph?.settings?.chapters ?? 'ours';
+  const procNotes = h('input', { type: 'checkbox', checked: !!auph?.settings?.shownotes });
   const processBox = h('div', { class: 'process-box' });
   const willProcess = () => (processNew && processCb.checked) || (processing && ['starting', 'processing', 'importing'].includes(processing.status));
   function drawProcess() {
@@ -2177,12 +2182,40 @@ async function viewEpisode(p, canEdit, episodeId) {
     if (processNew) {
       parts.push(h('label', { class: 'check' }, processCb, h('span', null, `Process with Auphonic before publishing (preset: ${auph.settings.presetName})`,
         h('span', { class: 'hint' }, auph.settings.transcripts ? ' Transcripts are made too.' : ''))));
+      if (processCb.checked) {
+        parts.push(h('div', { class: 'process-options' },
+          h('div', { class: 'row' }, field('Chapters', procChapters, 'Auphonic’s chapters replace the ones in the editor.')),
+          h('label', { class: 'check' }, procNotes, 'Let Auphonic write show notes'),
+          h('p', { class: 'hint', style: 'margin-top:0' }, 'They fill an empty description. If you’ve written one, they’re offered here when processing finishes.')));
+      }
     }
     if (processing) {
       parts.push(h('p', { class: 'hint' },
         running ? h('span', { class: 'light warn' }, `Processing with Auphonic${processing.stage ? ` (${processing.stage})` : ''}…${processing.publishWhenDone ? ' It publishes when finished.' : ''}`)
           : processing.status === 'done' ? h('span', { class: 'light on' }, `Processed with Auphonic ${fmtDate(processing.finishedAt, true)}`)
             : h('span', { class: 'light bad' }, `Auphonic processing didn’t finish: ${processing.error}`)));
+    }
+    const notes = processing?.status === 'done' && processing.shownotes && !processing.shownotesApplied ? processing.shownotes : null;
+    if (notes && (notes.long || notes.brief)) {
+      const preview = h('div', { class: 'shownotes-preview' });
+      preview.innerHTML = notes.long ?? `<p>${notes.brief.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c])}</p>`;
+      parts.push(h('div', { class: 'shownotes-offer' },
+        h('b', null, 'Show notes from Auphonic'), preview,
+        canEdit ? h('div', { class: 'actions', style: 'margin-top:4px' }, h('button', {
+          type: 'button',
+          onclick: async () => {
+            if (dirty && !confirm('Replace the description with Auphonic’s show notes? Your other unsaved changes stay in the form.')) return;
+            try {
+              const r = await api('POST', `/api/podcasts/${p.id}/episodes/${ep.id}/process/use-shownotes`, {});
+              processing = r.processing;
+              desc.value = notes.long ?? notes.brief;
+              drawProcess();
+              toast('Description replaced with Auphonic’s show notes');
+            } catch (e) {
+              toast(e.message);
+            }
+          },
+        }, 'Use as the description')) : null));
     }
     if (!isNew && auphOn && !running && !processNew && (ep.enclosure || processing?.hasOriginal)) {
       parts.push(h('div', { class: 'actions', style: 'margin-top:4px' }, h('button', {
@@ -2513,7 +2546,7 @@ async function viewEpisode(p, canEdit, episodeId) {
           // Chapters are saved on their own, once the episode exists.
           if (chEd.dirty()) await chEd.save(e.id, { noMp3: !!sendIt });
           if (sendIt) {
-            await api('POST', `/api/podcasts/${p.id}/episodes/${e.id}/process`, { mediaId: enclosure.mediaId, publish: intent });
+            await api('POST', `/api/podcasts/${p.id}/episodes/${e.id}/process`, { mediaId: enclosure.mediaId, publish: intent, chapters: procChapters.value, shownotes: procNotes.checked });
             toast(intent ? 'Sent to Auphonic. It publishes when processing finishes.' : 'Sent to Auphonic');
           }
           dirty = false;
@@ -3548,7 +3581,7 @@ async function auphonicShowPanel(p, canEdit) {
   const draw = async () => {
     const a = await api('GET', `/api/podcasts/${p.id}/auphonic?presets=1`);
     const head = [h('h2', null, 'Auphonic processing'),
-      h('p', { class: 'muted' }, 'Run new uploads through Auphonic before they’re published: noise reduction and loudness come from your Auphonic preset, and PodSovereign sends the episode’s title, number, art and chapters. The processed MP3 (128 kbps stereo) and transcripts (SRT, VTT, TXT and JSON) come back into the episode. The original upload is kept, so you can reprocess.')];
+      h('p', { class: 'muted' }, 'Run new uploads through Auphonic before they’re published. Noise reduction, loudness and everything else come from your Auphonic preset; PodSovereign fills in the episode title, episode number (track), author (artist), podcast name (album), owner (publisher), the current year, the episode art and chapters. The processed MP3 (128 kbps stereo) and transcripts (SRT, VTT, TXT and JSON) come back into the episode. The original upload is kept, so you can reprocess.')];
     if (!a.configured) {
       panel.replaceChildren(...head, h('p', { class: 'hint' }, state.me.isAdmin ? ['Add your Auphonic API key in ', h('a', { href: '#/site' }, 'Site settings'), ' first.'] : 'An administrator adds the Auphonic API key in Site settings first.'));
       return;
@@ -3559,6 +3592,11 @@ async function auphonicShowPanel(p, canEdit) {
     if (a.settings.preset && !a.presets.some((x) => x.uuid === a.settings.preset)) preset.append(h('option', { value: a.settings.preset }, a.settings.presetName ?? a.settings.preset));
     preset.value = a.settings.preset ?? '';
     const transcripts = h('input', { type: 'checkbox', checked: a.settings.transcripts, disabled: !canEdit });
+    const chapters = h('select', { disabled: !canEdit },
+      h('option', { value: 'ours' }, 'From the episode’s chapter editor'),
+      h('option', { value: 'auphonic' }, 'Let Auphonic create them'));
+    chapters.value = a.settings.chapters;
+    const shownotes = h('input', { type: 'checkbox', checked: a.settings.shownotes, disabled: !canEdit });
     const err = formError();
     const form = h('form', {
       onsubmit: (ev) => {
@@ -3566,7 +3604,7 @@ async function auphonicShowPanel(p, canEdit) {
         err.hidden = true;
         busy(form, async () => {
           try {
-            await api('PUT', `/api/podcasts/${p.id}/auphonic`, { enabled: enabled.checked, preset: preset.value || null, transcripts: transcripts.checked });
+            await api('PUT', `/api/podcasts/${p.id}/auphonic`, { enabled: enabled.checked, preset: preset.value || null, transcripts: transcripts.checked, chapters: chapters.value, shownotes: shownotes.checked });
             toast('Auphonic settings saved');
           } catch (e) {
             showError(err, e);
@@ -3577,6 +3615,9 @@ async function auphonicShowPanel(p, canEdit) {
     h('label', { class: 'switch', style: 'margin:4px 0 12px' }, enabled, 'Process new uploads for this show'),
     h('div', { class: 'fields-grid' }, field('Preset', preset, 'Your presets in Auphonic. Episode details sent from here replace the preset’s own title, artist and so on.')),
     h('label', { class: 'check' }, transcripts, 'Make transcripts (uses Auphonic’s speech recognition)'),
+    h('div', { class: 'fields-grid', style: 'margin-top:12px' }, field('Chapters', chapters, 'The chapter editor holds chapters you type, import from a .txt or .json file, or read from the MP3. Auphonic’s are made from the speech.')),
+    h('label', { class: 'check' }, shownotes, 'Let Auphonic write show notes'),
+    h('p', { class: 'hint' }, 'Auphonic’s automatic chapters and show notes need a paid Auphonic plan and use its speech recognition. Its show notes fill an empty description; if the episode already has one, they wait in the editor for you to use or ignore. These are defaults: each upload can change them.'),
     a.error ? h('p', { class: 'warn-note' }, a.error) : null,
     err,
     canEdit ? h('div', { class: 'actions' }, h('button', { class: 'primary', type: 'submit' }, 'Save Auphonic settings')) : null);

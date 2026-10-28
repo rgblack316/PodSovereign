@@ -683,3 +683,10 @@ table.usage tr.usage-show td:first-child { padding-left: var(--s5); }
 .ch-tools button { padding: 4px 8px; font-size: var(--t-sm); }
 .offer { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; margin-bottom: var(--s3); }
 @media (max-width: 600px) { .chapter-row { grid-template-columns: 1fr; } .ch-line { flex-wrap: wrap; } .ch-line .ch-time { flex-basis: 100%; } }
+
+/* Auphonic: per-upload choices and generated show notes */
+.process-options { margin: var(--s2) 0 0 var(--s5); }
+.process-options .row { margin-bottom: var(--s2); }
+.shownotes-offer { border-left: 3px solid var(--fader); padding: var(--s2) var(--s3); margin-top: var(--s3); background: var(--console); border-radius: var(--r-sm); }
+.shownotes-preview { font-size: var(--t-sm); color: var(--ink-2); max-height: 12em; overflow: auto; margin: var(--s1) 0; }
+.shownotes-preview p { margin: 0 0 var(--s2); }
