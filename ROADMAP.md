@@ -52,6 +52,7 @@ PodSovereign doesn't stream today. Live shows point at an outside stream (Icecas
 - [ ] Publish a prebuilt app image on GitHub Container Registry, so installs and updates skip the local build (seconds instead of minutes)
 
 ## Recently completed
+- Processed files keep the upload's exact name (ru053.mp3, ru053.srt, …); new versions replace them in place and are cleared from Cloudflare's cache (Site settings → Cloudflare cache)
 - Auphonic processing per show: your preset plus the episode's details, 128 kbps stereo MP3, transcripts (SRT, VTT, JSON, TXT), chapters and show notes from Auphonic if wanted, publish when processing finishes, reprocess from the kept original
 - Chapter editor: JSON, Audacity labels or .txt import, chapters read from and written into MP3 ID3 tags, images and hidden markers
 - Old feed redirects re-checked weekly after the move, with a warning if one stops working; the status bar drops the redirect light once the move is settled

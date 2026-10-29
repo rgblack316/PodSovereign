@@ -8,6 +8,7 @@ import { speechLanguage, srtToVtt, srtToText, srtToJson, vttToSrt } from '../src
 import type { Db } from '../src/db/db.js';
 import { createApp } from '../src/http/app.js';
 import { startFakeAuphonic, type FakeAuphonic } from './support/fake-auphonic.js';
+import { startFakeCloudflare, type FakeCloudflare } from './support/fake-cloudflare.js';
 import { setupDb, tempDir, testConfig } from './support/env.js';
 import { mp3 } from './support/media-samples.js';
 
@@ -16,6 +17,9 @@ let server: http.Server;
 let base: string;
 let mediaDir: string;
 let fake: FakeAuphonic;
+let cf: FakeCloudflare;
+const ZONE = '0123456789abcdef0123456789abcdef';
+const CF_TOKEN = 'cf-token-abcdefghijklmnopqrstuvwxyz';
 let config: ReturnType<typeof testConfig>;
 let show: string;
 let episode: string;
@@ -54,10 +58,11 @@ before(async () => {
   db = await setupDb('podsovereign_auphonic_test');
   mediaDir = await tempDir('auphonic-media');
   fake = await startFakeAuphonic('auph-key-12345');
+  cf = await startFakeCloudflare({ zoneId: ZONE, token: CF_TOKEN, zone: 'mine.test' });
   fake.outputs.set('mp3', { body: PROCESSED, format: 'mp3', ending: 'mp3', filename: 'garden-talk-12-tomatoes.mp3' });
   fake.outputs.set('srt', { body: Buffer.from(SRT), format: 'subtitle', ending: 'srt', filename: 'garden-talk-12-tomatoes.srt' });
   fake.outputs.set('txt', { body: Buffer.from('Welcome to Garden Talk. Today: tomatoes.\n'), format: 'transcript', ending: 'txt', filename: 'garden-talk-12-tomatoes.txt' });
-  config = testConfig({ mediaDir, publicBaseUrl: 'http://feeds.mine.test', mediaBaseUrl: 'http://feeds.mine.test', auphonicUrl: fake.url });
+  config = testConfig({ mediaDir, publicBaseUrl: 'http://feeds.mine.test', mediaBaseUrl: 'http://feeds.mine.test', auphonicUrl: fake.url, cloudflareApiUrl: cf.url });
   server = http.createServer(createApp({ db, config }));
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -68,6 +73,7 @@ before(async () => {
 after(async () => {
   await new Promise<void>((r) => server.close(() => r()));
   await fake.close();
+  await cf.close();
   await db.close();
 });
 
@@ -173,6 +179,20 @@ test('Reprocess sends the kept original again, with the current metadata', async
   assert.equal((await req('GET', `/api/podcasts/${show}/episodes/${episode}`)).json.episode.inFeed, true, 'still up with the last good audio');
 });
 
+test('Cloudflare cache clearing: checked, saved, token never sent back', async () => {
+  assert.equal((await req('POST', '/api/admin/site/test-cloudflare', { zoneId: ZONE, token: 'wrong-token-abcdefghijklmnop' })).status, 424);
+  const t = await req('POST', '/api/admin/site/test-cloudflare', { zoneId: ZONE, token: CF_TOKEN });
+  assert.deepEqual(t.json, { ok: true, zone: 'mine.test', mediaHost: 'feeds.mine.test', coversMedia: true });
+  assert.equal((await req('PUT', '/api/admin/site', { cfZoneId: 'nope' })).status, 400);
+  const r = await req('PUT', '/api/admin/site', { cfZoneId: ZONE, cfApiToken: CF_TOKEN });
+  assert.equal(r.status, 200, r.text);
+  const site = (await req('GET', '/api/admin/site')).json;
+  assert.equal(site.settings?.cloudflare?.tokenSet ?? site.cloudflare?.tokenSet, true);
+  assert.doesNotMatch(JSON.stringify(site), new RegExp(CF_TOKEN));
+  const raw = (await db.query<{ cf_api_token: string }>(`SELECT cf_api_token FROM site_settings`)).rows[0]!.cf_api_token;
+  assert.match(raw, /^enc:v1:/, 'encrypted at rest');
+});
+
 test('Auphonic writes the chapters and show notes when asked; its show notes fill an empty description or wait to be used', async () => {
   // Per episode: Auphonic's chapters and show notes. The editor's chapters aren't sent and are replaced.
   let r = await req('POST', `/api/podcasts/${show}/episodes/${episode}/process`, { reprocess: true, chapters: 'auphonic', shownotes: true });
@@ -189,10 +209,19 @@ test('Auphonic writes the chapters and show notes when asked; its show notes fil
   const ch = (await req('GET', `/api/podcasts/${show}/episodes/${episode}/chapters`)).json.chapters;
   assert.deepEqual(ch.map((c: any) => c.title), ['Welcome', 'Pruning']);
   assert.deepEqual(ch.map((c: any) => c.startTime), [0, 120], 'sorted, and the first chapter moved to 00:00:00');
+  // The moved first chapter is written into the MP3 too (in the background).
+  await waitFor(async () => (await req('GET', `/api/podcasts/${show}/episodes/${episode}/chapters`)).json.mp3Write?.status === 'done');
   const again = (await req('GET', `/api/podcasts/${show}/episodes/${episode}`)).json.episode;
-  // gt012-2.mp3 from Auphonic, then gt012-3.mp3 once the moved first chapter is written into it: never gt012.mp3 again.
-  assert.match(again.enclosure.url, /\/audio\/gt012-[23]\.mp3$/, 'a reprocessed file gets a new address');
-  assert.ok(again.transcripts.some((t: any) => t.url.endsWith('/gt012-2.srt')));
+  const MEDIA = 'http://feeds.mine.test/garden-talk/media';
+  assert.equal(again.enclosure.url, `${MEDIA}/audio/gt012.mp3`, 'the exact name, replaced in place');
+  assert.deepEqual(again.transcripts.map((t: any) => t.url.split('/').pop()).sort(), ['gt012.json', 'gt012.srt', 'gt012.txt', 'gt012.vtt']);
+  const purged = cf.purges.flat();
+  for (const f of ['audio/gt012.mp3', 'transcripts/gt012.srt', 'transcripts/gt012.vtt', 'transcripts/gt012.txt', 'transcripts/gt012.json']) {
+    assert.ok(purged.includes(`${MEDIA}/${f}`), `${f} cleared from Cloudflare's cache`);
+  }
+  assert.ok(cf.purges.length >= 2, 'once for Auphonic\'s files, once after the chapters were written into the MP3');
+  const files = (await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM media_files WHERE public_path = '/garden-talk/media/audio/gt012.mp3'`)).rows[0]!.n;
+  assert.equal(files, 1, 'one record per address');
   let p = await processing();
   assert.equal(p.shownotesApplied, false, 'the episode already had show notes, so they wait');
   assert.equal(p.shownotes.long, '<p>Randy talks tomatoes.</p>\n<p>Then pruning &amp; staking.</p>');
@@ -215,6 +244,34 @@ test('Auphonic writes the chapters and show notes when asked; its show notes fil
   assert.equal(p.shownotesApplied, true);
   assert.equal((await req('GET', `/api/podcasts/${show}/episodes/${episode}`)).json.episode.description, '<p>Fresh notes.</p>');
   assert.deepEqual((await req('GET', `/api/podcasts/${show}/episodes/${episode}/chapters`)).json.chapters.map((c: any) => c.title), ['Welcome', 'Pruning']);
+});
+
+test('the exact name: refused when another episode has it; a kept original with that name is moved aside', async () => {
+  // Another episode whose upload is also gt012.mp3.
+  const dup = await upload('gt012.mp3', mp3(200));
+  const other = (await req('POST', `/api/podcasts/${show}/episodes`, { title: 'Copy', enclosure: { mediaId: dup.id }, status: 'draft' })).json.episode.id;
+  const r = await req('POST', `/api/podcasts/${show}/episodes/${other}/process`, {});
+  assert.equal(r.status, 409);
+  assert.match(r.json.error, /gt012\.mp3 is already used by the episode “Tomatoes/);
+  assert.equal(fake.productions.length, 4, 'nothing sent to Auphonic');
+
+  // An imported episode whose audio is already at the exact address /audio/imp7.mp3.
+  const up = await upload('imp7.mp3', mp3(250));
+  const exact = '/garden-talk/media/audio/imp7.mp3';
+  const { copyFile } = await import('node:fs/promises');
+  await copyFile(disk(up.url), path.join(mediaDir, exact));
+  await db.query(`UPDATE media_files SET public_path = $2, storage_key = $3, storage_path = $4 WHERE id = $1`, [up.id, exact, exact.slice(1), path.join(mediaDir, exact)]);
+  const imp = (await req('POST', `/api/podcasts/${show}/episodes`, { title: 'Imported', enclosure: { mediaId: up.id }, status: 'draft' })).json.episode.id;
+  assert.equal((await req('POST', `/api/podcasts/${show}/episodes/${imp}/process`, {})).status, 200);
+  fake.finish('prod5');
+  await fetch(`${base}/hooks/auphonic/${config.auphonicHookToken}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uuid: 'prod5' }) });
+  await waitFor(async () => (await req('GET', `/api/podcasts/${show}/episodes/${imp}/process`)).json.processing.status === 'done');
+  const ep = (await req('GET', `/api/podcasts/${show}/episodes/${imp}`)).json.episode;
+  assert.equal(ep.enclosure.url, `http://feeds.mine.test${exact}`);
+  assert.ok((await readFile(path.join(mediaDir, exact))).equals(PROCESSED), 'the processed audio at the exact name');
+  const kept = (await db.query<{ public_path: string }>(`SELECT public_path FROM media_files WHERE id = $1`, [up.id])).rows[0]!;
+  assert.match(kept.public_path, /\/audio\/[0-9a-f]{8}-imp7\.mp3$/, 'the original moved aside, same record');
+  assert.ok((await readFile(path.join(mediaDir, kept.public_path))).equals(mp3(250)), 'the original audio kept for reprocessing');
 });
 
 test('SRT to Podcasting 2.0 JSON', () => {

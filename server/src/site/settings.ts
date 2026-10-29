@@ -40,6 +40,10 @@ interface Row {
   op3_token: string | null;
   auphonic_key: string | null;
   auphonic_hook_token: string | null;
+  cf_zone_id: string | null;
+  cf_api_token: string | null;
+  cf_purge_at: Date | null;
+  cf_purge_error: string | null;
   updated_at: Date;
 }
 
@@ -96,6 +100,8 @@ export function applyRow(config: Config, row: Row): void {
   config.op3Token = unseal(row.op3_token, 'the OP3 API token');
   config.auphonicKey = unseal(row.auphonic_key, 'the Auphonic API key');
   config.auphonicHookToken = row.auphonic_hook_token;
+  config.cfZoneId = row.cf_zone_id;
+  config.cfApiToken = unseal(row.cf_api_token, 'the Cloudflare API token');
   config.siteVersion = new Date(row.updated_at).getTime();
 }
 
@@ -130,6 +136,7 @@ export async function siteSettingsView(db: Db, config: Config) {
     },
     op3: { tokenSet: !!config.op3Token },
     auphonic: { keySet: !!config.auphonicKey },
+    cloudflare: { zoneId: row.cf_zone_id ?? '', tokenSet: !!row.cf_api_token, lastClearedAt: row.cf_purge_at, lastError: row.cf_purge_error },
     hasLogo: !!row.logo_file,
     hasFavicon: !!row.favicon_file,
     previousHosts: config.previousHosts,
@@ -170,6 +177,9 @@ export interface SettingsInput {
   op3Token?: unknown;
   /** Auphonic API key; '' or null removes it. */
   auphonicKey?: unknown;
+  /** Cloudflare zone ID and API token (cache clearing); '' or null removes them. */
+  cfZoneId?: unknown;
+  cfApiToken?: unknown;
 }
 
 export interface SaveResult {
@@ -256,6 +266,16 @@ export async function saveSiteSettings(db: Db, config: Config, input: SettingsIn
     // The callback address's secret, made once.
     const row = await getRow(db);
     if (t && !row.auphonic_hook_token) set('auphonic_hook_token', randomBytes(24).toString('hex'));
+  }
+  if (input.cfZoneId !== undefined) {
+    const t = typeof input.cfZoneId === 'string' ? input.cfZoneId.trim() : '';
+    if (t && !/^[0-9a-f]{32}$/i.test(t)) throw new SettingsError('That doesn’t look like a Cloudflare zone ID (32 letters and numbers, on the domain’s Overview page)');
+    set('cf_zone_id', t || null);
+  }
+  if (input.cfApiToken !== undefined) {
+    const t = typeof input.cfApiToken === 'string' ? input.cfApiToken.trim() : '';
+    if (t && !/^[A-Za-z0-9._-]{20,200}$/.test(t)) throw new SettingsError('That doesn’t look like a Cloudflare API token');
+    set('cf_api_token', seal(t || null));
   }
   if (!sets.length) return { addressChanged: false, rewrittenShows: 0 };
 

@@ -3992,6 +3992,7 @@ async function viewSite() {
     backupsPanel(backups),
     op3Panel(s),
     auphonicSitePanel(s),
+    cloudflarePanel(s),
     h('section', { class: 'panel' },
       h('h2', null, 'Sign-ups'),
       h('label', { class: 'switch', style: 'margin-top:12px' }, reg, 'Anyone can create an account'),
@@ -4344,6 +4345,77 @@ function auphonicSitePanel(s) {
     h('p', { class: 'hint', style: 'margin-bottom:12px' }, s.auphonic.keySet
       ? h('span', { class: 'light on' }, 'Key saved')
       : ['Find your API key in your Auphonic account settings (', h('a', { href: 'https://auphonic.com/accounts/settings/#api-key', target: '_blank', rel: 'noopener' }, 'auphonic.com'), ').']),
+    form);
+}
+
+// ───────────── Cloudflare cache clearing ─────────────
+
+function cloudflarePanel(s) {
+  const c = s.cloudflare;
+  const err = formError();
+  const msg = h('p', { class: 'hint', role: 'status' });
+  const zone = h('input', { type: 'text', autocomplete: 'off', spellcheck: false, value: c.zoneId, placeholder: '32 letters and numbers', maxlength: 32 });
+  const token = h('input', { type: 'password', autocomplete: 'off', placeholder: c.tokenSet ? 'Saved. Leave blank to keep it.' : 'API token with Cache Purge permission' });
+  const result = (t) => `Connected to ${t.zone}.${t.coversMedia ? '' : ` Your media address (${t.mediaHost}) isn’t in this domain, so its files can’t be cleared with it.`}`;
+  const form = h('form', {
+    onsubmit: (ev) => {
+      ev.preventDefault();
+      err.hidden = true;
+      if (!zone.value.trim() || (!token.value.trim() && !c.tokenSet)) return showError(err, 'Enter the zone ID and API token');
+      busy(form, async () => {
+        try {
+          const t = await api('POST', '/api/admin/site/test-cloudflare', { zoneId: zone.value, token: token.value });
+          await api('PUT', '/api/admin/site', { cfZoneId: zone.value, ...(token.value.trim() ? { cfApiToken: token.value } : {}) });
+          toast('Cloudflare cache clearing saved');
+          msg.className = t.coversMedia ? 'hint' : 'error';
+          msg.textContent = result(t);
+          render();
+        } catch (e) {
+          showError(err, e);
+        }
+      });
+    },
+  },
+  h('div', { class: 'fields-grid' },
+    field('Zone ID', zone, 'On the Overview page of the domain your media is served from, in the Cloudflare dashboard.'),
+    field('API token', token, 'Create one under My Profile → API Tokens with the permission Zone → Cache Purge → Purge, for that domain.')),
+  err,
+  h('div', { class: 'actions' },
+    h('button', { class: 'primary', type: 'submit' }, 'Check and save'),
+    c.tokenSet ? h('button', {
+      type: 'button',
+      onclick: async () => {
+        msg.className = 'hint';
+        msg.textContent = 'Checking…';
+        try {
+          const t = await api('POST', '/api/admin/site/test-cloudflare', {});
+          msg.className = t.coversMedia ? 'hint' : 'error';
+          msg.textContent = result(t);
+        } catch (e) {
+          msg.className = 'error';
+          msg.textContent = e.message;
+        }
+      },
+    }, 'Check saved settings') : null,
+    c.tokenSet ? h('button', {
+      type: 'button',
+      class: 'quiet',
+      onclick: async () => {
+        if (!confirm('Stop clearing replaced files from Cloudflare’s cache?')) return;
+        await api('PUT', '/api/admin/site', { cfZoneId: null, cfApiToken: null });
+        toast('Cloudflare cache clearing removed');
+        render();
+      },
+    }, 'Remove') : null),
+  msg);
+  return h('section', { class: 'panel' },
+    h('h2', null, 'Cloudflare cache'),
+    h('p', { class: 'muted' }, 'Processed audio and transcripts keep the upload’s exact name (ru053.mp3). When a new version replaces one, for example after Reprocess or writing chapters into the MP3, this clears the old copy from Cloudflare’s cache so listeners get the new file.'),
+    h('p', { class: 'hint', style: 'margin-bottom:12px' },
+      !c.tokenSet ? 'Not set up: a replaced file can keep playing the old version until Cloudflare’s cache expires.'
+        : c.lastError ? h('span', { class: 'light bad' }, `Last clearing failed ${fmtDate(c.lastClearedAt, true)}: ${c.lastError}`)
+          : c.lastClearedAt ? h('span', { class: 'light on' }, `Set up. Last cleared ${fmtDate(c.lastClearedAt, true)}.`)
+            : h('span', { class: 'light on' }, 'Set up. Nothing replaced yet.')),
     form);
 }
 

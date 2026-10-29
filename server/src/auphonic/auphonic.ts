@@ -18,7 +18,8 @@ import type { Config } from '../config.js';
 import { maybeOne, one, type Db, type Queryable } from '../db/db.js';
 import { probeFile } from '../media/probe.js';
 import { pruneMedia } from '../media/prune.js';
-import { freeMediaName, mediaStem } from '../media/naming.js';
+import { purgeMedia } from '../cdn/purge.js';
+import { checkNameFree, mediaStem, NameTakenError, storeExact } from '../media/naming.js';
 import { getChapters, saveChapters, startMp3ChapterWrite } from '../publish/chapters.js';
 import { updateEpisode } from '../publish/episodes.js';
 import { activeStore } from '../storage/store.js';
@@ -317,6 +318,15 @@ export async function startProcessing(db: Db, config: Config, podcastId: string,
     if (!m || m.kind !== 'audio') throw new AuphonicError('That audio file wasn’t found. Upload it again.');
     input = { id: m.id, url: config.mediaBaseUrl + m.public_path };
   } else input = await inputMedia(db, config, podcastId, e, !!opts.reprocess);
+  // The processed file takes the upload's exact name: make sure no other episode has a file by that name.
+  const { slug } = await one<{ slug: string }>(db, `SELECT slug FROM podcasts WHERE id = $1`, [podcastId]);
+  const stem = await baseName(db, input.id, `${slug}${e.itunes_episode ? `-${e.itunes_episode}` : ''}`);
+  try {
+    await checkNameFree(db, podcastId, episodeId, slug, 'audio', `${stem}.mp3`);
+  } catch (err) {
+    if (err instanceof NameTakenError) throw new AuphonicError(err.message, 409);
+    throw err;
+  }
   const ai = await aiOptions(db, podcastId, opts.ai);
   const job = await one<{ id: string }>(
     db,
@@ -426,22 +436,17 @@ const sha256Of = (file: string) => new Promise<string>((resolve, reject) => {
   createReadStream(file).on('data', (d) => h.update(d)).on('end', () => resolve(h.digest('hex'))).on('error', reject);
 });
 
-/** Store a downloaded file as one of the show's files; returns its media id. */
-async function storeFile(db: Db, config: Config, podcastId: string, slug: string, file: string, kind: 'audio' | 'transcript', dir: string, name: string, mime: string): Promise<string> {
-  const size = (await stat(file)).size;
-  const sha = await sha256Of(file);
+/**
+ * Store a downloaded or made file at exactly <dir>/<name> (replacing the episode's earlier version in place);
+ * returns its media id. Replaced addresses are collected so they can be cleared from the CDN.
+ */
+async function storeFile(db: Db, config: Config, j: Job, slug: string, file: string, kind: 'audio' | 'transcript', dir: string, name: string, mime: string, replaced: string[]): Promise<string> {
   const info = kind === 'audio' ? await probeFile(file, mime) : {};
-  const publicPath = mediaPath(slug, dir, name);
-  const key = publicPath.slice(1);
-  const store = activeStore(config);
-  const { storagePath } = await store.putFile(key, file, { size, contentType: mime, sha256: sha });
-  const m = await one<{ id: string }>(
-    db,
-    `INSERT INTO media_files (podcast_id, kind, storage_path, public_path, mime_type, bytes, sha256, status, storage_key, storage_provider, duration, original_name)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'done', $8, $9, $10, $11) RETURNING id`,
-    [podcastId, kind, storagePath, publicPath, mime, size, sha, key, store.id, info.duration ?? null, name],
-  );
-  return m.id;
+  const r = await storeExact(db, config, {
+    podcastId: j.podcast_id, episodeId: j.episode_id, slug, dir, name, file, kind, mime, duration: info.duration ?? null, keep: j.original_media_id,
+  });
+  if (r.replaced) replaced.push(r.publicPath);
+  return r.id;
 }
 
 function srtCues(srt: string): { startTime: number; endTime: number; body: string }[] {
@@ -505,8 +510,8 @@ async function importResults(db: Db, config: Config, j: Job, p: Production, log?
     // Named after the upload ("ru053.mp3" stays "ru053.mp3"); "-2" and so on when that address is taken (a reprocess),
     // so a new version never reuses an address that CDNs and apps have cached.
     const stem = await baseName(db, j.original_media_id, (mp3.filename ?? 'episode').replace(/\.mp3$/i, '').replace(/[^\w.-]+/g, '-'));
-    const name = (dir: string, ext: string) => freeMediaName(db, slug, dir, stem, ext);
-    const audioId = await storeFile(db, config, j.podcast_id, slug, await fetchTo(mp3), 'audio', 'audio', await name('audio', 'mp3'), 'audio/mpeg');
+    const replaced: string[] = [];
+    const audioId = await storeFile(db, config, j, slug, await fetchTo(mp3), 'audio', 'audio', `${stem}.mp3`, 'audio/mpeg', replaced);
     const transcripts: Record<string, unknown>[] = [];
     let srtText: string | null = null;
     const made = async (ext: string, content: string) => {
@@ -523,19 +528,19 @@ async function importResults(db: Db, config: Config, j: Job, p: Production, log?
       if (!srtCues(srtText).length) srtText = null;
     }
     if (srtFile && srtText) {
-      transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, srtFile, 'transcript', 'transcripts', await name('transcripts', 'srt'), 'application/x-subrip'), type: 'application/x-subrip', rel: 'captions' });
+      transcripts.push({ mediaId: await storeFile(db, config, j, slug, srtFile, 'transcript', 'transcripts', `${stem}.srt`, 'application/x-subrip', replaced), type: 'application/x-subrip', rel: 'captions' });
     }
     const vttFile = vttFetched ?? (srtText ? await made('vtt', srtToVtt(srtText)) : null);
     if (vttFile) {
-      transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, vttFile, 'transcript', 'transcripts', await name('transcripts', 'vtt'), 'text/vtt'), type: 'text/vtt', rel: 'captions' });
+      transcripts.push({ mediaId: await storeFile(db, config, j, slug, vttFile, 'transcript', 'transcripts', `${stem}.vtt`, 'text/vtt', replaced), type: 'text/vtt', rel: 'captions' });
     }
     if (srtText) {
       const jf = await made('json', srtToJson(srtText));
-      transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, jf, 'transcript', 'transcripts', await name('transcripts', 'json'), 'application/json'), type: 'application/json' });
+      transcripts.push({ mediaId: await storeFile(db, config, j, slug, jf, 'transcript', 'transcripts', `${stem}.json`, 'application/json', replaced), type: 'application/json' });
     }
     const txtFile = !wantTranscripts ? null : txt ? await fetchTo(txt) : srtText ? await made('txt', srtToText(srtText)) : null;
     if (txtFile) {
-      transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, txtFile, 'transcript', 'transcripts', await name('transcripts', 'txt'), 'text/plain'), type: 'text/plain' });
+      transcripts.push({ mediaId: await storeFile(db, config, j, slug, txtFile, 'transcript', 'transcripts', `${stem}.txt`, 'text/plain', replaced), type: 'text/plain' });
     }
     for (const t of transcripts) t.language = language ?? null;
 
@@ -574,6 +579,7 @@ async function importResults(db: Db, config: Config, j: Job, p: Production, log?
       return r.dropped;
     });
     await pruneMedia(db, config, j.podcast_id, dropped, log);
+    await purgeMedia(db, config, replaced, log);
     if (fixMp3Chapters) startMp3ChapterWrite(db, config, j.podcast_id, j.episode_id, log);
 
     log?.(`auphonic: episode ${j.episode_id} processed`);

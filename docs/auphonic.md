@@ -32,11 +32,16 @@ sends the episode's metadata and chapters, and brings back the processed MP3 and
 6. **Reprocess** sends the kept original again with the current metadata (uses Auphonic credits).
 
 ## File names
-Files made from an episode's audio are named after the upload: `ru053.mp3` is sent with
-`output_basename: "ru053"` and comes back as `ru053.mp3`, `ru053.srt`, `ru053.vtt`, `ru053.txt` and `ru053.json`.
-A later version (Reprocess, or the MP3 rewritten with chapters) becomes `ru053-2.mp3`, `ru053-3.mp3` and so on.
-Names are never reused, even after the old file is cleaned up, because CDNs and podcast apps may have the old
-file cached at that address (`used_media_names`). The raw upload itself keeps its 8-character prefix.
+Files made from an episode's audio keep the upload's exact name: `ru053.mp3` is sent with
+`output_basename: "ru053"` and stored as `ru053.mp3`, with `ru053.srt`, `ru053.vtt`, `ru053.txt` and `ru053.json`.
+A later version (Reprocess, or chapters written into the MP3) replaces the file at the same address, and the
+old copy is cleared from Cloudflare's cache (Site settings → Cloudflare cache: zone ID plus an API token with
+Zone → Cache Purge). Listeners who already downloaded the old file keep their copy.
+- If another episode (or the show) already uses a file by that name, processing is refused before anything is
+  sent to Auphonic: each episode needs its own file name.
+- An imported episode whose own audio already has that exact name: the original is moved to a prefixed
+  address first (kept for reprocessing), then the processed file takes the name.
+- The raw upload itself keeps its 8-character prefix; it's only the input kept for reprocessing.
 
 ## Metadata sent
 Only these fields are sent. Everything else (genre, summary, URL, license, …) comes from the preset.

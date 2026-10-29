@@ -30,6 +30,7 @@ import { feedPath, mediaPrefix } from '../urls.js';
 import { checkRedirect, saveRedirectResult } from './redirect-check.js';
 import { addMember, deleteUser, listTeam, removeMember, setAdmin, setRole, TeamError } from '../db/team.js';
 import { serveStatic } from './static.js';
+import { CdnError, testCloudflare } from '../cdn/purge.js';
 import { appendChunk, cancelUpload, completeUpload, getMedia, startUpload, UploadError, uploadStatus } from '../media/uploads.js';
 import { isReferenced, ownMediaPaths, pruneMedia } from '../media/prune.js';
 import { createEpisode, deleteEpisode, getEpisode, listEpisodes, updateEpisode } from '../publish/episodes.js';
@@ -545,6 +546,19 @@ export function createApp(deps: AppDeps) {
     const key = typeof body.key === 'string' && body.key.trim() ? body.key.trim() : config.auphonicKey;
     if (!key) throw new HttpError(400, 'Enter the Auphonic API key first');
     sendJson(ctx.res, 200, { ok: true, account: await testAuphonicKey(config, key) });
+  });
+
+  /** Check a Cloudflare zone ID and API token (the form's values, else the saved ones). */
+  router.post('/api/admin/site/test-cloudflare', async (ctx) => {
+    await requireAdmin(ctx);
+    const body = await readJson(ctx.req);
+    const zoneId = typeof body.zoneId === 'string' && body.zoneId.trim() ? body.zoneId.trim() : config.cfZoneId;
+    const token = typeof body.token === 'string' && body.token.trim() ? body.token.trim() : config.cfApiToken;
+    if (!zoneId || !token) throw new HttpError(400, 'Enter the zone ID and API token first');
+    const zone = await testCloudflare(config, zoneId, token);
+    const mediaHost = new URL(config.mediaBaseUrl).hostname;
+    const covers = mediaHost === zone || mediaHost.endsWith(`.${zone}`);
+    sendJson(ctx.res, 200, { ok: true, zone, mediaHost, coversMedia: covers });
   });
 
   /** Auphonic's callback when a production finishes (outside /api: no cookies, a secret in the address). */
@@ -1243,6 +1257,7 @@ export function createApp(deps: AppDeps) {
         return fail(e.status, { error: e.message });
       }
       if (e instanceof SiteBuildError) return fail(e.status, { error: e.message });
+      if (e instanceof CdnError) return fail(e.status, { error: e.message });
       if (e instanceof Op3Error) return fail(e.status, { error: e.message, code: e.code ?? null });
       if (e instanceof UploadError) return fail(e.status, { error: e.message, ...e.extra });
       if (e instanceof ImportError || e instanceof PrefixError || e instanceof SettingsError || e instanceof StorageConfigError || e instanceof MoveError) {

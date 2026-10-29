@@ -15,7 +15,8 @@ import type { Config } from '../config.js';
 import { maybeOne, one, type Db, type Queryable } from '../db/db.js';
 import { readId3Chapters, writeId3Chapters, type Id3Chapter } from '../media/id3.js';
 import { pruneMedia } from '../media/prune.js';
-import { freeMediaName, mediaStem } from '../media/naming.js';
+import { purgeMedia } from '../cdn/purge.js';
+import { mediaStem, storeExact } from '../media/naming.js';
 import { getMedia } from '../media/uploads.js';
 import { activeStore, localPath, storeFor } from '../storage/store.js';
 import { mediaPath } from '../urls.js';
@@ -361,28 +362,21 @@ export async function writeMp3Chapters(db: Db, config: Config, podcastId: string
     src = await localCopy(config, audio);
     await mkdir(staging(config), { recursive: true });
     await writeId3Chapters(src.file, out, withImages, e.itunes_duration ?? audio.duration);
-    const size = (await stat(out)).size;
-    const sha256 = await new Promise<string>((resolve, reject) => {
-      const h = createHash('sha256');
-      createReadStream(out).on('data', (d) => h.update(d)).on('end', () => resolve(h.digest('hex'))).on('error', reject);
-    });
     const { slug } = await one<{ slug: string }>(db, `SELECT slug FROM podcasts WHERE id = $1`, [podcastId]);
-    const publicPath = mediaPath(slug, 'audio', await freeMediaName(db, slug, 'audio', mediaStem(audio) || 'episode', 'mp3'));
-    const key = publicPath.slice(1);
-    const store = activeStore(config);
-    const { storagePath } = await store.putFile(key, out, { size, contentType: 'audio/mpeg', sha256 });
+    // Same name as the upload ("ru053.mp3"), replacing the file in place when it's already there.
+    const kept = await maybeOne<{ original_media_id: string | null }>(
+      db, `SELECT original_media_id FROM auphonic_jobs WHERE episode_id = $1 ORDER BY created_at DESC LIMIT 1`, [episodeId]);
+    const stored = await storeExact(db, config, {
+      podcastId, episodeId, slug, dir: 'audio', name: `${mediaStem(audio) || 'episode'}.mp3`, file: out,
+      kind: 'audio', mime: 'audio/mpeg', duration: audio.duration, keep: kept?.original_media_id ?? null,
+    });
     const dropped = await db.tx(async (q) => {
-      const m = await one<{ id: string }>(
-        q,
-        `INSERT INTO media_files (podcast_id, kind, storage_path, public_path, mime_type, bytes, sha256, status, storage_key, storage_provider, duration, original_name)
-         VALUES ($1, 'audio', $2, $3, 'audio/mpeg', $4, $5, 'done', $6, $7, $8, $9) RETURNING id`,
-        [podcastId, storagePath, publicPath, size, sha256, key, store.id, audio.duration, audio.original_name],
-      );
-      const r = await updateEpisode(q, config, podcastId, episodeId, { enclosure: { mediaId: m.id } });
+      const r = await updateEpisode(q, config, podcastId, episodeId, { enclosure: { mediaId: stored.id } });
       await q.query(`UPDATE episodes SET id3_status = 'done', id3_error = NULL, id3_at = now() WHERE id = $1`, [episodeId]);
       return r.dropped;
     });
     await pruneMedia(db, config, podcastId, dropped, log);
+    if (stored.replaced) await purgeMedia(db, config, [stored.publicPath], log);
     log?.(`chapters written into the MP3 for episode ${episodeId} (${withImages.length})`);
   } catch (err) {
     await db.query(`UPDATE episodes SET id3_status = 'failed', id3_error = $2, id3_at = now() WHERE id = $1`, [episodeId, (err as Error).message]).catch(() => {});

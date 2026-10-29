@@ -53,6 +53,11 @@ export interface Config {
   auphonicHookToken: string | null;
   /** Auphonic's address (overridable for tests). */
   auphonicUrl: string;
+  /** Cloudflare zone and API token for clearing replaced files from its cache (Site settings). */
+  cfZoneId: string | null;
+  cfApiToken: string | null;
+  /** Cloudflare's API address (overridable for tests). */
+  cloudflareApiUrl: string;
   /** Key that encrypts saved secrets: SECRET_KEY, else this file (created on first start). */
   secretKeyFile: string;
   /** OpenStreetMap place search used by the Location lookup. */
@@ -107,6 +112,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     auphonicKey: null,
     auphonicHookToken: null,
     auphonicUrl: env.AUPHONIC_URL ?? 'https://auphonic.com',
+    cfZoneId: null,
+    cfApiToken: null,
+    cloudflareApiUrl: env.CLOUDFLARE_API_URL ?? 'https://api.cloudflare.com/client/v4',
     secretKeyFile: env.SECRET_KEY_FILE ?? path.join(path.dirname(env.MEDIA_DIR ?? '/var/lib/podsovereign/media'), 'secret.key'),
     nominatimUrl: env.NOMINATIM_URL ?? 'https://nominatim.openstreetmap.org/',
     previousHosts: [],

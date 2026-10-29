@@ -37,6 +37,7 @@ Admins can change these from the dashboard. Saved values override the environmen
 | Web address | The public address, e.g. `https://podcasts.johnscreekstudios.com`. Must be a bare address (no path) |
 | Media address | Optional. Episode files are served from here instead (a CDN in front of this server). With a storage provider, its public address is used |
 | Sign-ups | Whether anyone can create an account |
+| Cloudflare cache | Zone ID and API token (Zone → Cache Purge, encrypted). When a processed file is replaced at the same name (ru053.mp3), its old copy is cleared from Cloudflare's cache |
 
 ## Ownership verification
 
@@ -141,6 +142,7 @@ Migrations run automatically on startup. The **first account registered becomes 
 | `PODPING_HUB_URL` | `https://hub.podcastindex.org/pubnotify` | The Podcast Index hub endpoint |
 | `PODPING_DELAY_SEC` | `30` | Wait before sending, so a burst of edits becomes one ping |
 | `AUPHONIC_URL` | `https://auphonic.com` | Auphonic API address (only changed for testing) |
+| `CLOUDFLARE_API_URL` | `https://api.cloudflare.com/client/v4` | Cloudflare API address (only changed for testing) |
 
 ### Public URLs
 
@@ -168,6 +170,7 @@ Optional. New uploads can go through [Auphonic](https://auphonic.com) before the
 
 - **Setup:** an admin adds the Auphonic API key under **Site settings → Auphonic** (encrypted in the database). Each show turns it on under **Settings → Auphonic** and picks one of the account's presets. Defaults for transcripts, chapters (chapter editor or Auphonic) and Auphonic-written show notes are set there too; each upload can change the chapters and show-notes choices.
 - **What's sent:** the preset, plus title, episode number (track), author (artist), podcast name (album), owner (publisher), the current year, episode artwork and chapters. Everything else comes from the preset.
+- **File names:** processed files keep the upload's exact name (`ru053.mp3`, `ru053.srt`, …). A new version replaces the file at the same address and is cleared from Cloudflare's cache when that's set up in Site settings. Two episodes can't share a file name.
 - **What comes back:** a 128 kbps stereo MP3 (it replaces the upload; the original is kept for **Reprocess**), SRT, VTT and TXT transcripts plus a Podcasting 2.0 JSON transcript, and, if chosen, Auphonic's chapters and show notes. Show notes fill an empty description; otherwise the editor offers them with **Use as the description**.
 - **Publishing waits:** an episode set to Publish or Schedule stays a draft until processing finishes, then goes live by itself.
 - **Your server must be reachable:** Auphonic fetches the upload from the media address and reports back to `<web address>/hooks/auphonic/<token>`. If that callback can't arrive, the server checks running jobs every minute instead.
@@ -288,7 +291,7 @@ All `/api` calls use a session cookie. Requests that change something must send 
 | GET · PUT | `/api/podcasts/:id/podping` (status · show switch) | viewer+ · editor+ |
 | GET · PUT | `/api/podcasts/:id/auphonic` (show settings; `?presets=1` lists the account's presets) | viewer+ · editor+ |
 | GET · POST | `/api/podcasts/:id/episodes/:episodeId/process` `{mediaId?, reprocess?, publish?, chapters?, shownotes?}` · POST `/process/use-shownotes` | viewer+ · editor+ |
-| POST | `/api/admin/site/test-auphonic` | admin |
+| POST | `/api/admin/site/test-auphonic` · `/api/admin/site/test-cloudflare` `{zoneId?, token?}` | admin |
 | POST | `/hooks/auphonic/:token` (Auphonic's callback) | Auphonic |
 | GET · POST | `/api/podcasts/:id/live` (list · create) | viewer+ · editor+ |
 | PATCH · DELETE | `/api/podcasts/:id/live/:liveId` | editor+ |

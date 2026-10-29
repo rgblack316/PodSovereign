@@ -93,7 +93,7 @@ export function unseal(stored: string | null | undefined, what = 'a saved secret
 export const sealState = <T extends { secret: string | null }>(s: T): T => ({ ...s, secret: seal(s.secret) });
 export const unsealState = <T extends { secret: string | null }>(s: T, what?: string): T => ({ ...s, secret: unseal(s.secret, what) });
 
-const SITE_COLUMNS = ['storage_secret', 'smtp_password', 'resend_api_key', 'backup_storage_secret', 'backup_passphrase', 'op3_token', 'auphonic_key'] as const;
+const SITE_COLUMNS = ['storage_secret', 'smtp_password', 'resend_api_key', 'backup_storage_secret', 'backup_passphrase', 'op3_token', 'auphonic_key', 'cf_api_token'] as const;
 
 /**
  * At startup: encrypt anything saved before encryption existed, and drop the
