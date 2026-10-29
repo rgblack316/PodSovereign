@@ -440,7 +440,13 @@ export const HISTORY_DAYS = 366;
 /** Before OP3 existed, so reading from here gets a show's whole OP3 history. */
 export const OP3_EPOCH = new Date('2021-01-01T00:00:00Z');
 /** The whole history is re-read this often, to pick up OP3's later corrections (bots found later, say). */
-const REREAD_EVERY_MS = 30 * DAY_MS;
+const REREAD_EVERY_MS = 7 * DAY_MS;
+/**
+ * Every sync also re-reads this many days back, not just from where the last one stopped: OP3 can add
+ * records to a day after it was read (late log processing), and without this a show's total stays
+ * a little low until the next full re-read.
+ */
+export const TRAILING_DAYS = 14;
 /** One sync stops after this long and carries on at the next run (a show's history can be large). */
 const SYNC_MAX_MS = 10 * 60_000;
 const syncing = new Set<string>();
@@ -555,7 +561,7 @@ async function readRecords(db: Db, config: Config, a: {
  * Bring the saved daily counts up to date: first from where the last sync
  * left off up to now (the very first sync reads the last HISTORY_DAYS), then
  * older history ("backfill") back to the start of OP3, with whatever time is
- * left. Every month or so the whole history is re-read. Saved as it goes, so
+ * left. Every week or so the whole history is re-read. Saved as it goes, so
  * a timeout loses one page, not the whole run.
  */
 export async function syncOp3Daily(db: Db, config: Config, podcastId: string, opts: { now?: Date; maxPages?: number; pageSize?: number; maxMs?: number; showUuid?: string } = {}): Promise<void> {
@@ -573,7 +579,9 @@ export async function syncOp3Daily(db: Db, config: Config, podcastId: string, op
 
     // 1. Recent: up to now.
     const firstSync = !row.op3_synced_until;
-    const forwardStart = row.op3_synced_until ? new Date(row.op3_synced_until) : utcDay(now.getTime() - HISTORY_DAYS * DAY_MS);
+    const forwardStart = row.op3_synced_until
+      ? new Date(Math.min(new Date(row.op3_synced_until).getTime(), utcDay(now.getTime() - TRAILING_DAYS * DAY_MS).getTime()))
+      : utcDay(now.getTime() - HISTORY_DAYS * DAY_MS);
     const forwardDone = await readRecords(db, config, {
       token, showUuid, podcastId, start: forwardStart, end: now, pageSize, budget,
       save: async (q, until, complete) => {
@@ -589,7 +597,7 @@ export async function syncOp3Daily(db: Db, config: Config, podcastId: string, op
     });
     if (!forwardDone) return;
 
-    // 2. Older history, and the monthly re-read of all of it.
+    // 2. Older history, and the weekly re-read of all of it.
     let b = (await maybeOne<{ s: Date | null; e: Date | null; h: Date | null; u: Date }>(
       db, `SELECT op3_backfill_until AS s, op3_backfill_end AS e, op3_history_at AS h, op3_synced_until AS u FROM podcasts WHERE id = $1`, [podcastId],
     ))!;

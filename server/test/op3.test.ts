@@ -231,13 +231,23 @@ test('daily downloads and countries: saved page by page, resumed after a failure
   assert.equal(a.allTime, all - 2);
   assert.equal(a.historyComplete, true);
 
-  // New downloads arrive; the next sync re-reads only from the last day it had.
+  // New downloads arrive; the next sync re-reads from the last two weeks (OP3 can add records to recent days late).
   fake.downloads.push({ time: '2026-10-21T16:00:00.000Z', countryCode: 'CA' }, { time: '2026-10-22T09:00:00.000Z', countryCode: 'CA' });
   fake.requests.length = 0;
   await syncOp3Daily(db, cfg(), show, { now: new Date('2026-10-22T12:00:00Z'), pageSize: 100 });
-  assert.ok(fake.requests.filter((q) => q.path.startsWith('/api/1/downloads')).every((q) => q.path.includes('start=2026-10-21T00%3A00%3A00.000Z') || q.path.includes('startAfter')));
-  const c = (await db.query<{ n: number }>(`SELECT sum(downloads)::int AS n FROM op3_daily WHERE podcast_id = $1 AND country = 'CA'`, [show])).rows[0]!.n;
-  assert.equal(c, 2, 'no double counting of the re-read day');
+  assert.ok(fake.requests.filter((q) => q.path.startsWith('/api/1/downloads')).every((q) => q.path.includes('start=2026-10-08T00%3A00%3A00.000Z') || q.path.includes('startAfter')));
+  const ca = async () => (await db.query<{ n: number }>(`SELECT coalesce(sum(downloads), 0)::int AS n FROM op3_daily WHERE podcast_id = $1 AND country = 'CA'`, [show])).rows[0]!.n;
+  assert.equal(await ca(), 2, 'no double counting of the re-read days');
+
+  // OP3 adds a record to a day that was already read: a recent one is picked up by the next sync,
+  // an older one waits for the weekly full re-read.
+  const later = new Date('2026-10-22T18:00:00Z');
+  fake.downloads.push({ time: '2026-10-12T05:00:00.000Z', countryCode: 'CA' }, { time: '2026-09-25T05:00:00.000Z', countryCode: 'CA' });
+  await syncOp3Daily(db, cfg(), show, { now: later, pageSize: 100 });
+  assert.equal(await ca(), 3, 'a late record on a day within two weeks is picked up');
+  await db.query(`UPDATE podcasts SET op3_history_at = $2::timestamptz - interval '8 days' WHERE id = $1`, [show, later]);
+  await syncOp3Daily(db, cfg(), show, { now: later, pageSize: 100 });
+  assert.equal(await ca(), 4, 'the weekly full re-read picks up older ones');
 });
 
 test('a new show: the last year first, then everything older, all in one go when there’s time', async () => {
