@@ -369,6 +369,20 @@ describe('end to end: settings, imports to remote storage, moving media', () => 
     const enc = await fetch(feed.items[0]!.enclosureUrl!);
     assert.equal(enc.status, 200);
 
+    // A new upload saved as an episode's audio takes its exact name in the bucket, copied on the provider's side.
+    const body = Buffer.alloc(3000, 7);
+    const up = await api('POST', `/api/podcasts/${local}/uploads`, { filename: 'ls001.mp3', size: body.length });
+    const uid = up.json.upload.id;
+    await fetch(`${base}/api/podcasts/${local}/uploads/${uid}?offset=0`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream', Cookie: cookie }, body: new Uint8Array(body) });
+    const media = (await api('POST', `/api/podcasts/${local}/uploads/${uid}/complete`)).json.media;
+    const prefixedKey = new URL(media.url).pathname.replace(/^\/public\//, '');
+    assert.ok(s3.objects.has(prefixedKey));
+    const ep = await api('POST', `/api/podcasts/${local}/episodes`, { title: 'Exact name', enclosure: { mediaId: media.id }, status: 'draft' });
+    assert.equal(ep.status, 201, ep.text);
+    assert.equal(ep.json.episode.enclosure.url, `${s3.publicUrl}/local-show/media/audio/ls001.mp3`);
+    assert.ok(s3.objects.get('local-show/media/audio/ls001.mp3')!.body.equals(body));
+    assert.ok(!s3.objects.has(prefixedKey), 'the prefixed upload removed');
+
     // Old links on this server (from feed copies apps cached before the move) redirect to the new home.
     const oldPath = new URL(feed.items[0]!.enclosureUrl!).pathname.replace(/^\/public/, '');
     const old = await fetch(base + oldPath, { redirect: 'manual' });

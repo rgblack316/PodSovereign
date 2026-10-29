@@ -104,13 +104,14 @@ test('sending an episode: its metadata, art and chapters go with the preset; Pub
   const art = await upload('ep12.png', PNG);
   let r = await req('POST', `/api/podcasts/${show}/episodes`, {
     title: 'Tomatoes', episode: 12, description: '<p>Staking <b>tomatoes</b> &amp; more.</p>', link: 'https://gardentalk.example.com/12',
-    enclosure: { mediaId: original.id }, image: { mediaId: art.id }, status: 'draft',
+    image: { mediaId: art.id }, status: 'draft',
   });
   assert.equal(r.status, 201, r.text);
   episode = r.json.episode.id;
   await req('PUT', `/api/podcasts/${show}/episodes/${episode}/chapters`, { chapters: [{ startTime: 0, title: 'Intro' }, { startTime: 65.5, title: 'Staking', url: 'https://example.com/stakes' }] });
 
-  r = await req('POST', `/api/podcasts/${show}/episodes/${episode}/process`, { publish: { pubDate: null } });
+  // As the dashboard does: the new upload goes to Auphonic; it becomes the episode's audio once processed.
+  r = await req('POST', `/api/podcasts/${show}/episodes/${episode}/process`, { mediaId: original.id, publish: { pubDate: null } });
   assert.equal(r.status, 200, r.text);
   assert.equal(r.json.processing.status, 'processing');
   assert.equal(r.json.processing.publishWhenDone, true);
@@ -249,9 +250,12 @@ test('Auphonic writes the chapters and show notes when asked; its show notes fil
 test('the exact name: refused when another episode has it; a kept original with that name is moved aside', async () => {
   // Another episode whose upload is also gt012.mp3.
   const dup = await upload('gt012.mp3', mp3(200));
-  const other = (await req('POST', `/api/podcasts/${show}/episodes`, { title: 'Copy', enclosure: { mediaId: dup.id }, status: 'draft' })).json.episode.id;
-  const r = await req('POST', `/api/podcasts/${show}/episodes/${other}/process`, {});
-  assert.equal(r.status, 409);
+  let r = await req('POST', `/api/podcasts/${show}/episodes`, { title: 'Copy', enclosure: { mediaId: dup.id }, status: 'draft' });
+  assert.equal(r.status, 409, 'saving it as the audio is refused');
+  assert.match(r.json.error, /gt012\.mp3 is already used by the episode “Tomatoes/);
+  const other = (await req('POST', `/api/podcasts/${show}/episodes`, { title: 'Copy', status: 'draft' })).json.episode.id;
+  r = await req('POST', `/api/podcasts/${show}/episodes/${other}/process`, { mediaId: dup.id });
+  assert.equal(r.status, 409, 'so is sending it to Auphonic');
   assert.match(r.json.error, /gt012\.mp3 is already used by the episode “Tomatoes/);
   assert.equal(fake.productions.length, 4, 'nothing sent to Auphonic');
 

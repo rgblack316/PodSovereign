@@ -11,6 +11,7 @@ import path from 'node:path';
 import type { Config } from '../config.js';
 import { fetchFeedText } from '../import/http.js';
 import { providerById, toClient, type RemoteClient, type StorageSettings } from './providers.js';
+import { S3Client } from './s3.js';
 
 export interface MediaStore {
   /** 'local' or a provider id. */
@@ -22,6 +23,8 @@ export interface MediaStore {
   putBuffer(key: string, body: Buffer, contentType: string): Promise<void>;
   getBuffer(key: string): Promise<Buffer>;
   getToFile(key: string, dest: string): Promise<void>;
+  /** Copy a stored file to another key on the provider's side, when the provider can (else undefined). */
+  copy?(fromKey: string, toKey: string): Promise<void>;
   delete(key: string): Promise<void>;
   deletePrefix(prefix: string): Promise<void>;
 }
@@ -67,6 +70,11 @@ class LocalStore implements MediaStore {
   async getToFile(key: string, dest: string) {
     await copyFile(localPath(this.mediaDir, key), dest);
   }
+  async copy(fromKey: string, toKey: string) {
+    const dest = localPath(this.mediaDir, toKey);
+    await mkdir(path.dirname(dest), { recursive: true });
+    await copyFile(localPath(this.mediaDir, fromKey), dest);
+  }
   async delete(key: string) {
     await rm(localPath(this.mediaDir, key), { force: true });
   }
@@ -77,7 +85,10 @@ class LocalStore implements MediaStore {
 
 class RemoteStore implements MediaStore {
   readonly isLocal = false;
-  constructor(readonly id: string, private client: RemoteClient, readonly publicBase: string) {}
+  readonly copy?: (fromKey: string, toKey: string) => Promise<void>;
+  constructor(readonly id: string, private client: RemoteClient, readonly publicBase: string) {
+    if (client instanceof S3Client) this.copy = (fromKey, toKey) => client.copy(fromKey, toKey);
+  }
 
   async putFile(key: string, localFile: string, info: { size: number; contentType: string; sha256?: string }) {
     await this.client.putFile(key, localFile, info.size, info.contentType, info.sha256);

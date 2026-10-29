@@ -78,6 +78,9 @@ test('an MP3 with chapters in its tags says so on upload, and they can be loaded
   assert.equal(r.status, 201, r.text);
   episode = r.json.episode.id;
 
+  // Saved into the episode, the upload took its exact name (episode-12.mp3) and a new media id.
+  audio = { ...audio, id: r.json.episode.enclosure.mediaId, url: r.json.episode.enclosure.url };
+  assert.match(audio.url, /\/audio\/episode-12\.mp3$/);
   const found = await req('POST', `/api/podcasts/${show}/media/${audio.id}/id3-chapters`);
   assert.equal(found.status, 200, found.text);
   assert.deepEqual(found.json.chapters.map((c: any) => [c.startTime, c.title, c.url, c.toc]), [[0, 'Intro', null, true], [5, 'Tomatoes', 'https://example.com/tomatoes', true]]);
@@ -128,7 +131,7 @@ test('the editor saves a JSON chapters file the feed points at; mistakes are exp
   await assert.rejects(stat(disk(url)), 'old chapters file removed');
 });
 
-test('writing the chapters into the MP3: a new file with the same audio, and the old one removed', async () => {
+test('writing the chapters into the MP3: the same file name, replaced in place', async () => {
   const before = (await req('GET', `/api/podcasts/${show}/episodes/${episode}`)).json.episode;
   const oldUrl = before.enclosure.url;
   let r = await req('PUT', `/api/podcasts/${show}/episodes/${episode}/chapters`, {
@@ -142,13 +145,13 @@ test('writing the chapters into the MP3: a new file with the same audio, and the
   }
   assert.equal(r.json.mp3Write.status, 'done', r.json.mp3Write.error);
   const after = (await req('GET', `/api/podcasts/${show}/episodes/${episode}`)).json.episode;
-  assert.notEqual(after.enclosure.url, oldUrl, 'a new address, so apps and CDNs fetch it fresh');
-  assert.match(after.enclosure.url, /\/audio\/episode-12\.mp3$/, "the upload's own name, without the upload prefix");
+  assert.equal(after.enclosure.url, oldUrl, 'the same exact name (episode-12.mp3), replaced in place');
   const inside = await readId3Chapters(disk(after.enclosure.url));
   assert.deepEqual(inside.map((c) => [c.startTime, c.title]), [[0, 'Welcome'], [5, 'Planting time']]);
   assert.ok(inside[1]!.image!.data.equals(PNG), 'the chapter image is embedded');
   assert.equal(after.enclosure.length, (await stat(disk(after.enclosure.url))).size);
-  await assert.rejects(stat(disk(oldUrl)), 'the old MP3 is removed');
+  const records = (await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM media_files WHERE public_path = $1`, [new URL(oldUrl).pathname])).rows[0]!.n;
+  assert.equal(records, 1, 'one file at that address, replaced in place');
   assert.match(await feed(), new RegExp(`<enclosure url="${after.enclosure.url.replace(/[.]/g, '\\.')}"`));
 });
 

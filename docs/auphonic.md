@@ -41,7 +41,9 @@ Zone → Cache Purge). Listeners who already downloaded the old file keep their 
   sent to Auphonic: each episode needs its own file name.
 - An imported episode whose own audio already has that exact name: the original is moved to a prefixed
   address first (kept for reprocessing), then the processed file takes the name.
-- The raw upload itself keeps its 8-character prefix; it's only the input kept for reprocessing.
+- The raw upload sent to Auphonic keeps its 8-character prefix; it's only the input kept for reprocessing.
+- The same rule applies without Auphonic: an upload saved as an episode's audio is copied to its exact name
+  (provider-side on R2 and other S3-compatible storage) and the prefixed upload is removed.
 
 ## Metadata sent
 Only these fields are sent. Everything else (genre, summary, URL, license, …) comes from the preset.

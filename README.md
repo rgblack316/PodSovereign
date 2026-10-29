@@ -16,7 +16,7 @@ Clone it and run your own: the site's name, logo, favicon and web address are al
 
 **Publishing**
 - Start new shows; publish, schedule or draft episodes; edit any episode, imported or new
-- Resumable uploads for audio, video, artwork, transcripts and chapters (large files are fine, even through Cloudflare Tunnel)
+- Resumable uploads for audio, video, artwork, transcripts and chapters (large files are fine, even through Cloudflare Tunnel); episode audio keeps your exact file name (ru053.mp3)
 - Episode length and artwork size read from the files; an Apple Podcasts / Spotify readiness checklist
 - Forms for Podcasting 2.0 tags: people, locations (with map lookup), value for value (Lightning splits, per show or episode), support links, recommended shows (podroll), schedule, license, text records. Anything else is editable as XML
 - Live shows (`podcast:liveItem`): schedule, go live, end

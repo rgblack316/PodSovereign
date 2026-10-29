@@ -234,7 +234,11 @@ describe('episodes', () => {
     assert.equal(e.status, 'published');
     assert.equal(e.inFeed, true);
     assert.equal(e.duration, 26);
-    assert.equal(e.enclosure.mediaId, audio.id);
+    // Saved into the episode, the upload takes its exact name: "a1b2c3d4-Episode-1.mp3" → "Episode-1.mp3".
+    assert.match(e.enclosure.url, /\/garden-talk\/media\/audio\/Episode-1\.mp3$/);
+    assert.ok(!existsSync(diskPath(audio.url)), 'the prefixed upload is gone');
+    assert.ok(existsSync(diskPath(e.enclosure.url)));
+    audio = { ...audio, id: e.enclosure.mediaId, url: e.enclosure.url };
 
     const xml = await feed();
     assert.match(xml, new RegExp(`<enclosure url="${audio.url}" length="${audio.bytes}" type="audio/mpeg"/>`));
@@ -574,7 +578,8 @@ describe('episodes', () => {
     assert.equal(r.json.episode.enclosure.type, 'audio/x-m4a');
     assert.ok(!existsSync(diskPath(audio.url)), 'old audio removed');
     assert.equal((await db.query(`SELECT 1 FROM media_files WHERE id = $1`, [audio.id])).rows.length, 0);
-    audio = next;
+    assert.match(r.json.episode.enclosure.url, /\/audio\/Episode-1-fixed\.m4a$/);
+    audio = { ...next, id: r.json.episode.enclosure.mediaId, url: r.json.episode.enclosure.url };
   });
 
   test('unpublishing back to draft removes it from the feed and pings', async () => {

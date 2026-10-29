@@ -6,7 +6,7 @@ import path from 'node:path';
 import { AuthError, authenticate, changePassword, createSession, createUserAsAdmin, deleteSession, normalizeEmail, registerUser, sessionUser, type User } from '../auth/users.js';
 import { RateLimiter } from '../auth/rate-limit.js';
 import type { Config } from '../config.js';
-import { maybeOne, type Db } from '../db/db.js';
+import { maybeOne, one, type Db } from '../db/db.js';
 import {
   getPodcastBySlug,
   getPodcastRow,
@@ -30,7 +30,8 @@ import { feedPath, mediaPrefix } from '../urls.js';
 import { checkRedirect, saveRedirectResult } from './redirect-check.js';
 import { addMember, deleteUser, listTeam, removeMember, setAdmin, setRole, TeamError } from '../db/team.js';
 import { serveStatic } from './static.js';
-import { CdnError, testCloudflare } from '../cdn/purge.js';
+import { CdnError, purgeMedia, testCloudflare } from '../cdn/purge.js';
+import { checkEnclosureName, NameTakenError, useExactEnclosureName } from '../media/naming.js';
 import { appendChunk, cancelUpload, completeUpload, getMedia, startUpload, UploadError, uploadStatus } from '../media/uploads.js';
 import { isReferenced, ownMediaPaths, pruneMedia } from '../media/prune.js';
 import { createEpisode, deleteEpisode, getEpisode, listEpisodes, updateEpisode } from '../publish/episodes.js';
@@ -93,6 +94,32 @@ export function createApp(deps: AppDeps) {
     const s = await current(ctx);
     if (!s) throw new HttpError(401, 'Please sign in');
     return s.user;
+  }
+
+  /** A new upload as an episode's audio will take its exact name ("ru053.mp3"): refuse before saving if another episode has it. */
+  async function checkUploadName(podcastId: string, episodeId: string | null, body: Record<string, unknown>) {
+    const enc = body.enclosure as { mediaId?: unknown } | null | undefined;
+    if (!enc || typeof enc.mediaId !== 'string') return;
+    const { slug } = await one<{ slug: string }>(db, `SELECT slug FROM podcasts WHERE id = $1`, [podcastId]);
+    try {
+      await checkEnclosureName(db, podcastId, episodeId, slug, enc.mediaId);
+    } catch (e) {
+      if (e instanceof NameTakenError) throw new HttpError(409, e.message);
+      throw e;
+    }
+  }
+
+  /** After saving: the episode's uploaded audio moves to its exact name; the replaced address is cleared from the CDN. */
+  async function exactEnclosureName(podcastId: string, episodeId: string) {
+    try {
+      const r = await useExactEnclosureName(db, config, podcastId, episodeId,
+        async (mediaId) => (await db.tx((q) => updateEpisode(q, config, podcastId, episodeId, { enclosure: { mediaId } }))).dropped);
+      await pruneMedia(db, config, podcastId, r.dropped, deps.log);
+      await purgeMedia(db, config, r.replaced, deps.log);
+    } catch (e) {
+      // The episode is saved either way; it keeps the upload's prefixed name.
+      deps.log?.(`exact file name for episode ${episodeId}: ${(e as Error).message}`);
+    }
   }
 
   /** Every podcast route goes through here. No access and "doesn't exist" both give 404. */
@@ -460,7 +487,9 @@ export function createApp(deps: AppDeps) {
   router.post('/api/podcasts/:id/episodes', async (ctx) => {
     const { podcastId } = await requirePodcast(ctx, 'editor');
     const body = await readJson(ctx.req, 1024 * 1024);
+    await checkUploadName(podcastId, null, body);
     const id = await db.tx((q) => createEpisode(q, config, podcastId, body));
+    await exactEnclosureName(podcastId, id);
     sendJson(ctx.res, 201, { episode: await getEpisode(db, podcastId, id), processing: null });
   });
 
@@ -484,8 +513,10 @@ export function createApp(deps: AppDeps) {
         delete body.pubDate;
       } else if (body.status === 'draft') await setPublishIntent(db, episodeId, null);
     }
+    await checkUploadName(podcastId, episodeId, body);
     const { dropped } = await db.tx((q) => updateEpisode(q, config, podcastId, episodeId, body));
     await pruneMedia(db, config, podcastId, dropped, deps.log);
+    await exactEnclosureName(podcastId, episodeId);
     sendJson(ctx.res, 200, { episode: await getEpisode(db, podcastId, episodeId), processing: await processingView(db, episodeId) });
   });
 

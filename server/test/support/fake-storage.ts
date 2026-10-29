@@ -121,6 +121,13 @@ export async function startFakeS3(opts: { bucket: string; accessKeyId: string; s
         uploads.delete(q.get('uploadId')!);
         return res.writeHead(204).end();
       }
+      if (req.method === 'PUT' && req.headers['x-amz-copy-source']) {
+        const src = decodeURIComponent(String(req.headers['x-amz-copy-source'])).replace(/^\/[^/]+\//, '');
+        const o = objects.get(src);
+        if (!o) return xmlError(res, 404, 'NoSuchKey', 'The specified key does not exist.');
+        objects.set(key, { ...o });
+        return res.writeHead(200).end('<CopyObjectResult><ETag>"x"</ETag></CopyObjectResult>');
+      }
       if (req.method === 'PUT') {
         if (failKeys.has(key)) return xmlError(res, 500, 'InternalError', 'Simulated failure');
         objects.set(key, { body, type: String(req.headers['content-type'] ?? ''), acl: req.headers['x-amz-acl'] as string | undefined });

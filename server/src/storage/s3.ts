@@ -204,6 +204,16 @@ export class S3Client {
     return h;
   }
 
+  /** Copy an object within the bucket, on the provider's side (CopyObject; up to 5 GB). */
+  async copy(fromKey: string, toKey: string): Promise<void> {
+    const r = await this.request('PUT', toKey, {
+      body: Buffer.alloc(0),
+      headers: { 'x-amz-copy-source': `/${uriEncode(this.cfg.bucket)}/${uriEncode(fromKey, true)}`, ...(this.cfg.acl ? { 'x-amz-acl': this.cfg.acl } : {}) },
+    });
+    // CopyObject can answer 200 with an error inside.
+    if (r.status !== 200 || /<Error>/.test(r.body.toString('utf8'))) this.fail('Copy', r);
+  }
+
   async putBuffer(key: string, body: Buffer, contentType: string): Promise<void> {
     const r = await this.request('PUT', key, { body, headers: this.uploadHeaders(contentType) });
     if (r.status < 200 || r.status >= 300) this.fail('Upload', r);
