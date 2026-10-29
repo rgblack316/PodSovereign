@@ -1298,7 +1298,7 @@ function chaptersEditor({ p, episodeId, canEdit, audio, markDirty }) {
             h('button', { type: 'button', class: 'quiet danger', onclick: () => { rows.splice(i, 1); changed(); draw(); } }, 'Remove chapter')),
           imgUp.el));
     }));
-    if (!rows.length) list.append(h('p', { class: 'hint' }, 'No chapters yet. Add them here, import a JSON chapters file, or read them from the MP3.'));
+    if (!rows.length) list.append(h('p', { class: 'hint' }, 'No chapters yet. Add them here, import a chapters file (Audacity labels, .txt or JSON), or read them from the MP3.'));
     validate();
     drawStatus();
   }
@@ -1318,13 +1318,18 @@ function chaptersEditor({ p, episodeId, canEdit, audio, markDirty }) {
     if (!f) return;
     try {
       const text = await f.text();
-      // Plain text (as Auphonic, mp4chaps and many editors use): "00:01:05.500 Title <https://link>" per line.
+      // Plain text, either of:
+      //   Audacity labels: "48.587234<tab>263.426961<tab>Title" (start and end in seconds; some locales use a comma)
+      //   Auphonic, mp4chaps and many editors: "00:01:05.500 Title <https://link>"
       if (!text.trim().startsWith('{')) {
-        const list = text.split(/\r?\n/).map((line) => {
+        const list = text.replace(/^\uFEFF/, '').split(/\r?\n/).map((line) => {
+          const a = /^\s*(\d+(?:[.,]\d+)?)\t(\d+(?:[.,]\d+)?)\t(.*?)\s*$/.exec(line);
+          if (a) return { startTime: Number(a[1].replace(',', '.')), title: a[3], url: null };
           const m = /^\s*(\d+(?::\d{1,2}){1,2}(?:\.\d+)?)\s+(.*?)\s*(?:<(https?:\/\/[^>]+)>)?\s*$/.exec(line);
           return m ? { startTime: parseTime(m[1]), title: m[2], url: m[3] ?? null } : null;
-        }).filter((c) => c && c.startTime !== null && c.title);
-        if (!list.length) throw new Error('No chapters found. Each line needs a time and a title, like 00:05:30 Interview.');
+        }).filter((c) => c && c.startTime !== null && Number.isFinite(c.startTime) && c.title)
+          .sort((x, y) => x.startTime - y.startTime);
+        if (!list.length) throw new Error('No chapters found. Use an Audacity label file, or one line per chapter with a time and a title, like 00:05:30 Interview.');
         if (rows.length && !confirm(`Replace the ${rows.length} chapters here with the ${list.length} in ${f.name}?`)) return;
         load(list);
         toast(`${rows.length} chapters imported. Save the episode to keep them.`);
@@ -1375,7 +1380,7 @@ function chaptersEditor({ p, episodeId, canEdit, audio, markDirty }) {
     list,
     notes,
     canEdit ? h('div', { class: 'actions', style: 'margin-top:8px' }, addBtn,
-      h('button', { type: 'button', class: 'quiet', onclick: () => jsonInput.click() }, 'Import chapters file (.txt or .json)'), audioBtn,
+      h('button', { type: 'button', class: 'quiet', onclick: () => jsonInput.click() }, 'Import chapters file (Audacity labels, .txt or .json)'), audioBtn,
       h('button', { type: 'button', class: 'quiet', onclick: () => { if (rows.length && confirm('Remove all chapters?')) { rows = []; changed(); draw(); } } }, 'Remove all')) : null,
     jsonInput,
     writeRow,

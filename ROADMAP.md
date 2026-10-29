@@ -27,7 +27,7 @@ Every tag already imports, round-trips and can be edited. Most have their own fo
 - [ ] `podcast:soundbite`: a form for each episode's highlight clips (start, duration, title)
 - [ ] `podcast:image`: artwork in several sizes, generated from the uploaded show and episode art (one artwork for now)
 - [ ] `podcast:chat`: manage the live chat link for live shows (imported chat tags are already kept)
-- [x] Chapter editor in the dashboard (JSON or .txt import, chapters read from and written into MP3 ID3 tags)
+- [x] Chapter editor in the dashboard (JSON, Audacity labels or .txt import, chapters read from and written into MP3 ID3 tags)
 
 ## Live shows
 
@@ -53,7 +53,7 @@ PodSovereign doesn't stream today. Live shows point at an outside stream (Icecas
 
 ## Recently completed
 - Auphonic processing per show: your preset plus the episode's details, 128 kbps stereo MP3, transcripts (SRT, VTT, JSON, TXT), chapters and show notes from Auphonic if wanted, publish when processing finishes, reprocess from the kept original
-- Chapter editor: JSON or .txt import, chapters read from and written into MP3 ID3 tags, images and hidden markers
+- Chapter editor: JSON, Audacity labels or .txt import, chapters read from and written into MP3 ID3 tags, images and hidden markers
 - Old feed redirects re-checked weekly after the move, with a warning if one stops working; the status bar drops the redirect light once the move is settled
 - Storage used: per show (the show's status bar), and per account and for the whole site (Site settings)
 - Website rebuild on feed changes (Cloudflare Pages, Netlify, Vercel, Render, GitHub Actions, custom webhook)
