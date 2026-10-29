@@ -143,7 +143,7 @@ test('writing the chapters into the MP3: a new file with the same audio, and the
   assert.equal(r.json.mp3Write.status, 'done', r.json.mp3Write.error);
   const after = (await req('GET', `/api/podcasts/${show}/episodes/${episode}`)).json.episode;
   assert.notEqual(after.enclosure.url, oldUrl, 'a new address, so apps and CDNs fetch it fresh');
-  assert.match(after.enclosure.url, /-episode-12\.mp3$/);
+  assert.match(after.enclosure.url, /\/audio\/episode-12\.mp3$/, "the upload's own name, without the upload prefix");
   const inside = await readId3Chapters(disk(after.enclosure.url));
   assert.deepEqual(inside.map((c) => [c.startTime, c.title]), [[0, 'Welcome'], [5, 'Planting time']]);
   assert.ok(inside[1]!.image!.data.equals(PNG), 'the chapter image is embedded');

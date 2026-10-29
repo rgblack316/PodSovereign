@@ -18,6 +18,7 @@ import type { Config } from '../config.js';
 import { maybeOne, one, type Db, type Queryable } from '../db/db.js';
 import { probeFile } from '../media/probe.js';
 import { pruneMedia } from '../media/prune.js';
+import { freeMediaName, mediaStem } from '../media/naming.js';
 import { getChapters, saveChapters, startMp3ChapterWrite } from '../publish/chapters.js';
 import { updateEpisode } from '../publish/episodes.js';
 import { activeStore } from '../storage/store.js';
@@ -134,6 +135,12 @@ export async function saveShowSettings(db: Db, config: Config, podcastId: string
 
 // ───────────── building the production ─────────────
 
+/** The name to give Auphonic's files: the uploaded file's name ("ru053.mp3" → "ru053"), else show + episode. */
+async function baseName(q: Queryable, mediaId: string | null, fallback: string): Promise<string> {
+  const m = mediaId ? await maybeOne<{ original_name: string | null; public_path: string }>(q, `SELECT original_name, public_path FROM media_files WHERE id = $1`, [mediaId]) : null;
+  return (m && mediaStem(m)) || fallback;
+}
+
 /**
  * The output files: the preset's own (transcripts, other formats, as set up in Auphonic), with its MP3
  * replaced by ours (128 kbps stereo). Sending output_files replaces the preset's list, so it's copied here.
@@ -192,7 +199,7 @@ interface ShowData {
  * The production request for an episode (exported for tests and for reviewing the mapping).
  * Only these fields are sent; everything else (genre, summary, URL, ...) comes from the preset.
  */
-export async function productionRequest(db: Db, config: Config, podcastId: string, episodeId: string, inputUrl: string, ai?: AiOptions) {
+export async function productionRequest(db: Db, config: Config, podcastId: string, episodeId: string, inputUrl: string, ai?: AiOptions, inputMediaId: string | null = null) {
   const e = (await maybeOne<EpisodeData>(db, `SELECT * FROM episodes WHERE id = $1 AND podcast_id = $2`, [episodeId, podcastId]))!;
   const s = (await maybeOne<ShowData>(db, `SELECT * FROM podcasts WHERE id = $1`, [podcastId]))!;
   const opts = ai ?? await aiOptions(db, podcastId);
@@ -212,7 +219,7 @@ export async function productionRequest(db: Db, config: Config, podcastId: strin
     preset: s.auphonic_preset,
     metadata,
     input_file: inputUrl,
-    output_basename: `${s.slug}-${(e.itunes_episode ? `${e.itunes_episode}-` : '')}${e.title}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80) || s.slug,
+    output_basename: await baseName(db, inputMediaId, `${s.slug}${e.itunes_episode ? `-${e.itunes_episode}` : ''}`),
     output_files: outputFiles,
     action: 'start',
   };
@@ -317,7 +324,7 @@ export async function startProcessing(db: Db, config: Config, podcastId: string,
     [podcastId, episodeId, input.id, opts.publishIntent ? JSON.stringify(opts.publishIntent) : null, JSON.stringify(ai)],
   );
   try {
-    const req = await productionRequest(db, config, podcastId, episodeId, input.url, ai);
+    const req = await productionRequest(db, config, podcastId, episodeId, input.url, ai, input.id);
     const p = await call<{ uuid: string; status_string?: string }>(config, 'POST', '/api/productions.json', req);
     await db.query(`UPDATE auphonic_jobs SET production_uuid = $2, status = 'processing', status_string = $3, updated_at = now() WHERE id = $1`, [job.id, p.uuid, p.status_string ?? null]);
   } catch (err) {
@@ -424,7 +431,7 @@ async function storeFile(db: Db, config: Config, podcastId: string, slug: string
   const size = (await stat(file)).size;
   const sha = await sha256Of(file);
   const info = kind === 'audio' ? await probeFile(file, mime) : {};
-  const publicPath = mediaPath(slug, dir, `${randomBytes(4).toString('hex')}-${name}`);
+  const publicPath = mediaPath(slug, dir, name);
   const key = publicPath.slice(1);
   const store = activeStore(config);
   const { storagePath } = await store.putFile(key, file, { size, contentType: mime, sha256: sha });
@@ -495,10 +502,12 @@ async function importResults(db: Db, config: Config, j: Job, p: Production, log?
     return dest;
   };
   try {
-    const base = (mp3.filename ?? 'episode.mp3').replace(/[^\w.-]+/g, '-');
-    const audioId = await storeFile(db, config, j.podcast_id, slug, await fetchTo(mp3), 'audio', 'audio', base.endsWith('.mp3') ? base : `${base}.mp3`, 'audio/mpeg');
+    // Named after the upload ("ru053.mp3" stays "ru053.mp3"); "-2" and so on when that address is taken (a reprocess),
+    // so a new version never reuses an address that CDNs and apps have cached.
+    const stem = await baseName(db, j.original_media_id, (mp3.filename ?? 'episode').replace(/\.mp3$/i, '').replace(/[^\w.-]+/g, '-'));
+    const name = (dir: string, ext: string) => freeMediaName(db, slug, dir, stem, ext);
+    const audioId = await storeFile(db, config, j.podcast_id, slug, await fetchTo(mp3), 'audio', 'audio', await name('audio', 'mp3'), 'audio/mpeg');
     const transcripts: Record<string, unknown>[] = [];
-    const stem = base.replace(/\.mp3$/i, '');
     let srtText: string | null = null;
     const made = async (ext: string, content: string) => {
       const f = path.join(staging(config), `${randomBytes(8).toString('hex')}.${ext}`);
@@ -514,19 +523,19 @@ async function importResults(db: Db, config: Config, j: Job, p: Production, log?
       if (!srtCues(srtText).length) srtText = null;
     }
     if (srtFile && srtText) {
-      transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, srtFile, 'transcript', 'transcripts', `${stem}.srt`, 'application/x-subrip'), type: 'application/x-subrip', rel: 'captions' });
+      transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, srtFile, 'transcript', 'transcripts', await name('transcripts', 'srt'), 'application/x-subrip'), type: 'application/x-subrip', rel: 'captions' });
     }
     const vttFile = vttFetched ?? (srtText ? await made('vtt', srtToVtt(srtText)) : null);
     if (vttFile) {
-      transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, vttFile, 'transcript', 'transcripts', `${stem}.vtt`, 'text/vtt'), type: 'text/vtt', rel: 'captions' });
+      transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, vttFile, 'transcript', 'transcripts', await name('transcripts', 'vtt'), 'text/vtt'), type: 'text/vtt', rel: 'captions' });
     }
     if (srtText) {
       const jf = await made('json', srtToJson(srtText));
-      transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, jf, 'transcript', 'transcripts', `${stem}.json`, 'application/json'), type: 'application/json' });
+      transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, jf, 'transcript', 'transcripts', await name('transcripts', 'json'), 'application/json'), type: 'application/json' });
     }
     const txtFile = !wantTranscripts ? null : txt ? await fetchTo(txt) : srtText ? await made('txt', srtToText(srtText)) : null;
     if (txtFile) {
-      transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, txtFile, 'transcript', 'transcripts', `${stem}.txt`, 'text/plain'), type: 'text/plain' });
+      transcripts.push({ mediaId: await storeFile(db, config, j.podcast_id, slug, txtFile, 'transcript', 'transcripts', await name('transcripts', 'txt'), 'text/plain'), type: 'text/plain' });
     }
     for (const t of transcripts) t.language = language ?? null;
 

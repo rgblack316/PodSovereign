@@ -15,6 +15,7 @@ import type { Config } from '../config.js';
 import { maybeOne, one, type Db, type Queryable } from '../db/db.js';
 import { readId3Chapters, writeId3Chapters, type Id3Chapter } from '../media/id3.js';
 import { pruneMedia } from '../media/prune.js';
+import { freeMediaName, mediaStem } from '../media/naming.js';
 import { getMedia } from '../media/uploads.js';
 import { activeStore, localPath, storeFor } from '../storage/store.js';
 import { mediaPath } from '../urls.js';
@@ -366,8 +367,7 @@ export async function writeMp3Chapters(db: Db, config: Config, podcastId: string
       createReadStream(out).on('data', (d) => h.update(d)).on('end', () => resolve(h.digest('hex'))).on('error', reject);
     });
     const { slug } = await one<{ slug: string }>(db, `SELECT slug FROM podcasts WHERE id = $1`, [podcastId]);
-    const base = (audio.original_name ?? path.basename(audio.public_path)).replace(/^[0-9a-f]{8}-/, '').replace(/[^\w.-]+/g, '-');
-    const publicPath = mediaPath(slug, 'audio', `${randomBytes(4).toString('hex')}-${base}`);
+    const publicPath = mediaPath(slug, 'audio', await freeMediaName(db, slug, 'audio', mediaStem(audio) || 'episode', 'mp3'));
     const key = publicPath.slice(1);
     const store = activeStore(config);
     const { storagePath } = await store.putFile(key, out, { size, contentType: 'audio/mpeg', sha256 });

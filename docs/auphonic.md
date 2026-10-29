@@ -31,6 +31,13 @@ sends the episode's metadata and chapters, and brings back the processed MP3 and
    that has passed means now). An episode that's already public stays up; its audio is swapped when ready.
 6. **Reprocess** sends the kept original again with the current metadata (uses Auphonic credits).
 
+## File names
+Files made from an episode's audio are named after the upload: `ru053.mp3` is sent with
+`output_basename: "ru053"` and comes back as `ru053.mp3`, `ru053.srt`, `ru053.vtt`, `ru053.txt` and `ru053.json`.
+A later version (Reprocess, or the MP3 rewritten with chapters) becomes `ru053-2.mp3`, `ru053-3.mp3` and so on.
+Names are never reused, even after the old file is cleaned up, because CDNs and podcast apps may have the old
+file cached at that address (`used_media_names`). The raw upload itself keeps its 8-character prefix.
+
 ## Metadata sent
 Only these fields are sent. Everything else (genre, summary, URL, license, …) comes from the preset.
 

@@ -94,7 +94,7 @@ test('per-show settings: a preset from the account, transcripts on or off', asyn
 });
 
 test('sending an episode: its metadata, art and chapters go with the preset; Publish waits', async () => {
-  original = await upload('raw-episode-12.mp3', mp3(400));
+  original = await upload('gt012.mp3', mp3(400));
   const art = await upload('ep12.png', PNG);
   let r = await req('POST', `/api/podcasts/${show}/episodes`, {
     title: 'Tomatoes', episode: 12, description: '<p>Staking <b>tomatoes</b> &amp; more.</p>', link: 'https://gardentalk.example.com/12',
@@ -112,6 +112,7 @@ test('sending an episode: its metadata, art and chapters go with the preset; Pub
   assert.equal(sent.preset, 'preset-podcast');
   assert.equal(sent.action, 'start');
   assert.equal(sent.input_file, original.url, 'Auphonic fetches the original from its public address');
+  assert.equal(sent.output_basename, 'gt012', 'Auphonic names its files after the upload');
   assert.deepEqual(sent.metadata, {
     title: 'Tomatoes', track: 12, artist: 'Johns Creek Studios', album: 'Garden Talk', publisher: 'Randy Black', year: new Date().getFullYear(),
   }, 'only these; summary, genre and the rest come from the preset');
@@ -143,7 +144,8 @@ test('when Auphonic calls back: the processed MP3 and four transcripts go in, th
   const ep = (await req('GET', `/api/podcasts/${show}/episodes/${episode}`)).json.episode;
   assert.equal(ep.inFeed, true, 'published once processing finished');
   assert.notEqual(ep.enclosure.url, original.url);
-  assert.match(ep.enclosure.url, /garden-talk-12-tomatoes\.mp3$/);
+  assert.match(ep.enclosure.url, /\/garden-talk\/media\/audio\/gt012\.mp3$/, 'named after the upload, nothing added');
+  assert.deepEqual(ep.transcripts.map((t: any) => t.url.split('/').pop()).sort(), ['gt012.json', 'gt012.srt', 'gt012.txt', 'gt012.vtt']);
   assert.ok((await readFile(disk(ep.enclosure.url))).equals(PROCESSED));
   assert.deepEqual(ep.transcripts.map((t: any) => t.type).sort(), ['application/json', 'application/x-subrip', 'text/plain', 'text/vtt']);
   const json = JSON.parse(await readFile(disk(ep.transcripts.find((t: any) => t.type === 'application/json').url), 'utf8'));
@@ -187,6 +189,10 @@ test('Auphonic writes the chapters and show notes when asked; its show notes fil
   const ch = (await req('GET', `/api/podcasts/${show}/episodes/${episode}/chapters`)).json.chapters;
   assert.deepEqual(ch.map((c: any) => c.title), ['Welcome', 'Pruning']);
   assert.deepEqual(ch.map((c: any) => c.startTime), [0, 120], 'sorted, and the first chapter moved to 00:00:00');
+  const again = (await req('GET', `/api/podcasts/${show}/episodes/${episode}`)).json.episode;
+  // gt012-2.mp3 from Auphonic, then gt012-3.mp3 once the moved first chapter is written into it: never gt012.mp3 again.
+  assert.match(again.enclosure.url, /\/audio\/gt012-[23]\.mp3$/, 'a reprocessed file gets a new address');
+  assert.ok(again.transcripts.some((t: any) => t.url.endsWith('/gt012-2.srt')));
   let p = await processing();
   assert.equal(p.shownotesApplied, false, 'the episode already had show notes, so they wait');
   assert.equal(p.shownotes.long, '<p>Randy talks tomatoes.</p>\n<p>Then pruning &amp; staking.</p>');
