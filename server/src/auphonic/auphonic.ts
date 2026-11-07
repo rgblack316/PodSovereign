@@ -557,10 +557,10 @@ async function importResults(db: Db, config: Config, j: Job, p: Production, log?
       input.pubDate = when;
     }
     let fixMp3Chapters = false;
-    // Chapters: Auphonic's replace the editor's when the podcaster chose them; otherwise they only fill an empty list.
-    const have = await getChapters(db, config, j.podcast_id, j.episode_id);
+    // Chapters: what Auphonic returns replaces the editor's. Chapters we sent come back moved to match any cuts
+    // (start_output_sec), so the episode's chapters stay in step with the processed audio.
     const found = (p.chapters ?? []).filter((c) => c.title);
-    if (found.length && (j.options?.chapters === 'auphonic' || !have.chapters.length)) {
+    if (found.length) {
       const list = found.map((c) => ({ startTime: c.start_output_sec ?? c.start_sec ?? 0, title: c.title!, url: c.url ?? null, img: c.image ?? null }))
         .sort((x, y) => x.startTime - y.startTime);
       // The first chapter always starts at 00:00:00 (Apple Podcasts and others expect it); the MP3's own chapters

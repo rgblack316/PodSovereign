@@ -238,13 +238,15 @@ test('Auphonic writes the chapters and show notes when asked; its show notes fil
   sent = fake.productions[3]!.request;
   assert.deepEqual(sent.chapters.map((c: any) => c.title), ['Welcome', 'Pruning']);
   assert.deepEqual(sent.speech_recognition, { language: 'en', shownotes: true });
-  fake.finish('prod4', { chapters: [{ start_output_sec: 5, title: 'Other' }], shownotes: { summaries: { long: 'Fresh notes.' } } });
+  fake.finish('prod4', { chapters: [{ start_output_sec: 0, title: 'Welcome' }, { start_output_sec: 42, title: 'Pruning' }], shownotes: { summaries: { long: 'Fresh notes.' } } });
   await fetch(`${base}/hooks/auphonic/${config.auphonicHookToken}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uuid: 'prod4' }) });
   await waitFor(async () => (await processing()).status === 'done');
   p = await processing();
   assert.equal(p.shownotesApplied, true);
   assert.equal((await req('GET', `/api/podcasts/${show}/episodes/${episode}`)).json.episode.description, '<p>Fresh notes.</p>');
   assert.deepEqual((await req('GET', `/api/podcasts/${show}/episodes/${episode}/chapters`)).json.chapters.map((c: any) => c.title), ['Welcome', 'Pruning']);
+  // The cut moved 'Pruning' earlier, and the editor's chapters follow the processed audio.
+  assert.equal((await req('GET', `/api/podcasts/${show}/episodes/${episode}/chapters`)).json.chapters[1].startTime, 42);
 });
 
 test('the exact name: refused when another episode has it; a kept original with that name is moved aside', async () => {

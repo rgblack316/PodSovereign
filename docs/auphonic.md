@@ -20,8 +20,8 @@ sends the episode's metadata and chapters, and brings back the processed MP3 and
    every minute (`GET /api/production/{uuid}.json`; status 3 = done, 2 = error).
 4. PodSovereign downloads the outputs (`download_url?bearer_token=…`), stores them, and updates the episode:
    the processed MP3 becomes the enclosure; SRT, VTT, TXT and Podcasting 2.0 JSON (built from the SRT)
-   become its `podcast:transcript`s. Chapters: when "Let Auphonic create them" was chosen, Auphonic's
-   chapters replace the editor's; otherwise Auphonic's are used only if the episode had none. Auphonic's chapters
+   become its `podcast:transcript`s. Chapters: the chapters Auphonic returns always replace the editor's.
+   Ones we sent come back moved to match any cuts, so they stay in step with the processed audio. Auphonic's chapters
    are sorted and the first one always starts at 00:00:00; when that changes a time, the chapters inside the
    processed MP3 are rewritten to match. They can be edited in the chapter editor like any others.
    Show notes Auphonic wrote (`shownotes.summaries.long`) fill an empty description; if the episode already
