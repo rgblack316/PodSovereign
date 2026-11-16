@@ -143,7 +143,6 @@ Migrations run automatically on startup. The **first account registered becomes 
 | `PODPING_HUB_URL` | `https://hub.podcastindex.org/pubnotify` | The Podcast Index hub endpoint |
 | `PODPING_DELAY_SEC` | `30` | Wait before sending, so a burst of edits becomes one ping |
 | `AUPHONIC_URL` | `https://auphonic.com` | Auphonic API address (only changed for testing) |
-| `PODCHAPTERS_URL` | `https://podchapters.com` | PodChapters API address (only changed for testing) |
 | `CLOUDFLARE_API_URL` | `https://api.cloudflare.com/client/v4` | Cloudflare API address (only changed for testing) |
 
 ### Public URLs
@@ -295,9 +294,6 @@ All `/api` calls use a session cookie. Requests that change something must send 
 | GET · POST | `/api/podcasts/:id/episodes/:episodeId/process` `{mediaId?, reprocess?, publish?, chapters?, shownotes?}` · POST `/process/use-shownotes` | viewer+ · editor+ |
 | POST | `/api/admin/site/test-auphonic` · `/api/admin/site/test-cloudflare` `{zoneId?, token?}` | admin |
 | POST | `/hooks/auphonic/:token` (Auphonic's callback) | Auphonic |
-| GET · PUT | `/api/podcasts/:id/podchapters` (show settings) | viewer+ · editor+ |
-| GET · POST | `/api/podcasts/:id/episodes/:episodeId/chapters/generate` (cost estimate · make AI chapters, unsaved) | viewer+ · editor+ |
-| POST | `/api/admin/site/test-podchapters` `{key?}` | admin |
 | GET · POST | `/api/podcasts/:id/live` (list · create) | viewer+ · editor+ |
 | PATCH · DELETE | `/api/podcasts/:id/live/:liveId` | editor+ |
 | POST | `/api/podcasts/:id/live/:liveId/status` `{status}` | editor+ |

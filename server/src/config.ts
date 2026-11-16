@@ -49,10 +49,6 @@ export interface Config {
   op3ApiUrl: string;
   /** Auphonic API key (Site settings), null = not set up. */
   auphonicKey: string | null;
-  /** PodChapters API key (Site settings), null = not set up. */
-  podchaptersKey: string | null;
-  /** PodChapters' address (overridable for tests). */
-  podchaptersUrl: string;
   /** Secret part of Auphonic's callback address. */
   auphonicHookToken: string | null;
   /** Auphonic's address (overridable for tests). */
@@ -114,8 +110,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     op3Token: null,
     op3ApiUrl: env.OP3_API_URL ?? 'https://op3.dev/api/1',
     auphonicKey: null,
-    podchaptersKey: null,
-    podchaptersUrl: env.PODCHAPTERS_URL ?? 'https://podchapters.com',
     auphonicHookToken: null,
     auphonicUrl: env.AUPHONIC_URL ?? 'https://auphonic.com',
     cfZoneId: null,

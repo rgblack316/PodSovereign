@@ -1373,26 +1373,6 @@ function chaptersEditor({ p, episodeId, canEdit, audio, markDirty }) {
     fromAudio(id);
   } }, 'Read from the MP3');
 
-  // PodChapters: AI chapters from the episode's transcript, only when asked for. They land here unsaved.
-  let pcCredits = null;
-  const pcBtn = h('button', { type: 'button', class: 'quiet', hidden: true, onclick: async () => {
-    if (isDirty && !confirm('Chapters here have unsaved changes. Make new ones anyway?')) return;
-    const cost = pcCredits ? ` This uses about ${pcCredits} PodChapters credits.` : '';
-    if (!confirm(`Make chapters with PodChapters from this episode’s transcript?${rows.length ? ` They replace the ${rows.length} chapters here (until you save, nothing is changed).` : ''}${cost}`)) return;
-    pcBtn.disabled = true;
-    offer.replaceChildren(h('p', { class: 'hint', role: 'status' }, 'PodChapters is making chapters. This can take a minute or two…'));
-    try {
-      const r = await api('POST', `/api/podcasts/${p.id}/episodes/${episodeId}/chapters/generate`);
-      offer.replaceChildren();
-      load(r.chapters);
-      toast(`${r.chapters.length} chapters made. Check them, then save the episode to keep them.`);
-    } catch (e) {
-      offer.replaceChildren(h('p', { class: 'error' }, e.message));
-    } finally {
-      pcBtn.disabled = false;
-    }
-  } }, 'Make chapters with PodChapters');
-
   el.append(
     h('p', { class: 'muted' }, 'Chapters let listeners skip to a part of the episode. Play the audio, pause where a chapter starts and choose “Use player time”.'),
     offer,
@@ -1400,18 +1380,13 @@ function chaptersEditor({ p, episodeId, canEdit, audio, markDirty }) {
     list,
     notes,
     canEdit ? h('div', { class: 'actions', style: 'margin-top:8px' }, addBtn,
-      h('button', { type: 'button', class: 'quiet', onclick: () => jsonInput.click() }, 'Import chapters file (Audacity labels, .txt or .json)'), audioBtn, pcBtn,
+      h('button', { type: 'button', class: 'quiet', onclick: () => jsonInput.click() }, 'Import chapters file (Audacity labels, .txt or .json)'), audioBtn,
       h('button', { type: 'button', class: 'quiet', onclick: () => { if (rows.length && confirm('Remove all chapters?')) { rows = []; changed(); draw(); } } }, 'Remove all')) : null,
     jsonInput,
     writeRow,
     status);
 
   // Existing episode: load its chapters.
-  if (episodeId && canEdit) {
-    api('GET', `/api/podcasts/${p.id}/episodes/${episodeId}/chapters/generate`).then((r) => {
-      if (r.configured) { pcCredits = r.credits; pcBtn.hidden = false; }
-    }).catch(() => {});
-  }
   if (episodeId) {
     api('GET', `/api/podcasts/${p.id}/episodes/${episodeId}/chapters`).then((r) => {
       saved = r;
@@ -3675,52 +3650,10 @@ async function auphonicShowPanel(p, canEdit) {
   return panel;
 }
 
-async function podchaptersShowPanel(p, canEdit) {
-  const panel = h('section', { class: 'panel' });
-  const title = h('h2', null, 'PodChapters');
-  const intro = h('p', { class: 'muted' }, 'Make chapters with AI when you ask for them, from the episode’s own transcript (Auphonic’s costs nothing extra, so PodChapters only charges for the chapters). In an episode’s Chapters section, choose “Make chapters with PodChapters”. They appear there to check and edit; nothing is saved until you save the episode.');
-  panel.append(title, intro, h('p', { class: 'hint' }, 'Loading…'));
-  (async () => {
-    const a = await api('GET', `/api/podcasts/${p.id}/podchapters`);
-    if (!a.configured) {
-      panel.replaceChildren(title, intro, h('p', { class: 'hint' }, state.me.isAdmin ? ['Add your PodChapters API key in ', h('a', { href: '#/site' }, 'Site settings'), ' first.'] : 'An administrator adds the PodChapters API key in Site settings first.'));
-      return;
-    }
-    const sel = (value, opts) => { const s = h('select', { disabled: !canEdit }, opts.map(([v, t]) => h('option', { value: v }, t))); s.value = value; return s; };
-    const style = sel(a.settings.style, [['strict', 'Close to the spoken words'], ['balance', 'Balanced'], ['creative', 'Creative']]);
-    const count = sel(a.settings.count, [['fewer', 'Fewer chapters'], ['moderate', 'A moderate number'], ['more', 'More chapters']]);
-    const ads = h('input', { type: 'checkbox', checked: a.settings.ads, disabled: !canEdit });
-    const links = h('input', { type: 'checkbox', checked: a.settings.links, disabled: !canEdit });
-    const err = formError();
-    const form = h('form', {
-      onsubmit: (ev) => {
-        ev.preventDefault();
-        err.hidden = true;
-        busy(form, async () => {
-          try {
-            await api('PUT', `/api/podcasts/${p.id}/podchapters`, { style: style.value, count: count.value, ads: ads.checked, links: links.checked });
-            toast('PodChapters settings saved');
-          } catch (e) {
-            showError(err, e);
-          }
-        });
-      },
-    },
-    h('div', { class: 'fields-grid' }, field('Chapter titles', style, 'How closely titles follow what is said.'), field('Number of chapters', count)),
-    h('label', { class: 'check' }, ads, 'Mark ads and sponsor segments (their titles start with “Ad:”)'),
-    h('label', { class: 'check' }, links, 'Add links mentioned in the episode to their chapters'),
-    err,
-    canEdit ? h('div', { class: 'actions' }, h('button', { class: 'primary', type: 'submit' }, 'Save PodChapters settings')) : null);
-    panel.replaceChildren(title, intro, form);
-  })().catch((e) => panel.replaceChildren(title, h('p', { class: 'error' }, e.message)));
-  return panel;
-}
-
 async function tabSettings(p, canEdit, reload) {
   const parts = [
     ['podping', 'Podping', await tabPodping(p, canEdit, reload)],
     ['auphonic', 'Auphonic', await auphonicShowPanel(p, canEdit)],
-    ['podchapters', 'PodChapters', await podchaptersShowPanel(p, canEdit)],
     ['prefixes', 'Stats prefixes', await tabPrefixes(p, canEdit, reload)],
     ['team', 'Team', await tabTeam(p, canEdit, reload)],
     ['feed', 'Feed', null],
@@ -4059,7 +3992,6 @@ async function viewSite() {
     backupsPanel(backups),
     op3Panel(s),
     auphonicSitePanel(s),
-    podchaptersSitePanel(s),
     cloudflarePanel(s),
     h('section', { class: 'panel' },
       h('h2', null, 'Sign-ups'),
@@ -4413,66 +4345,6 @@ function auphonicSitePanel(s) {
     h('p', { class: 'hint', style: 'margin-bottom:12px' }, s.auphonic.keySet
       ? h('span', { class: 'light on' }, 'Key saved')
       : ['Find your API key in your Auphonic account settings (', h('a', { href: 'https://auphonic.com/accounts/settings/#api-key', target: '_blank', rel: 'noopener' }, 'auphonic.com'), ').']),
-    form);
-}
-
-function podchaptersSitePanel(s) {
-  const err = formError();
-  const msg = h('p', { class: 'hint', role: 'status' });
-  const key = h('input', { type: 'password', autocomplete: 'off', placeholder: s.podchapters.keySet ? 'Saved. Leave blank to keep it.' : 'pck_…' });
-  const account = (t) => `${t.plan ?? 'your plan'}, ${t.credits} credits left${t.canMakeChapters ? '' : '. This plan can’t make AI chapters'}`;
-  const form = h('form', {
-    onsubmit: (ev) => {
-      ev.preventDefault();
-      err.hidden = true;
-      if (!key.value.trim()) return showError(err, 'Paste the key first');
-      busy(form, async () => {
-        try {
-          const t = await api('POST', '/api/admin/site/test-podchapters', { key: key.value });
-          await api('PUT', '/api/admin/site', { podchaptersKey: key.value });
-          toast(`PodChapters connected (${account(t.account)})`);
-          render();
-        } catch (e) {
-          showError(err, e);
-        }
-      });
-    },
-  },
-  h('div', { class: 'fields-grid' }, field('PodChapters API key', key)),
-  err,
-  h('div', { class: 'actions' },
-    h('button', { class: 'primary', type: 'submit' }, 'Check and save key'),
-    s.podchapters.keySet ? h('button', {
-      type: 'button',
-      onclick: async () => {
-        msg.className = 'hint';
-        msg.textContent = 'Checking…';
-        try {
-          const t = await api('POST', '/api/admin/site/test-podchapters', {});
-          msg.textContent = `Connected to PodChapters: ${account(t.account)}.`;
-        } catch (e) {
-          msg.className = 'error';
-          msg.textContent = e.message;
-        }
-      },
-    }, 'Check saved key') : null,
-    s.podchapters.keySet ? h('button', {
-      type: 'button',
-      class: 'quiet',
-      onclick: async () => {
-        if (!confirm('Remove the PodChapters key? The chapter button will go away.')) return;
-        await api('PUT', '/api/admin/site', { podchaptersKey: null });
-        toast('PodChapters key removed');
-        render();
-      },
-    }, 'Remove') : null),
-  msg);
-  return h('section', { class: 'panel' },
-    h('h2', null, 'PodChapters'),
-    h('p', { class: 'muted' }, 'AI chapters made on request, from an episode’s transcript. Needs a PodChapters plan with AI chapters; each episode costs 0.04 credits per minute of audio.'),
-    h('p', { class: 'hint', style: 'margin-bottom:12px' }, s.podchapters.keySet
-      ? h('span', { class: 'light on' }, 'Key saved')
-      : ['Create a key in PodChapters under Settings → API & MCP (', h('a', { href: 'https://podchapters.com/app/settings/api-keys', target: '_blank', rel: 'noopener' }, 'podchapters.com'), ').']),
     form);
 }
 

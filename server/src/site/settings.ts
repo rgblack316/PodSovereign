@@ -39,7 +39,6 @@ interface Row {
   resend_api_key: string | null;
   op3_token: string | null;
   auphonic_key: string | null;
-  podchapters_key: string | null;
   auphonic_hook_token: string | null;
   cf_zone_id: string | null;
   cf_api_token: string | null;
@@ -100,7 +99,6 @@ export function applyRow(config: Config, row: Row): void {
         : null;
   config.op3Token = unseal(row.op3_token, 'the OP3 API token');
   config.auphonicKey = unseal(row.auphonic_key, 'the Auphonic API key');
-  config.podchaptersKey = unseal(row.podchapters_key, 'the PodChapters API key');
   config.auphonicHookToken = row.auphonic_hook_token;
   config.cfZoneId = row.cf_zone_id;
   config.cfApiToken = unseal(row.cf_api_token, 'the Cloudflare API token');
@@ -138,7 +136,6 @@ export async function siteSettingsView(db: Db, config: Config) {
     },
     op3: { tokenSet: !!config.op3Token },
     auphonic: { keySet: !!config.auphonicKey },
-    podchapters: { keySet: !!config.podchaptersKey },
     cloudflare: { zoneId: row.cf_zone_id ?? '', tokenSet: !!row.cf_api_token, lastClearedAt: row.cf_purge_at, lastError: row.cf_purge_error },
     hasLogo: !!row.logo_file,
     hasFavicon: !!row.favicon_file,
@@ -180,8 +177,6 @@ export interface SettingsInput {
   op3Token?: unknown;
   /** Auphonic API key; '' or null removes it. */
   auphonicKey?: unknown;
-  /** PodChapters API key; '' or null removes it. */
-  podchaptersKey?: unknown;
   /** Cloudflare zone ID and API token (cache clearing); '' or null removes them. */
   cfZoneId?: unknown;
   cfApiToken?: unknown;
@@ -271,11 +266,6 @@ export async function saveSiteSettings(db: Db, config: Config, input: SettingsIn
     // The callback address's secret, made once.
     const row = await getRow(db);
     if (t && !row.auphonic_hook_token) set('auphonic_hook_token', randomBytes(24).toString('hex'));
-  }
-  if (input.podchaptersKey !== undefined) {
-    const t = typeof input.podchaptersKey === 'string' ? input.podchaptersKey.trim() : '';
-    if (t && !/^[A-Za-z0-9._~+/=-]{8,500}$/.test(t)) throw new SettingsError('That doesn’t look like a PodChapters API key (it starts with pck_)');
-    set('podchapters_key', seal(t || null));
   }
   if (input.cfZoneId !== undefined) {
     const t = typeof input.cfZoneId === 'string' ? input.cfZoneId.trim() : '';
