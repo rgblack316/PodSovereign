@@ -45,6 +45,7 @@ import { backupFileName, dumpStream, encryptStream, pgDumpVersion } from '../bac
 import { changeStorage, latestMove, MoveError } from '../storage/move.js';
 import { unseal } from '../crypto/secrets.js';
 import { buildView, queueManualBuild, saveBuildSettings, SiteBuildError, testBuild } from '../sitebuild/sitebuild.js';
+import { estimateCredits, generateChapters, PodChaptersError, saveShowSettings as savePodChaptersSettings, showSettings as podChaptersSettings, testPodChaptersKey } from '../podchapters/podchapters.js';
 import { applyShownotes, handleWebhook, isRunning, latestJob, listPresets, processingView, saveShowSettings, setPublishIntent, showSettings, startProcessing, testAuphonicKey, AuphonicError } from '../auphonic/auphonic.js';
 import { chaptersFromAudio, getChapters, isWritingMp3, saveChapters, startMp3ChapterWrite } from '../publish/chapters.js';
 import { Op3Error, op3Daily, op3State, requestOp3Refresh, testOp3Token } from '../stats/op3.js';
@@ -613,6 +614,41 @@ export function createApp(deps: AppDeps) {
     }
     if (uuid) await handleWebhook(db, config, uuid, deps.log);
     sendJson(ctx.res, 200, { ok: true });
+  });
+
+  // ───────────── PodChapters ─────────────
+
+  router.get('/api/podcasts/:id/podchapters', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'viewer');
+    sendJson(ctx.res, 200, { configured: !!config.podchaptersKey, settings: await podChaptersSettings(db, podcastId) });
+  });
+
+  router.put('/api/podcasts/:id/podchapters', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    await savePodChaptersSettings(db, podcastId, await readJson(ctx.req));
+    sendJson(ctx.res, 200, { configured: !!config.podchaptersKey, settings: await podChaptersSettings(db, podcastId) });
+  });
+
+  /** AI chapters, only when asked for. They aren't saved: the editor shows them to be checked first. */
+  router.post('/api/podcasts/:id/episodes/:episodeId/chapters/generate', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'editor');
+    const episodeId = ctx.params.episodeId!;
+    const r = await generateChapters(db, config, podcastId, episodeId, deps.log);
+    sendJson(ctx.res, 200, r);
+  });
+
+  router.get('/api/podcasts/:id/episodes/:episodeId/chapters/generate', async (ctx) => {
+    const { podcastId } = await requirePodcast(ctx, 'viewer');
+    const ep = await getEpisode(db, podcastId, ctx.params.episodeId!);
+    sendJson(ctx.res, 200, { configured: !!config.podchaptersKey, credits: estimateCredits(ep.duration) });
+  });
+
+  router.post('/api/admin/site/test-podchapters', async (ctx) => {
+    await requireAdmin(ctx);
+    const body = await readJson(ctx.req);
+    const key = typeof body.key === 'string' && body.key.trim() ? body.key.trim() : config.podchaptersKey;
+    if (!key) throw new HttpError(400, 'Enter the PodChapters API key first');
+    sendJson(ctx.res, 200, { ok: true, account: await testPodChaptersKey(config, key) });
   });
 
   // ───────────── chapters ─────────────
@@ -1285,6 +1321,10 @@ export function createApp(deps: AppDeps) {
       if (e instanceof AuthError || e instanceof LiveError || e instanceof VerifyError || e instanceof PublishError || e instanceof TeamError || e instanceof BackupError) return fail(e.status, { error: e.message });
       if (e instanceof AuphonicError) {
         deps.log?.(`auphonic: ${req.method} ${url.pathname}: ${e.message}`);
+        return fail(e.status, { error: e.message });
+      }
+      if (e instanceof PodChaptersError) {
+        deps.log?.(`podchapters: ${req.method} ${url.pathname}: ${e.message}`);
         return fail(e.status, { error: e.message });
       }
       if (e instanceof SiteBuildError) return fail(e.status, { error: e.message });
