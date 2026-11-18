@@ -120,6 +120,11 @@ test('the editor saves a JSON chapters file the feed points at; mistakes are exp
   const xml = await feed();
   const url = /<podcast:chapters url="([^"]+)" type="application\/json\+chapters"\/>/.exec(xml)![1]!;
   assert.equal(url, r.json.url);
+  // Podlove Simple Chapters for apps that read those: same chapters, hidden markers left out.
+  assert.match(xml, /xmlns:psc="http:\/\/podlove\.org\/simple-chapters"/);
+  const psc = /<psc:chapters version="1\.2">([\s\S]*?)<\/psc:chapters>/.exec(xml)![1]!;
+  assert.deepEqual([...psc.matchAll(/<psc:chapter start="([^"]+)" title="([^"]+)"/g)].map((m) => [m[1], m[2]]), [['00:00:00.000', 'Welcome'], ['00:01:05.500', 'Planting']]);
+  assert.match(psc, new RegExp(`title="Planting" href="https://example.com/plant" image="${art.url}"`));
   const doc = JSON.parse(await readFile(disk(url), 'utf8'));
   assert.equal(doc.version, '1.2.0');
   assert.deepEqual(doc.chapters[2], { startTime: 65.5, title: 'Planting', img: art.url, url: 'https://example.com/plant' });
@@ -159,5 +164,5 @@ test('removing every chapter removes the chapters tag', async () => {
   const r = await req('PUT', `/api/podcasts/${show}/episodes/${episode}/chapters`, { chapters: [] });
   assert.equal(r.status, 200, r.text);
   assert.equal(r.json.url, null);
-  assert.doesNotMatch(await feed(), /podcast:chapters/);
+  assert.doesNotMatch(await feed(), /podcast:chapters|psc:chapter/);
 });

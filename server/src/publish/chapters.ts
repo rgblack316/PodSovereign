@@ -22,6 +22,7 @@ import { activeStore, localPath, storeFor } from '../storage/store.js';
 import { mediaPath } from '../urls.js';
 import { PublishError } from './fields.js';
 import { updateEpisode } from './episodes.js';
+import type { XmlNode } from '../feed/types.js';
 
 export interface Chapter {
   startTime: number;
@@ -124,6 +125,26 @@ export async function validateChapters(q: Queryable, config: Config, podcastId: 
 }
 
 /** The Podcasting 2.0 JSON chapters document. */
+/** HH:MM:SS.mmm, as Podlove Simple Chapters writes times. */
+const pscTime = (s: number) => {
+  const ms = Math.round(s * 1000);
+  const p = (n: number, w = 2) => String(n).padStart(w, '0');
+  return `${p(Math.floor(ms / 3_600_000))}:${p(Math.floor(ms / 60_000) % 60)}:${p(Math.floor(ms / 1000) % 60)}.${p(ms % 1000, 3)}`;
+};
+
+/**
+ * The chapters as a Podlove Simple Chapters block for the feed (<psc:chapters version="1.2">), read by apps that
+ * don't use the Podcasting 2.0 chapters file. Hidden markers (such as ad breaks) are left out: it has no way to hide one.
+ */
+export function pscChapters(chapters: Chapter[]): XmlNode | null {
+  const shown = chapters.filter((c) => c.toc !== false);
+  if (!shown.length) return null;
+  const el = (name: string, attrs: Record<string, string>, children: XmlNode[] = []): XmlNode => ({ name, attrs, text: '', cdata: false, children });
+  return el('psc:chapters', { version: '1.2' }, shown.map((c) => el('psc:chapter', {
+    start: pscTime(c.startTime), title: c.title, ...(c.url ? { href: c.url } : {}), ...(c.img ? { image: c.img } : {}),
+  })));
+}
+
 export function chaptersJson(chapters: Chapter[]): string {
   return JSON.stringify({
     version: '1.2.0',
@@ -243,7 +264,7 @@ export async function saveChapters(db: Db, config: Config, podcastId: string, ep
        VALUES ($1, 'chapters', $2, $3, 'application/json', $4, $5, 'done', $6, $7, 'chapters.json') RETURNING id`,
       [podcastId, store.isLocal ? localPath(config.mediaDir, key) : null, publicPath, body.length, createHash('sha256').update(body).digest('hex'), key, store.id],
     );
-    const { dropped } = await updateEpisode(q, config, podcastId, episodeId, { chapters: { mediaId: m.id } });
+    const { dropped } = await updateEpisode(q, config, podcastId, episodeId, { chapters: { mediaId: m.id }, pscChapters: pscChapters(chapters) });
     return dropped;
   });
 }

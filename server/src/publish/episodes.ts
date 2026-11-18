@@ -49,9 +49,9 @@ const MANAGED = new Map<string, string>([
   ['pubDate', 'Publishing'], ['enclosure', 'Audio'], ['itunes:title', 'Title for Apple'], ['itunes:image', 'Episode art'],
   ['itunes:duration', 'Length'], ['itunes:episode', 'Episode number'], ['itunes:season', 'Season'],
   ['itunes:episodeType', 'Type'], ['itunes:explicit', 'Explicit'], ['itunes:block', 'Hide from Apple Podcasts'],
-  ['podcast:transcript', 'Transcripts'], ['podcast:chapters', 'Chapters'], ...fieldTagLabels('item'),
+  ['podcast:transcript', 'Transcripts'], ['podcast:chapters', 'Chapters'], ['psc:chapters', 'Chapters (Podlove)'], ...fieldTagLabels('item'),
 ]);
-const OWN_FIELD = (name: string) => name === 'podcast:transcript' || name === 'podcast:chapters' || isFieldTag('item', name);
+const OWN_FIELD = (name: string) => name === 'podcast:transcript' || name === 'podcast:chapters' || name === 'psc:chapters' || isFieldTag('item', name);
 const FIELD_KEYS = ['people', 'locations', 'value', 'funding', 'license', 'txt'] as const;
 
 export interface Transcript {
@@ -216,6 +216,8 @@ export interface EpisodeInput {
   block?: unknown;
   transcripts?: unknown;
   chapters?: unknown;
+  /** The same chapters as Podlove Simple Chapters (<psc:chapters>), built from the saved list; replaced whenever `chapters` is. */
+  pscChapters?: XmlNode | null;
   people?: unknown;
   locations?: unknown;
   value?: unknown;
@@ -346,6 +348,7 @@ async function applyInput(
     const old = next.managedTags;
     let transcripts = old.filter((t) => t.name === 'podcast:transcript');
     let chapters = old.filter((t) => t.name === 'podcast:chapters');
+    let psc = old.filter((t) => t.name === 'psc:chapters');
     const fieldOld = old.filter((t) => isFieldTag('item', t.name));
     const fieldTags = (await applyFields('item', { q, config, podcastId, namespaces }, fieldOld, input as Record<string, unknown>)) ?? fieldOld;
     if (input.transcripts !== undefined) {
@@ -372,8 +375,10 @@ async function applyInput(
     if (input.chapters !== undefined) {
       const ref = await fileRef(q, config, podcastId, input.chapters, 'Chapters', ['chapters', 'transcript']);
       chapters = ref ? [node('podcast:chapters', { url: ref.url, type: 'application/json+chapters' })] : [];
+      // Podlove's copy goes with them (and is dropped when they are removed or replaced by a file with no list).
+      psc = ref && input.pscChapters ? [input.pscChapters] : [];
     }
-    next.managedTags = [...transcripts, ...chapters, ...fieldTags];
+    next.managedTags = [...transcripts, ...chapters, ...psc, ...fieldTags];
   }
 
   if (input.otherTags !== undefined) {

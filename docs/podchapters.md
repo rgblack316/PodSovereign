@@ -18,6 +18,12 @@ Open an episode's **Chapters** section and choose **Make chapters with PodChapte
 (from the episode's length). The chapters appear in the editor to check and edit; **nothing is saved until you save
 the episode**, and saving can also write them into the MP3 as usual. The first chapter always starts at 00:00:00.
 
+Saving the chapters also adds them to the episode's feed entry as **Podlove Simple Chapters** (`<psc:chapters>`),
+next to the Podcasting 2.0 chapters file, for apps that read that format. They are made from the chapters you saved
+(so your edits are included), not fetched from PodChapters. Hidden markers (such as ad breaks) are left out, because
+Podlove has no way to hide one. This applies to every saved chapter list, whatever made it. Episodes whose chapters
+were saved before this change get the Podlove block the next time their chapters are saved.
+
 It is never run automatically, not on upload, not on publish, and not after Auphonic.
 
 ## What is sent
