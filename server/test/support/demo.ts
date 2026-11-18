@@ -11,6 +11,7 @@ import { startFakeS3 } from './fake-storage.js';
 import { startFakeSmtp } from './fake-smtp.js';
 import { startFakeOp3 } from './fake-op3.js';
 import { startFakeAuphonic } from './fake-auphonic.js';
+import { startFakePodChapters } from './fake-podchapters.js';
 import { mp3 } from './media-samples.js';
 import { loadSiteSettings, saveSiteSettings } from '../../src/site/settings.js';
 import { createLiveItem, setLiveStatus } from '../../src/live/live.js';
@@ -136,7 +137,9 @@ await db.query(`INSERT INTO podcast_prefixes (podcast_id, service_key, enabled, 
 // Auphonic for Creekside: productions finish a few seconds after they start.
 const auph = await startFakeAuphonic('demo-auphonic-key');
 config.auphonicUrl = auph.url;
-await saveSiteSettings(db, config, { auphonicKey: 'demo-auphonic-key' });
+const pcFake = await startFakePodChapters('pck_demo_key_12345');
+config.podchaptersUrl = pcFake.url;
+await saveSiteSettings(db, config, { auphonicKey: 'demo-auphonic-key', podchaptersKey: 'pck_demo_key_12345' });
 await loadSiteSettings(db, config);
 await db.query(`UPDATE podcasts SET auphonic_enabled = true, auphonic_preset = 'preset-podcast', auphonic_preset_name = 'Podcast -16 LUFS' WHERE id = $1`, [creek]);
 auph.outputs.set('mp3', { body: mp3(800), format: 'mp3', ending: 'mp3', filename: 'creekside-processed.mp3' });

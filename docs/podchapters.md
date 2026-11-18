@@ -31,8 +31,10 @@ It is never run automatically, not on upload, not on publish, and not after Auph
 An episode with no transcript is refused with a message (nothing is sent). Turn on transcripts in the show's Auphonic
 settings and process the episode, or add a transcript to the episode.
 
-If the PodChapters copy of an episode was deleted there, a new one is made. If a file with the same name already
-exists in the account (from an earlier run), that one is used.
+A second request reuses the PodChapters copy while the episode's audio is unchanged. PodChapters can't replace an
+episode's audio, so when the file changes (a reprocess) a new copy is made there, under a dated internal file name
+(for example `ru053-20261118100500.mp3`; it never appears in your feed or files). The same happens if the copy was
+deleted there, or its name is already taken.
 
 ## Errors
 

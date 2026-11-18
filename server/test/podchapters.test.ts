@@ -127,6 +127,15 @@ test('a second request reuses the PodChapters copy; a deleted copy is made again
   assert.equal(fake.episodes.size, 1);
   assert.ok(fake.episodes.has('pc2'));
 
+  // The audio was replaced (a reprocess): PodChapters can't swap audio, so a new copy is made under a dated name.
+  await db.query(`UPDATE media_files SET sha256 = 'changed', bytes = bytes + 1 WHERE podcast_id = $1 AND public_path = '/randy-unscripted/media/audio/ru053.mp3'`, [show]);
+  r = await generate();
+  assert.equal(r.status, 200, r.text);
+  assert.equal(fake.episodes.size, 2);
+  assert.match([...fake.episodes.values()].at(-1)!.filename, /^ru053-\d{14}\.mp3$/);
+  r = await generate();
+  assert.equal(fake.episodes.size, 2, 'unchanged audio reuses that copy');
+
   fake.failNext = { status: 402, code: 'insufficient_credits', message: 'Not enough credits.', hint: 'This needs 0.2 credits.' };
   r = await generate();
   assert.equal(r.status, 424);

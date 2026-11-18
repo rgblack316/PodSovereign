@@ -134,32 +134,46 @@ const baseOf = (url: string) => {
 /** The credits it would take for an episode of this length. */
 export const estimateCredits = (seconds: number | null | undefined) => (seconds ? Math.max(0.01, Math.round((seconds / 60) * CREDITS_PER_MINUTE * 100) / 100) : null);
 
-/** The PodChapters copy of the episode: ours from before, or a new one made from the audio's public address. */
+/** A fingerprint of the stored audio (size and checksum), to tell when the file behind an address was replaced. */
+async function audioSignature(db: Db, config: Config, podcastId: string, audioUrl: string): Promise<string | null> {
+  if (!audioUrl.startsWith(config.mediaBaseUrl + '/')) return null;
+  const m = await maybeOne<{ bytes: string | number | null; sha256: string | null }>(
+    db, `SELECT bytes, sha256 FROM media_files WHERE podcast_id = $1 AND public_path = $2 AND status = 'done' ORDER BY created_at DESC LIMIT 1`,
+    [podcastId, audioUrl.slice(config.mediaBaseUrl.length)]);
+  return m ? `${m.bytes ?? ''}:${m.sha256 ?? ''}` : null;
+}
+
+/**
+ * The PodChapters copy of the episode: the one from before while the audio is unchanged, else a new one made from
+ * the audio's public address. PodChapters can't replace an episode's audio, so a changed file (a reprocess) gets a
+ * new copy under a new internal file name (dated, never shown in your feed or files).
+ */
 async function pcEpisode(db: Db, config: Config, podcastId: string, episodeId: string, audioUrl: string, force: boolean): Promise<string> {
-  if (!force) {
-    const saved = await maybeOne<{ pc_id: string }>(db, `SELECT pc_id FROM podchapters_episodes WHERE episode_id = $1`, [episodeId]);
-    if (saved) return saved.pc_id;
-  }
+  const sig = await audioSignature(db, config, podcastId, audioUrl);
+  const saved = await maybeOne<{ pc_id: string; audio_sig: string | null }>(db, `SELECT pc_id, audio_sig FROM podchapters_episodes WHERE episode_id = $1`, [episodeId]);
+  if (saved && !force && saved.audio_sig === sig) return saved.pc_id;
   const ep = await getEpisode(db, podcastId, episodeId);
   const show = await one<{ title: string; itunes_author: string | null }>(db, `SELECT title, itunes_author FROM podcasts WHERE id = $1`, [podcastId]);
   const filename = baseOf(audioUrl);
   const metadata: Record<string, unknown> = { title: ep.title, podcast_name: show.title };
   if (show.itunes_author) metadata.artist = show.itunes_author;
   if (ep.episode !== null) metadata.episode_number = ep.episode;
-  let id: string;
-  try {
+  const make = async (name: string) =>
     // PodChapters downloads the MP3 from its public address (a big file can take a minute or two).
     // Tags and presets are left alone: only chapters are wanted from here.
-    id = (await call<PcEpisode>(config, 'POST', '/api/v1/episodes', { audio_url: audioUrl, filename, metadata, import_tags: false, apply_matching_presets: false }, { timeoutMs: 300_000 })).id;
+    (await call<PcEpisode>(config, 'POST', '/api/v1/episodes', { audio_url: audioUrl, filename: name, metadata, import_tags: false, apply_matching_presets: false }, { timeoutMs: 300_000 })).id;
+  let id: string;
+  try {
+    id = await make(filename);
   } catch (e) {
     if (codeOf(e) !== 'conflict') throw e;
-    // The same file name is already in the account (an earlier run): use that one.
-    const list = await call<{ episodes: PcEpisode[] }>(config, 'GET', `/api/v1/episodes?search=${encodeURIComponent(filename)}&page_size=100`);
-    const same = list.episodes.find((x) => x.filename === filename);
-    if (!same) throw e;
-    id = same.id;
+    // The name is taken by an older copy (maybe of different audio): make a new one under a dated name.
+    const d = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+    id = await make(filename.replace(/(\.[^.]*)?$/, `-${d}$1`));
   }
-  await db.query(`INSERT INTO podchapters_episodes (episode_id, pc_id) VALUES ($1, $2) ON CONFLICT (episode_id) DO UPDATE SET pc_id = EXCLUDED.pc_id, created_at = now()`, [episodeId, id]);
+  await db.query(
+    `INSERT INTO podchapters_episodes (episode_id, pc_id, audio_sig) VALUES ($1, $2, $3)
+     ON CONFLICT (episode_id) DO UPDATE SET pc_id = EXCLUDED.pc_id, audio_sig = EXCLUDED.audio_sig, created_at = now()`, [episodeId, id, sig]);
   return id;
 }
 
