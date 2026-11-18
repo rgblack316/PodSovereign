@@ -59,6 +59,8 @@ export function testConfig(over: Partial<Config> = {}): Config {
     op3Token: null,
     op3ApiUrl: 'http://127.0.0.1:1',
     auphonicKey: null,
+    podchaptersKey: null,
+    podchaptersUrl: 'http://127.0.0.1:1',
     auphonicHookToken: null,
     auphonicUrl: 'http://127.0.0.1:1',
     cfZoneId: null,
