@@ -298,6 +298,7 @@ All `/api` calls use a session cookie. Requests that change something must send 
 | GET · PUT | `/api/podcasts/:id/podchapters` (show settings) | viewer+ · editor+ |
 | GET · POST | `/api/podcasts/:id/episodes/:episodeId/chapters/generate` (cost estimate · make AI chapters, unsaved) | viewer+ · editor+ |
 | POST | `/api/admin/site/test-podchapters` `{key?}` | admin |
+| GET · POST | `/api/admin/psc-catchup` (how many episodes need Podlove chapters, and progress · start the one-time catch-up) | admin |
 | GET · POST | `/api/podcasts/:id/live` (list · create) | viewer+ · editor+ |
 | PATCH · DELETE | `/api/podcasts/:id/live/:liveId` | editor+ |
 | POST | `/api/podcasts/:id/live/:liveId/status` `{status}` | editor+ |

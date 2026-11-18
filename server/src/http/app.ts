@@ -45,6 +45,7 @@ import { backupFileName, dumpStream, encryptStream, pgDumpVersion } from '../bac
 import { changeStorage, latestMove, MoveError } from '../storage/move.js';
 import { unseal } from '../crypto/secrets.js';
 import { buildView, queueManualBuild, saveBuildSettings, SiteBuildError, testBuild } from '../sitebuild/sitebuild.js';
+import { catchupState, pendingCount, startCatchup } from '../publish/psc-catchup.js';
 import { estimateCredits, generateChapters, PodChaptersError, saveShowSettings as savePodChaptersSettings, showSettings as podChaptersSettings, testPodChaptersKey } from '../podchapters/podchapters.js';
 import { applyShownotes, handleWebhook, isRunning, latestJob, listPresets, processingView, saveShowSettings, setPublishIntent, showSettings, startProcessing, testAuphonicKey, AuphonicError } from '../auphonic/auphonic.js';
 import { chaptersFromAudio, getChapters, isWritingMp3, saveChapters, startMp3ChapterWrite } from '../publish/chapters.js';
@@ -649,6 +650,19 @@ export function createApp(deps: AppDeps) {
     const key = typeof body.key === 'string' && body.key.trim() ? body.key.trim() : config.podchaptersKey;
     if (!key) throw new HttpError(400, 'Enter the PodChapters API key first');
     sendJson(ctx.res, 200, { ok: true, account: await testPodChaptersKey(config, key) });
+  });
+
+  // ───────────── Podlove chapters catch-up (one time, for episodes whose chapters were saved earlier) ─────────────
+
+  router.get('/api/admin/psc-catchup', async (ctx) => {
+    await requireAdmin(ctx);
+    sendJson(ctx.res, 200, { pending: await pendingCount(db), state: catchupState() });
+  });
+
+  router.post('/api/admin/psc-catchup', async (ctx) => {
+    await requireAdmin(ctx);
+    if (!startCatchup(db, config, deps.log)) throw new HttpError(409, 'It is already running');
+    sendJson(ctx.res, 200, { pending: await pendingCount(db), state: catchupState() });
   });
 
   // ───────────── chapters ─────────────

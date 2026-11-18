@@ -166,3 +166,35 @@ test('removing every chapter removes the chapters tag', async () => {
   assert.equal(r.json.url, null);
   assert.doesNotMatch(await feed(), /podcast:chapters|psc:chapter/);
 });
+
+test('catch-up: Podlove chapters are added to episodes saved before they existed, once, without touching anything else', async () => {
+  let r = await req('PUT', `/api/podcasts/${show}/episodes/${episode}/chapters`, { chapters: [{ startTime: 0, title: 'Welcome' }, { startTime: 90, title: 'Planting', url: 'https://example.com/plant' }, { startTime: 120, title: 'Break', toc: false }] });
+  assert.equal(r.status, 200, r.text);
+  const before = (await req('GET', `/api/podcasts/${show}/episodes/${episode}`)).json.episode;
+  // As an episode saved before this change: the Podlove block isn't there.
+  await db.query(`DELETE FROM tag_elements WHERE episode_id = $1 AND ns_prefix = 'psc'`, [episode]);
+  assert.doesNotMatch(await feed(), /psc:chapters/);
+
+  r = await req('GET', '/api/admin/psc-catchup');
+  assert.equal(r.json.pending, 1);
+  r = await req('POST', '/api/admin/psc-catchup');
+  assert.equal(r.status, 200, r.text);
+  for (let i = 0; i < 100 && (await req('GET', '/api/admin/psc-catchup')).json.state.running; i++) await new Promise((x) => setTimeout(x, 50));
+  r = await req('GET', '/api/admin/psc-catchup');
+  assert.equal(r.json.state.running, false);
+  assert.deepEqual([r.json.state.total, r.json.state.added, r.json.state.skipped, r.json.state.failed], [1, 1, 0, 0]);
+  assert.equal(r.json.pending, 0);
+
+  const xml = await feed();
+  assert.equal(xml.match(/<psc:chapters /g)!.length, 1);
+  assert.match(xml, /<psc:chapter start="00:01:30\.000" title="Planting" href="https:\/\/example\.com\/plant"\/>/);
+  assert.doesNotMatch(xml, /title="Break"/, 'hidden markers are left out');
+  const after = (await req('GET', `/api/podcasts/${show}/episodes/${episode}`)).json.episode;
+  assert.equal(after.updatedAt, before.updatedAt, 'the episode itself is untouched');
+  assert.deepEqual(after.chapters, before.chapters);
+
+  // Again: nothing to do, nothing doubled.
+  await req('POST', '/api/admin/psc-catchup');
+  for (let i = 0; i < 100 && (await req('GET', '/api/admin/psc-catchup')).json.state.running; i++) await new Promise((x) => setTimeout(x, 50));
+  assert.equal((await feed()).match(/<psc:chapters /g)!.length, 1);
+});

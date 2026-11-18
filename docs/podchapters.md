@@ -22,7 +22,11 @@ Saving the chapters also adds them to the episode's feed entry as **Podlove Simp
 next to the Podcasting 2.0 chapters file, for apps that read that format. They are made from the chapters you saved
 (so your edits are included), not fetched from PodChapters. Hidden markers (such as ad breaks) are left out, because
 Podlove has no way to hide one. This applies to every saved chapter list, whatever made it. Episodes whose chapters
-were saved before this change get the Podlove block the next time their chapters are saved.
+were saved before this change get the block from a one-time catch-up: **Site settings → Podlove chapters for
+existing episodes** shows how many episodes need it and adds it to all of them in the background. It reads each
+episode's saved chapters file, adds only the Podlove block (nothing else about the episode changes, including its
+date), skips episodes whose chapters file isn't stored on this site, and does nothing for episodes that already have
+the block, so running it again is safe.
 
 It is never run automatically, not on upload, not on publish, and not after Auphonic.
 

@@ -4060,6 +4060,7 @@ async function viewSite() {
     op3Panel(s),
     auphonicSitePanel(s),
     podchaptersSitePanel(s),
+    pscCatchupPanel(),
     cloudflarePanel(s),
     h('section', { class: 'panel' },
       h('h2', null, 'Sign-ups'),
@@ -4414,6 +4415,40 @@ function auphonicSitePanel(s) {
       ? h('span', { class: 'light on' }, 'Key saved')
       : ['Find your API key in your Auphonic account settings (', h('a', { href: 'https://auphonic.com/accounts/settings/#api-key', target: '_blank', rel: 'noopener' }, 'auphonic.com'), ').']),
     form);
+}
+
+// One-time catch-up: Podlove chapters for episodes whose chapters were saved before they were added to the feed.
+function pscCatchupPanel() {
+  const panel = h('section', { class: 'panel' });
+  const title = h('h2', null, 'Podlove chapters for existing episodes');
+  const intro = h('p', { class: 'muted' }, 'Saved chapters are now also added to each episode in the feed as Podlove Simple Chapters, for apps that read those. Episodes whose chapters were saved earlier don’t have them yet. This adds them to every such episode, one time. Nothing else about the episodes changes, and running it again does nothing for episodes that already have them.');
+  const body = h('div');
+  panel.append(title, intro, body);
+  let timer = null;
+  cleanup.push(() => clearTimeout(timer));
+  const draw = (r) => {
+    const st = r.state;
+    const err = formError();
+    const start = h('button', { class: 'primary', type: 'button', disabled: r.pending === 0 || st.running, onclick: async () => {
+      err.hidden = true;
+      try {
+        draw(await api('POST', '/api/admin/psc-catchup'));
+      } catch (e) {
+        showError(err, e);
+      }
+    } }, st.running ? 'Working…' : r.pending ? `Add Podlove chapters to ${r.pending} episode${r.pending === 1 ? '' : 's'}` : 'Nothing to add');
+    const lines = [];
+    if (st.running) lines.push(h('p', { class: 'hint', role: 'status' }, `Working: ${st.done} of ${st.total} episodes checked, ${st.added} updated…`));
+    else if (st.finishedAt) lines.push(h('p', { class: 'hint', role: 'status' }, `Done: ${st.added} updated${st.skipped ? `, ${st.skipped} skipped (no chapters file stored on this site, or every chapter hidden)` : ''}${st.failed ? `, ${st.failed} couldn’t be read` : ''}.`));
+    for (const pr of st.problems) lines.push(h('p', { class: 'error' }, pr));
+    body.replaceChildren(
+      h('p', { class: 'hint', style: 'margin-bottom:12px' }, r.pending === 0 && !st.running ? h('span', { class: 'light on' }, 'All episodes with chapters are up to date') : `${r.pending} episode${r.pending === 1 ? '' : 's'} with chapters still need it.`),
+      err, h('div', { class: 'actions' }, start), ...lines);
+    clearTimeout(timer);
+    if (st.running) timer = setTimeout(() => api('GET', '/api/admin/psc-catchup').then(draw).catch(() => {}), 1500);
+  };
+  api('GET', '/api/admin/psc-catchup').then(draw).catch((e) => body.replaceChildren(h('p', { class: 'error' }, e.message)));
+  return panel;
 }
 
 function podchaptersSitePanel(s) {
