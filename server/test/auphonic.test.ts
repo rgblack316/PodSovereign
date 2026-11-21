@@ -247,6 +247,16 @@ test('Auphonic writes the chapters and show notes when asked; its show notes fil
   assert.deepEqual((await req('GET', `/api/podcasts/${show}/episodes/${episode}/chapters`)).json.chapters.map((c: any) => c.title), ['Welcome', 'Pruning']);
   // The cut moved 'Pruning' earlier, and the editor's chapters follow the processed audio.
   assert.equal((await req('GET', `/api/podcasts/${show}/episodes/${episode}/chapters`)).json.chapters[1].startTime, 42);
+
+  // Your own editor is the source and it is empty: nothing is sent, and any chapters Auphonic returns are ignored,
+  // so the editor stays empty (ready for PodChapters) instead of filling up.
+  await req('PUT', `/api/podcasts/${show}/episodes/${episode}/chapters`, { chapters: [] });
+  r = await req('POST', `/api/podcasts/${show}/episodes/${episode}/process`, { reprocess: true, chapters: 'ours', shownotes: false });
+  assert.equal(fake.productions[4]!.request.chapters, undefined);
+  fake.finish('prod5', { chapters: [{ start_output_sec: 0, title: 'Auphonic’s own' }, { start_output_sec: 30, title: 'More of theirs' }] });
+  await fetch(`${base}/hooks/auphonic/${config.auphonicHookToken}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uuid: 'prod5' }) });
+  await waitFor(async () => (await processing()).status === 'done');
+  assert.deepEqual((await req('GET', `/api/podcasts/${show}/episodes/${episode}/chapters`)).json.chapters, []);
 });
 
 test('the exact name: refused when another episode has it; a kept original with that name is moved aside', async () => {
@@ -259,7 +269,7 @@ test('the exact name: refused when another episode has it; a kept original with 
   r = await req('POST', `/api/podcasts/${show}/episodes/${other}/process`, { mediaId: dup.id });
   assert.equal(r.status, 409, 'so is sending it to Auphonic');
   assert.match(r.json.error, /gt012\.mp3 is already used by the episode “Tomatoes/);
-  assert.equal(fake.productions.length, 4, 'nothing sent to Auphonic');
+  assert.equal(fake.productions.length, 5, 'nothing sent to Auphonic');
 
   // An imported episode whose audio is already at the exact address /audio/imp7.mp3.
   const up = await upload('imp7.mp3', mp3(250));
@@ -269,8 +279,8 @@ test('the exact name: refused when another episode has it; a kept original with 
   await db.query(`UPDATE media_files SET public_path = $2, storage_key = $3, storage_path = $4 WHERE id = $1`, [up.id, exact, exact.slice(1), path.join(mediaDir, exact)]);
   const imp = (await req('POST', `/api/podcasts/${show}/episodes`, { title: 'Imported', enclosure: { mediaId: up.id }, status: 'draft' })).json.episode.id;
   assert.equal((await req('POST', `/api/podcasts/${show}/episodes/${imp}/process`, {})).status, 200);
-  fake.finish('prod5');
-  await fetch(`${base}/hooks/auphonic/${config.auphonicHookToken}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uuid: 'prod5' }) });
+  fake.finish('prod6');
+  await fetch(`${base}/hooks/auphonic/${config.auphonicHookToken}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uuid: 'prod6' }) });
   await waitFor(async () => (await req('GET', `/api/podcasts/${show}/episodes/${imp}/process`)).json.processing.status === 'done');
   const ep = (await req('GET', `/api/podcasts/${show}/episodes/${imp}`)).json.episode;
   assert.equal(ep.enclosure.url, `http://feeds.mine.test${exact}`);

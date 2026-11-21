@@ -92,7 +92,12 @@ export async function showSettings(q: Queryable, podcastId: string) {
 }
 
 export type ChapterSource = 'ours' | 'auphonic';
-export interface AiOptions { chapters: ChapterSource; shownotes: boolean }
+export interface AiOptions {
+  chapters: ChapterSource;
+  shownotes: boolean;
+  /** How many chapters from the editor went to Auphonic with this job (set once it is sent). */
+  sentChapters?: number;
+}
 
 const chapterSource = (v: unknown, fallback: ChapterSource): ChapterSource => {
   if (v === undefined || v === null) return fallback;
@@ -336,6 +341,8 @@ export async function startProcessing(db: Db, config: Config, podcastId: string,
   try {
     const req = await productionRequest(db, config, podcastId, episodeId, input.url, ai, input.id);
     const p = await call<{ uuid: string; status_string?: string }>(config, 'POST', '/api/productions.json', req);
+    // Remembered so that, when your own chapter editor is the source, only chapters you sent are taken back (moved for any cuts).
+    await db.query(`UPDATE auphonic_jobs SET options = $2 WHERE id = $1`, [job.id, JSON.stringify({ ...ai, sentChapters: Array.isArray(req.chapters) ? req.chapters.length : 0 })]);
     await db.query(`UPDATE auphonic_jobs SET production_uuid = $2, status = 'processing', status_string = $3, updated_at = now() WHERE id = $1`, [job.id, p.uuid, p.status_string ?? null]);
   } catch (err) {
     await failJob(db, job.id, (err as Error).message);
@@ -557,10 +564,13 @@ async function importResults(db: Db, config: Config, j: Job, p: Production, log?
       input.pubDate = when;
     }
     let fixMp3Chapters = false;
-    // Chapters: what Auphonic returns replaces the editor's. Chapters we sent come back moved to match any cuts
-    // (start_output_sec), so the episode's chapters stay in step with the processed audio.
+    // Chapters: when Auphonic makes them (or when we sent ours), what it returns replaces the editor's. Chapters we
+    // sent come back moved to match any cuts (start_output_sec), so they stay in step with the processed audio.
+    // When your own editor is the source and none were sent, whatever Auphonic returns is ignored: the editor stays
+    // as it is (empty, ready for PodChapters or typing).
     const found = (p.chapters ?? []).filter((c) => c.title);
-    if (found.length) {
+    const takeChapters = j.options?.chapters === 'auphonic' || j.options?.sentChapters === undefined || j.options.sentChapters > 0;
+    if (found.length && takeChapters) {
       const list = found.map((c) => ({ startTime: c.start_output_sec ?? c.start_sec ?? 0, title: c.title!, url: c.url ?? null, img: c.image ?? null }))
         .sort((x, y) => x.startTime - y.startTime);
       // The first chapter always starts at 00:00:00 (Apple Podcasts and others expect it); the MP3's own chapters
