@@ -285,6 +285,22 @@ describe('episodes', () => {
     assert.deepEqual(list.map((e: any) => [e.title, e.status]), [['Garlic', 'scheduled'], ['Staking tomatoes', 'published']]);
   });
 
+  test('an old episode put back: a draft can be published with a date in the past, and keeps that date', async () => {
+    const old = '2019-04-02T14:30:00.000Z';
+    const r = await alice.post(`/api/podcasts/${show}/episodes`, { title: 'Old radish', enclosure: { url: 'https://cdn.example.com/radish.mp3', length: 99 }, status: 'draft', pubDate: old });
+    assert.equal(r.status, 201, r.text);
+    assert.equal(r.json.episode.status, 'draft');
+    assert.doesNotMatch(await feed(), /Old radish/);
+    const id = r.json.episode.id;
+    const p = await alice.patch(`/api/podcasts/${show}/episodes/${id}`, { status: 'published', pubDate: old });
+    assert.equal(p.status, 200, p.text);
+    assert.equal(p.json.episode.status, 'published');
+    assert.equal(p.json.episode.inFeed, true);
+    assert.equal(new Date(p.json.episode.pubDate).toISOString(), old);
+    assert.match(await feed(), /Old radish/);
+    assert.equal((await alice.del(`/api/podcasts/${show}/episodes/${id}`)).status, 204);
+  });
+
   test('transcripts and chapters: uploaded, then listed in the feed', async () => {
     const vtt = await alice.upload(show, 'ep1.vtt', Buffer.from('WEBVTT\n\n00:00.000 --> 00:02.000\nHello\n'));
     const chapters = await alice.upload(show, 'chapters.json', Buffer.from(JSON.stringify({ version: '1.2.0', chapters: [{ startTime: 0, title: 'Intro' }] })), 'chapters');

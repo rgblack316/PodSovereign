@@ -559,9 +559,9 @@ async function importResults(db: Db, config: Config, j: Job, p: Production, log?
     const fill = !!notes && !plain(e.description) && !!(notes.long ?? notes.brief);
     if (fill) input.description = notes!.long ?? notes!.brief;
     if (j.publish_intent && !isPublicNow(e)) {
-      const when = j.publish_intent.pubDate && Date.parse(j.publish_intent.pubDate) > Date.now() ? j.publish_intent.pubDate : null;
+      // The date asked for is kept even when it has passed (an old episode put back); none means now.
       input.status = 'published';
-      input.pubDate = when;
+      input.pubDate = j.publish_intent.pubDate ?? null;
     }
     let fixMp3Chapters = false;
     // Chapters: when Auphonic makes them (or when we sent ours), what it returns replaces the editor's. Chapters we

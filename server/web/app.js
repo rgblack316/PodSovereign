@@ -2484,7 +2484,9 @@ async function viewEpisode(p, canEdit, episodeId) {
 
   // ── Publishing ──
   const mode = { value: ep.status === 'draft' ? 'draft' : ep.inFeed ? 'live' : 'schedule' };
-  const when = h('input', { type: 'datetime-local', value: toInputValue(ep.status === 'scheduled' && ep.pubDate ? ep.pubDate : new Date(Date.now() + 86400_000).toISOString()) });
+  const when = h('input', { type: 'datetime-local', value: toInputValue((ep.status === 'scheduled' || ep.status === 'draft') && ep.pubDate ? ep.pubDate : new Date(Date.now() + 86400_000).toISOString()) });
+  // A date that has already passed is fine: the episode goes into the feed straight away with that date (an old episode put back).
+  const inPast = () => !!when.value && new Date(when.value).getTime() <= Date.now();
   const liveDate = h('input', { type: 'datetime-local', value: toInputValue(ep.pubDate) });
   const save = h('button', { type: 'submit', class: 'primary' });
   const radio = (value, labelText, extra) => {
@@ -2503,9 +2505,10 @@ async function viewEpisode(p, canEdit, episodeId) {
     when.disabled = mode.value !== 'schedule';
     const waits = willProcess() && !published;
     save.textContent = mode.value === 'draft' ? (isNew || ep.status === 'draft' ? 'Save draft' : 'Move to drafts')
-      : mode.value === 'schedule' ? (waits ? 'Schedule after processing' : ep.status === 'scheduled' ? 'Save changes' : 'Schedule')
+      : mode.value === 'schedule' ? (inPast() ? (waits ? 'Publish with this date when processing finishes' : 'Publish with this date') : waits ? 'Schedule after processing' : ep.status === 'scheduled' ? 'Save changes' : 'Schedule')
         : published ? 'Save changes' : waits ? 'Publish when processing finishes' : 'Publish now';
   }
+  when.addEventListener('input', drawMode);
   drawMode();
 
   const err = formError();
@@ -2545,7 +2548,6 @@ async function viewEpisode(p, canEdit, episodeId) {
     if (mode.value === 'draft') b.status = 'draft';
     else if (mode.value === 'schedule') {
       if (!when.value) throw new Error('Choose when to publish');
-      if (new Date(when.value).getTime() <= Date.now()) throw new Error('The scheduled time has passed. Choose a later time, or publish now.');
       b.status = 'published';
       b.pubDate = localIso(when.value);
     } else {
