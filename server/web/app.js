@@ -4548,8 +4548,12 @@ function updatePanel() {
   let sawRestart = false;
   cleanup.push(() => clearTimeout(timer));
 
+  let lastCheck = null;
   const draw = (r) => {
-    const { check: c, state: st } = r;
+    lastCheck = r.check ?? lastCheck;
+    const { state: st } = r;
+    const c = lastCheck;
+    if (!c) return;
     const err = formError();
     const busyNow = st.state === 'queued' || st.state === 'running';
     const lines = [];

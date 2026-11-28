@@ -108,6 +108,7 @@ test('Update now needs the updater service; with it, a request is left for it an
   assert.equal(r.json.queued, true);
   assert.equal(r.json.state.state, 'queued');
   assert.equal(r.json.state.watcherAlive, true);
+  assert.equal(typeof r.json.check.current, 'string', 'the answer carries the version check too, since the page redraws from it');
   const asked = JSON.parse(await readFile(path.join(control, 'upgrade.request'), 'utf8'));
   assert.equal(asked.requested_by, 'randy@example.com');
 
