@@ -430,6 +430,18 @@ export type AssetKind = 'logo' | 'favicon';
 
 const MAX_ASSET_BYTES = 1024 * 1024;
 
+/** An SVG starts with <svg>, after an optional XML declaration, comments and DOCTYPE (read step by step, no backtracking). */
+function startsSvg(text: string): boolean {
+  let s = text.trimStart();
+  for (let i = 0; i < 20; i++) {
+    const end = s.startsWith('<?xml') ? s.indexOf('?>') + 2 : s.startsWith('<!--') ? s.indexOf('-->') + 3 : /^<!DOCTYPE svg/i.test(s) ? s.indexOf('>') + 1 : null;
+    if (end === null) break;
+    if (end < 3) return false;
+    s = s.slice(end).trimStart();
+  }
+  return /^<svg[\s>]/i.test(s);
+}
+
 /** Detect the image type from its bytes (never trust the declared type). */
 export function sniffImage(buf: Buffer): string | null {
   if (buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
@@ -438,7 +450,7 @@ export function sniffImage(buf: Buffer): string | null {
   if (buf.subarray(0, 6).toString('latin1').startsWith('GIF8')) return 'image/gif';
   if (buf[0] === 0 && buf[1] === 0 && buf[2] === 1 && buf[3] === 0) return 'image/x-icon';
   const head = buf.subarray(0, 512).toString('utf8').replace(/^﻿/, '').trimStart();
-  if (/^(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*(<!DOCTYPE svg[^>]*>\s*)?<svg[\s>]/i.test(head)) return 'image/svg+xml';
+  if (startsSvg(head)) return 'image/svg+xml';
   return null;
 }
 

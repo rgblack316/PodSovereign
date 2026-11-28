@@ -79,7 +79,7 @@ test('imports a feed end to end: saves everything, copies media, rewrites URLs',
     assert.equal(m.bytes, (await stat(m.storage_path)).size);
     assert.match(m.sha256, /^[0-9a-f]{64}$/);
   }
-  assert.ok(!media.some((m) => m.original_url.includes('stream.example.com')), 'live stream not downloaded');
+  assert.ok(!media.some((m) => new URL(m.original_url).hostname === 'stream.example.com'), 'live stream not downloaded');
 
   // Rebuilt feed points at our server, except the file that failed
   const feed = (await loadFeed(db, job.podcast_id))!;
