@@ -145,6 +145,7 @@ Migrations run automatically on startup. The **first account registered becomes 
 | `AUPHONIC_URL` | `https://auphonic.com` | Auphonic API address (only changed for testing) |
 | `GITHUB_REPO` · `UPDATE_BRANCH` · `GITHUB_API_URL` | `rgblack316/podsovereign` · `main` · `https://api.github.com` | Where Site settings → Software updates looks for new versions (a fork changes these) |
 | `CONTROL_DIR` | `control/` next to the media folder | Where the app and the updater service pass update requests and progress |
+| `UPLOAD_WAIT_MS` | `25000` | How long finishing an upload may take before the request answers "still working" (Cloudflare cuts requests at 100 s) |
 | `PODCHAPTERS_URL` | `https://podchapters.com` | PodChapters API address (only changed for testing) |
 | `CLOUDFLARE_API_URL` | `https://api.cloudflare.com/client/v4` | Cloudflare API address (only changed for testing) |
 
@@ -288,7 +289,7 @@ All `/api` calls use a session cookie. Requests that change something must send 
 | POST · PATCH · DELETE | `/api/podcasts/:id/episodes` · `/episodes/:episodeId` (PATCH changes only the fields sent) | editor+ |
 | POST | `/api/podcasts/:id/uploads` `{filename, size, kind?}` → `{upload}` | editor+ |
 | GET · PUT · DELETE | `/api/podcasts/:id/uploads/:uploadId` (status · chunk at `?offset=` · cancel) | editor+ |
-| POST | `/api/podcasts/:id/uploads/:uploadId/complete` → `{media}` | editor+ |
+| POST | `/api/podcasts/:id/uploads/:uploadId/complete` → `201 {media}`, or `202 {upload}` while a big file is still being stored (poll the GET until `status` is `done` or `failed`; `done` carries `media`) | editor+ |
 | DELETE | `/api/podcasts/:id/media/:mediaId` (only when unused) | editor+ |
 | POST | `/api/podcasts/:id/redirect-check` (is the old feed 301-redirecting here?) | editor+ |
 | PUT | `/api/podcasts/:id/prefixes` | editor+ |

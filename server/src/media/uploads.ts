@@ -8,7 +8,8 @@
  *
  *   POST   /api/podcasts/:id/uploads                {filename, size, type, kind?} → {upload}
  *   PUT    /api/podcasts/:id/uploads/:uid?offset=N  raw bytes (application/octet-stream)
- *   POST   /api/podcasts/:id/uploads/:uid/complete  → {media}
+ *   POST   /api/podcasts/:id/uploads/:uid/complete  → 201 {media}, or 202 {upload} while a big file is still being stored
+ *   GET    /api/podcasts/:id/uploads/:uid           → {upload: {status, media?, error?}} (poll after a 202)
  *
  * Finished files go to the active media store under <slug>/media/<type>/.
  */
@@ -124,7 +125,9 @@ interface UploadRow {
   mime_type: string;
   size: number;
   received: number;
-  status: string;
+  status: 'open' | 'finishing' | 'done' | 'failed';
+  media_id: string | null;
+  error: string | null;
 }
 
 const uploadDir = (config: Config) => path.join(path.resolve(config.mediaDir), '.uploads');
@@ -137,6 +140,8 @@ const uploadJson = (u: UploadRow) => ({
   size: Number(u.size),
   received: Number(u.received),
   chunkSize: CHUNK_SIZE,
+  status: u.status,
+  ...(u.error ? { error: u.error } : {}),
 });
 
 /** Safe file name: letters, numbers, dot, dash, underscore; keeps the extension. */
@@ -200,8 +205,16 @@ async function openUpload(q: Queryable, podcastId: string, uploadId: string): Pr
   return u;
 }
 
-export async function uploadStatus(db: Db, podcastId: string, uploadId: string) {
-  return uploadJson(await openUpload(db, podcastId, uploadId));
+/** Where an upload stands: how much has arrived, or (once finishing) whether the file is stored. */
+export async function uploadStatus(db: Db, config: Config, podcastId: string, uploadId: string) {
+  const u = await findUpload(db, podcastId, uploadId);
+  if (!u) throw new UploadError('Upload not found. Start it again.', 404);
+  const media = u.status === 'done' ? await getMedia(db, config, podcastId, u.media_id) : null;
+  return { ...uploadJson(u), ...(media ? { media } : {}) };
+}
+
+async function findUpload(q: Queryable, podcastId: string, uploadId: string): Promise<UploadRow | null> {
+  return isUuid(uploadId) ? maybeOne<UploadRow>(q, `SELECT * FROM uploads WHERE id = $1 AND podcast_id = $2`, [uploadId, podcastId]) : null;
 }
 
 // One chunk at a time per upload (a retried request may race the original).
@@ -260,63 +273,147 @@ export async function appendChunk(
   });
 }
 
-/** All bytes are in: check the file, store it, and record it as the show's media. */
-export async function completeUpload(db: Db, config: Config, podcastId: string, uploadId: string): Promise<MediaJson> {
-  return withLock(uploadId, async () => {
-    const u = await openUpload(db, podcastId, uploadId);
+/** Lets a test hold or fail the storing step. Not used otherwise. */
+export const testHooks: { beforeStore?: () => Promise<void> } = {};
+
+// Files being checked and stored right now, so a second "complete" joins the work instead of repeating it.
+const jobs = new Map<string, Promise<MediaJson>>();
+const MAX_JOBS = 2;
+let running = 0;
+const waiting: Array<() => void> = [];
+async function slot<T>(fn: () => Promise<T>): Promise<T> {
+  if (running >= MAX_JOBS) await new Promise<void>((resolve) => waiting.push(resolve));
+  running++;
+  try {
+    return await fn();
+  } finally {
+    running--;
+    waiting.shift()?.();
+  }
+}
+
+/**
+ * All bytes are in: check the file, store it, and record it as the show's media.
+ *
+ * Big files take longer than the 100 seconds Cloudflare allows a request, so the work runs on its
+ * own. This waits up to `waitMs` for it: done in time gives {media}; otherwise {upload} says it is
+ * still going, and the caller polls uploadStatus.
+ */
+export async function completeUpload(
+  db: Db,
+  config: Config,
+  podcastId: string,
+  uploadId: string,
+  waitMs = config.uploadWaitMs,
+): Promise<{ media: MediaJson } | { upload: ReturnType<typeof uploadJson> }> {
+  const job = await withLock(uploadId, async () => {
+    const u = await findUpload(db, podcastId, uploadId);
+    if (!u) throw new UploadError('Upload not found. Start it again.', 404);
+    if (u.status === 'done') return { done: await getMedia(db, config, podcastId, u.media_id), row: u };
+    if (u.status === 'finishing' && jobs.has(u.id)) return { job: jobs.get(u.id)! };
     if (Number(u.received) !== Number(u.size)) {
       throw new UploadError(`The upload isn’t finished (${u.received} of ${u.size} bytes)`, 409, { received: Number(u.received) });
     }
     const moving = await maybeOne(db, `SELECT 1 FROM storage_moves WHERE status IN ('queued', 'running')`);
     if (moving) throw new UploadError('Media is being moved to new storage right now. Try again when the move finishes.', 409);
-
-    const file = partFile(config, u.id);
-    if (u.kind === 'chapters' || u.mime_type === 'application/json') {
-      let json: unknown;
-      try {
-        json = JSON.parse(await readFile(file, 'utf8'));
-      } catch {
-        throw new UploadError('That isn’t a valid JSON file');
-      }
-      if (u.kind === 'chapters' && !Array.isArray((json as { chapters?: unknown })?.chapters)) {
-        throw new UploadError('That JSON file has no "chapters" list. Use the Podcast Namespace chapters format.');
-      }
+    if (!(await stat(partFile(config, u.id)).then(() => true, () => false))) {
+      throw new UploadError('The uploaded file was lost. Upload it again.', 409);
     }
-    const info = u.kind === 'audio' || u.kind === 'video' || u.kind === 'image' ? await probeFile(file, u.mime_type) : {};
-    const id3Chapters = u.kind === 'audio' && u.mime_type === 'audio/mpeg' ? await readId3Chapters(file).then((c) => c.length, () => 0) : undefined;
-    if (u.kind === 'image' && !info.width) throw new UploadError('That file isn’t a readable JPEG, PNG or WebP image');
-
-    const sha256 = await new Promise<string>((resolve, reject) => {
-      const h = createHash('sha256');
-      createReadStream(file).on('data', (d) => h.update(d)).on('end', () => resolve(h.digest('hex'))).on('error', reject);
-    });
-    const p = await one<{ slug: string }>(db, `SELECT slug FROM podcasts WHERE id = $1`, [podcastId]);
-    const filename = `${u.id.slice(0, 8)}-${u.filename}`;
-    const publicPath = mediaPath(p.slug, KIND_DIRS[u.kind] ?? 'other', filename);
-    const key = publicPath.slice(1);
-    const store = activeStore(config);
-    const { storagePath } = await store.putFile(key, file, { size: Number(u.size), contentType: u.mime_type, sha256 });
-
-    const m = await db.tx(async (q) => {
-      const row = await one<MediaRow>(
-        q,
-        `INSERT INTO media_files (podcast_id, kind, original_url, storage_path, public_path, mime_type, bytes, sha256,
-                                  status, storage_key, storage_provider, duration, width, height, original_name)
-         VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, 'done', $8, $9, $10, $11, $12, $13)
-         RETURNING id, kind, public_path, mime_type, bytes, duration, width, height, original_name`,
-        [podcastId, u.kind, storagePath, publicPath, u.mime_type, u.size, sha256, key, store.id,
-          info.duration ?? null, info.width ?? null, info.height ?? null, u.filename],
-      );
-      await q.query(`UPDATE uploads SET status = 'done', media_id = $2, updated_at = now() WHERE id = $1`, [u.id, row.id]);
-      return row;
-    });
-    await rm(file, { force: true });
-    return { ...mediaJson(config, m), ...(id3Chapters ? { id3Chapters } : {}) };
+    await db.query(`UPDATE uploads SET status = 'finishing', error = NULL, updated_at = now() WHERE id = $1`, [u.id]);
+    return { job: startFinish(db, config, u) };
   });
+  if ('done' in job) {
+    if (!job.done) throw new UploadError('That file was removed.', 410);
+    return { media: job.done };
+  }
+  job.job.catch(() => {}); // a late failure is recorded on the upload; don't leave it unhandled
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<'late'>((resolve) => { timer = setTimeout(() => resolve('late'), waitMs); });
+  try {
+    const r = await Promise.race([job.job, late]);
+    if (r !== 'late') return { media: r };
+  } finally {
+    clearTimeout(timer);
+  }
+  const row = await findUpload(db, podcastId, uploadId);
+  return { upload: uploadJson(row!) };
+}
+
+function startFinish(db: Db, config: Config, u: UploadRow): Promise<MediaJson> {
+  const job = slot(() => finishUpload(db, config, u)).catch(async (e) => {
+    const message = e instanceof Error ? e.message : String(e);
+    await db.query(`UPDATE uploads SET status = 'failed', error = $2, updated_at = now() WHERE id = $1`, [u.id, message.slice(0, 500)]).catch(() => {});
+    throw e;
+  }).finally(() => jobs.delete(u.id));
+  jobs.set(u.id, job);
+  return job;
+}
+
+async function finishUpload(db: Db, config: Config, u: UploadRow): Promise<MediaJson> {
+  const podcastId = u.podcast_id;
+  const file = partFile(config, u.id);
+  if (u.kind === 'chapters' || u.mime_type === 'application/json') {
+    let json: unknown;
+    try {
+      json = JSON.parse(await readFile(file, 'utf8'));
+    } catch {
+      throw new UploadError('That isn’t a valid JSON file');
+    }
+    if (u.kind === 'chapters' && !Array.isArray((json as { chapters?: unknown })?.chapters)) {
+      throw new UploadError('That JSON file has no "chapters" list. Use the Podcast Namespace chapters format.');
+    }
+  }
+  const info = u.kind === 'audio' || u.kind === 'video' || u.kind === 'image' ? await probeFile(file, u.mime_type) : {};
+  const id3Chapters = u.kind === 'audio' && u.mime_type === 'audio/mpeg' ? await readId3Chapters(file).then((c) => c.length, () => 0) : undefined;
+  if (u.kind === 'image' && !info.width) throw new UploadError('That file isn’t a readable JPEG, PNG or WebP image');
+
+  const sha256 = await new Promise<string>((resolve, reject) => {
+    const h = createHash('sha256');
+    createReadStream(file).on('data', (d) => h.update(d)).on('end', () => resolve(h.digest('hex'))).on('error', reject);
+  });
+  const p = await one<{ slug: string }>(db, `SELECT slug FROM podcasts WHERE id = $1`, [podcastId]);
+  const filename = `${u.id.slice(0, 8)}-${u.filename}`;
+  const publicPath = mediaPath(p.slug, KIND_DIRS[u.kind] ?? 'other', filename);
+  const key = publicPath.slice(1);
+  const store = activeStore(config);
+  await testHooks.beforeStore?.();
+  const { storagePath } = await store.putFile(key, file, { size: Number(u.size), contentType: u.mime_type, sha256 });
+
+  const m = await db.tx(async (q) => {
+    const row = await one<MediaRow>(
+      q,
+      `INSERT INTO media_files (podcast_id, kind, original_url, storage_path, public_path, mime_type, bytes, sha256,
+                                status, storage_key, storage_provider, duration, width, height, original_name)
+       VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, 'done', $8, $9, $10, $11, $12, $13)
+       RETURNING id, kind, public_path, mime_type, bytes, duration, width, height, original_name`,
+      [podcastId, u.kind, storagePath, publicPath, u.mime_type, u.size, sha256, key, store.id,
+        info.duration ?? null, info.width ?? null, info.height ?? null, u.filename],
+    );
+    await q.query(`UPDATE uploads SET status = 'done', media_id = $2, error = NULL, updated_at = now() WHERE id = $1`, [u.id, row.id]);
+    return row;
+  });
+  await rm(file, { force: true });
+  return { ...mediaJson(config, m), ...(id3Chapters ? { id3Chapters } : {}) };
+}
+
+/** After a restart: pick up files that were being stored, or mark them failed if the bytes are gone. */
+export async function resumeUploads(db: Db, config: Config, log?: (m: string) => void): Promise<void> {
+  const { rows } = await db.query<UploadRow>(`SELECT * FROM uploads WHERE status = 'finishing'`);
+  for (const u of rows) {
+    if (jobs.has(u.id)) continue;
+    if (await stat(partFile(config, u.id)).then(() => true, () => false)) {
+      log?.(`resuming upload ${u.filename}`);
+      startFinish(db, config, u).catch((e) => log?.(`upload ${u.filename}: ${e.message}`));
+    } else {
+      await db.query(`UPDATE uploads SET status = 'failed', error = $2, updated_at = now() WHERE id = $1`, [u.id, 'The file was lost when the server restarted. Upload it again.']);
+    }
+  }
 }
 
 export async function cancelUpload(db: Db, config: Config, podcastId: string, uploadId: string): Promise<void> {
-  const u = await openUpload(db, podcastId, uploadId);
+  const u = await findUpload(db, podcastId, uploadId);
+  if (!u || u.status === 'done') throw new UploadError('Upload not found. Start it again.', 404);
+  if (u.status === 'finishing') throw new UploadError('This file is already being stored.', 409);
   await db.query(`DELETE FROM uploads WHERE id = $1`, [u.id]);
   await rm(partFile(config, u.id), { force: true });
 }
@@ -327,7 +424,7 @@ export async function cancelUpload(db: Db, config: Config, podcastId: string, up
  */
 export async function cleanupUploads(db: Db, config: Config, log?: (m: string) => void): Promise<void> {
   await db.query(`DELETE FROM uploads WHERE updated_at < now() - interval '1 day'`);
-  const { rows: open } = await db.query<{ id: string }>(`SELECT id FROM uploads WHERE status = 'open'`);
+  const { rows: open } = await db.query<{ id: string }>(`SELECT id FROM uploads WHERE status IN ('open', 'finishing', 'failed')`);
   const keep = new Set(open.map((r) => `${r.id}.part`));
   const files = await readdir(uploadDir(config)).catch(() => [] as string[]);
   for (const f of files) if (!keep.has(f)) await rm(path.join(uploadDir(config), f), { force: true });

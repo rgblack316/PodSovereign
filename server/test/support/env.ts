@@ -65,6 +65,7 @@ export function testConfig(over: Partial<Config> = {}): Config {
     auphonicKey: null,
     podchaptersKey: null,
     podchaptersUrl: 'http://127.0.0.1:1',
+    uploadWaitMs: 25_000,
     auphonicHookToken: null,
     auphonicUrl: 'http://127.0.0.1:1',
     cfZoneId: null,

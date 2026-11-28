@@ -59,6 +59,8 @@ export interface Config {
   podchaptersKey: string | null;
   /** PodChapters' address (overridable for tests). */
   podchaptersUrl: string;
+  /** How long finishing an upload may take before the request answers "still working" (ms). */
+  uploadWaitMs: number;
   /** Secret part of Auphonic's callback address. */
   auphonicHookToken: string | null;
   /** Auphonic's address (overridable for tests). */
@@ -126,6 +128,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     auphonicKey: null,
     podchaptersKey: null,
     podchaptersUrl: env.PODCHAPTERS_URL ?? 'https://podchapters.com',
+    uploadWaitMs: Number(env.UPLOAD_WAIT_MS) || 25_000,
     auphonicHookToken: null,
     auphonicUrl: env.AUPHONIC_URL ?? 'https://auphonic.com',
     cfZoneId: null,
