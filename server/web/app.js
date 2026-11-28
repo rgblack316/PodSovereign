@@ -1406,6 +1406,12 @@ function chaptersEditor({ p, episodeId, canEdit, audio, markDirty }) {
   const aiBox = h('div', { class: 'ai-chapters' });
   const aiBtn = h('button', { type: 'button', class: 'quiet', hidden: true, onclick: () => openAi() }, 'Make chapters with AI');
 
+  /** Show the panel, and bring it into view: the button is far from the top of this section. */
+  function showAi(content) {
+    aiBox.replaceChildren(content);
+    aiBox.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
   function openAi() {
     const picks = ai.providers.map((pr) => {
       const cb = h('input', { type: 'checkbox', checked: pr.configured, disabled: !pr.configured });
@@ -1430,7 +1436,7 @@ function chaptersEditor({ p, episodeId, canEdit, audio, markDirty }) {
       drafts.forEach((d) => runDraft(d));
       drawAi();
     } }, 'Make chapters');
-    aiBox.replaceChildren(h('div', { class: 'panel-inline' },
+    showAi(h('div', { class: 'panel-inline' },
       h('p', { class: 'muted' }, 'Each chapter maker reads this episode’s transcript and suggests chapters. You check them before anything changes here.'),
       h('div', { class: 'fields-grid' }, field('Chapter titles', style), field('Number of chapters', count)),
       h('label', { class: 'check' }, ads, 'Mark ads and sponsor segments (titles start with “Ad:”)'),
@@ -1499,20 +1505,20 @@ function chaptersEditor({ p, episodeId, canEdit, audio, markDirty }) {
             runDraft(d); drawAi();
           } }, 'Make again')));
     }
-    aiBox.replaceChildren(h('div', { class: 'panel-inline' }, tabs, body, h('div', { class: 'actions' },
+    showAi(h('div', { class: 'panel-inline' }, tabs, body, h('div', { class: 'actions' },
       h('button', { type: 'button', class: 'quiet', onclick: () => { aiBox.replaceChildren(); drafts = []; } }, 'Close'))));
   }
 
   el.append(
     h('p', { class: 'muted' }, 'Chapters let listeners skip to a part of the episode. Play the audio, pause where a chapter starts and choose “Use player time”.'),
     offer,
-    aiBox,
     player,
     list,
     notes,
     canEdit ? h('div', { class: 'actions', style: 'margin-top:8px' }, addBtn,
       h('button', { type: 'button', class: 'quiet', onclick: () => jsonInput.click() }, 'Import chapters file (Audacity labels, .txt or .json)'), audioBtn, aiBtn,
       h('button', { type: 'button', class: 'quiet', onclick: () => { if (rows.length && confirm('Remove all chapters?')) { rows = []; changed(); draw(); } } }, 'Remove all')) : null,
+    aiBox,
     jsonInput,
     writeRow,
     status);
