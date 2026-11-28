@@ -264,13 +264,13 @@ test('collects downloadable media and can rewrite it', () => {
   assert.ok(summary.includes('transcript item[0] podcast:transcript'));
   assert.ok(summary.includes('chapters item[0] podcast:chapters'));
   assert.ok(summary.includes('video item[0] podcast:source'));
-  assert.ok(!refs.some((r) => r.url.includes('stream.example.com')), 'live streams are never downloaded');
+  assert.ok(!refs.some((r) => new URL(r.url).hostname === 'stream.example.com'), 'live streams are never downloaded');
   assert.ok(!refs.some((r) => r.url.startsWith('ipfs:')));
 
   for (const r of refs) r.set(r.url.replace('https://oldhost.example.com/', 'https://mine.example/media/test/'));
   const xml = buildFeed(feed, { now: NOW });
   // Only the fallback GUID still mentions the old host — GUIDs must never change.
-  const leftovers = xml.split('\n').filter((l) => l.includes('oldhost.example.com'));
+  const leftovers = xml.split('\n').filter((l) => /\/\/oldhost\.example\.com\//.test(l));
   assert.deepEqual(leftovers.map((l) => l.trim()), ['<guid>https://oldhost.example.com/media/ep1.m4a</guid>']);
   assert.ok(xml.includes('srcset="https://mine.example/media/test/ep2-1500.jpg 1500w, https://mine.example/media/test/ep2-600.jpg 600w"'));
 });

@@ -680,7 +680,7 @@ async function viewShow(id, tab, sub) {
   if (tab === 'op3' && !p.op3) tab = 'settings';
   const views = { overview: tabOverview, episodes: tabEpisodes, details: tabDetails, settings: tabSettings, op3: tabOp3 };
   if (tab === 'episodes' && sub) body.append(await viewEpisode(p, canEdit, sub));
-  else body.append(await (views[tab] ?? tabOverview)(p, canEdit, reload));
+  else body.append(await (Object.hasOwn(views, tab) ? views[tab] : tabOverview)(p, canEdit, reload));
   if (jumpTo) requestAnimationFrame(() => document.getElementById(`section-${jumpTo}`)?.scrollIntoView({ block: 'start' }));
 
   return h('div', { class: 'page' },

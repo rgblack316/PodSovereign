@@ -7,7 +7,7 @@
  * more than one). Prints a new random password; sign in with it, then change it
  * under Account. Every session for that account is signed out.
  */
-import { randomBytes } from 'node:crypto';
+import { randomInt } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { hashPassword } from '../auth/passwords.js';
 import { normalizeEmail } from '../auth/users.js';
@@ -18,8 +18,7 @@ export class ResetError extends Error {}
 /** Readable random password: 4 groups of 5 letters/digits, no look-alike characters. */
 export function newPassword(): string {
   const chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  const bytes = randomBytes(20);
-  const s = [...bytes].map((b) => chars[b % chars.length]).join('');
+  const s = Array.from({ length: 20 }, () => chars[randomInt(chars.length)]).join('');
   return s.match(/.{5}/g)!.join('-');
 }
 

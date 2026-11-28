@@ -24,6 +24,7 @@ import { getChapters, saveChapters, startMp3ChapterWrite } from '../publish/chap
 import { updateEpisode } from '../publish/episodes.js';
 import { activeStore } from '../storage/store.js';
 import { mediaPath } from '../urls.js';
+import { stripTags } from '../chapters-ai/transcript.js';
 
 export class AuphonicError extends Error {
   constructor(message: string, readonly status = 400) {
@@ -171,9 +172,10 @@ async function outputFilesFor(config: Config, preset: string | null): Promise<Re
   return [ours, ...theirs];
 }
 
-const plain = (html: string | null) =>
-  (html ?? '').replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|li|h\d)>/gi, '\n').replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+export const plain = (html: string | null) =>
+  // Tags come out first, and &amp; is decoded last, so "&amp;lt;" ends up as the text "&lt;" and never as a "<".
+  stripTags((html ?? '').replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|li|h\d)>/gi, '\n'))
+    .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
     .replace(/\n{3,}/g, '\n\n').trim();
 
 const hms = (s: number) => {
@@ -468,7 +470,7 @@ function srtCues(srt: string): { startTime: number; endTime: number; body: strin
     const [a, b0] = lines[i]!.split('-->');
     const b = b0!.trim().split(/\s+/)[0]; // VTT cue settings may follow the end time
     const body = lines.slice(i + 1).join(' ').trim();
-    return body ? [{ startTime: t(a!), endTime: t(b!), body: body.replace(/<[^>]+>/g, '') }] : [];
+    return body ? [{ startTime: t(a!), endTime: t(b!), body: stripTags(body) }] : [];
   });
 }
 

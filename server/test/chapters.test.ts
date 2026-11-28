@@ -157,7 +157,7 @@ test('writing the chapters into the MP3: the same file name, replaced in place',
   assert.equal(after.enclosure.length, (await stat(disk(after.enclosure.url))).size);
   const records = (await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM media_files WHERE public_path = $1`, [new URL(oldUrl).pathname])).rows[0]!.n;
   assert.equal(records, 1, 'one file at that address, replaced in place');
-  assert.match(await feed(), new RegExp(`<enclosure url="${after.enclosure.url.replace(/[.]/g, '\\.')}"`));
+  assert.match(await feed(), new RegExp(`<enclosure url="${after.enclosure.url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`));
 });
 
 test('removing every chapter removes the chapters tag', async () => {

@@ -33,7 +33,7 @@ export class Router {
     const keys: string[] = [];
     const re = new RegExp(
       '^' +
-        pattern.replace(/[.]/g, '\\.').replace(/:(\w+)/g, (_, k: string) => {
+        pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/:(\w+)/g, (_, k: string) => {
           keys.push(k);
           return '([^/]+)';
         }) +
