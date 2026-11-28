@@ -2,6 +2,16 @@
 
 export interface Cue { start: number; text: string }
 
+/** Text without markup: tags are removed until none are left (so nested ones can't rebuild a tag), then any stray angle brackets. */
+export function stripTags(text: string): string {
+  let out = text;
+  for (let prev = ''; prev !== out; ) {
+    prev = out;
+    out = out.replace(/<[^<>]*>/g, '');
+  }
+  return out.replace(/[<>]/g, '');
+}
+
 const TIME = /(?:(\d{1,3}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})/;
 const ARROW = new RegExp(`^\\s*${TIME.source}\\s*-->`);
 
@@ -17,7 +27,7 @@ export function parseCues(text: string): Cue[] {
     const i = lines.findIndex((l) => ARROW.test(l));
     if (i < 0) continue;
     const m = ARROW.exec(lines[i]!)!;
-    const body = lines.slice(i + 1).join(' ').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+    const body = stripTags(lines.slice(i + 1).join(' ')).replace(/\s+/g, ' ').trim();
     if (body) cues.push({ start: seconds(m[1], m[2]!, m[3]!, m[4]!), text: body });
   }
   return cues.sort((a, b) => a.start - b.start);

@@ -2,7 +2,7 @@
  * Timestamps are the main risk with AI output, so nothing is trusted as returned: each chapter is moved to a real
  * cue start, sorted, de-duplicated, spaced out and capped, and titles and links are cleaned.
  */
-import { parseClock, type Cue } from './transcript.js';
+import { parseClock, stripTags, type Cue } from './transcript.js';
 
 export interface Draft { startTime: number; title: string; url: string | null }
 export type Count = 'fewer' | 'moderate' | 'more';
@@ -20,7 +20,7 @@ export function chapterCap(durationSec: number, count: Count): number {
 
 const cleanTitle = (t: unknown, ads: boolean) => {
   let s = typeof t === 'string' ? t : '';
-  s = s.replace(/<[^>]*>/g, '').replace(/[*_`#]+/g, '').replace(/^["'“”‘’\s]+|["'“”‘’\s]+$/g, '').replace(/\s+/g, ' ').trim();
+  s = stripTags(s).replace(/[*_`#]+/g, '').replace(/^["'“”‘’\s]+|["'“”‘’\s]+$/g, '').replace(/\s+/g, ' ').trim();
   if (!ads) s = s.replace(/^ad\s*:\s*/i, '');
   s = s.replace(/[.:;,\s]+$/, '');
   return s.length > MAX_TITLE ? s.slice(0, MAX_TITLE).replace(/\s+\S*$/, '') : s;

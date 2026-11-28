@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, describe, test } from 'node:test';
-import { parseCues, toLines, parseClock } from '../src/chapters-ai/transcript.js';
+import { parseCues, toLines, parseClock, stripTags } from '../src/chapters-ai/transcript.js';
 import { chapterCap, cleanChapters } from '../src/chapters-ai/validate.js';
 import type { Db } from '../src/db/db.js';
 import { createApp } from '../src/http/app.js';
@@ -20,6 +20,8 @@ describe('transcript lines', () => {
     assert.equal(toLines(parseCues(srt)), '[00:00:00] Welcome.\n[01:02:03] Hello there');
     assert.equal(toLines(parseCues(vtt)), '[00:00:05] First\n[01:00:00] Second');
     assert.deepEqual(parseCues('Just words with no timings.'), []);
+    assert.equal(stripTags('a <b>bold</b> <<b>script>x'), 'a bold x');
+    assert.equal(stripTags('<<i>script>alert(1)'), 'alert(1)');
     assert.equal(parseClock('1:02:03'), 3723);
     assert.equal(parseClock('02:03'), 123);
     assert.ok(Number.isNaN(parseClock('soon')));
