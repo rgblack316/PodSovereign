@@ -202,6 +202,10 @@ if ! curl -fsS "http://127.0.0.1:$FEEDHOST_PORT/healthz" >/dev/null 2>&1; then
   die "PodSovereign didn't start. The log above should say why. After fixing it, run: cd $DIR && docker compose up -d"
 fi
 
+# The one-click updater (the Update button in Site settings).
+chmod +x install-updater.sh upgrade-watch.sh 2>/dev/null || true
+[ -x ./install-updater.sh ] && ./install-updater.sh || true
+
 # ───────────── next steps ─────────────
 
 cat <<EOF

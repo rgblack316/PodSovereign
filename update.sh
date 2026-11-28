@@ -137,7 +137,7 @@ if [ "$COUNT" -gt 0 ]; then
   say "Downloading version $NEW…"
   git merge -q --ff-only "origin/$BRANCH" || die "Couldn't apply the update (your copy has diverged from $BRANCH). Nothing was changed."
 fi
-chmod +x install.sh update.sh upgrade.sh 2>/dev/null || true
+chmod +x install.sh update.sh upgrade.sh install-updater.sh upgrade-watch.sh 2>/dev/null || true
 VERSION="$(git rev-parse --short HEAD)"
 env_set FEEDHOST_VERSION "$VERSION"
 
@@ -150,6 +150,8 @@ docker compose up -d --remove-orphans
 if wait_healthy; then
   ok "PodSovereign is running version $VERSION"
   docker image prune -f >/dev/null 2>&1 || true
+  # Makes sure the one-click updater (the Update button in Site settings) is installed and running.
+  [ -x ./install-updater.sh ] && ./install-updater.sh || true
 else
   docker compose logs --tail 40 app || true
   warn "PodSovereign didn't come back after the update. The log above should say why."

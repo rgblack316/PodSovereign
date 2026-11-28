@@ -13,6 +13,12 @@ export interface Config {
   mediaBaseUrl: string;
   /** Where copied media is stored on disk (MEDIA_DIR/<slug>/<type>/<file>). */
   mediaDir: string;
+  /** Where the app and the updater service on the server pass requests and progress to each other. */
+  controlDir: string;
+  /** Where updates come from (GitHub), and the address of its API (overridable for tests). */
+  githubRepo: string;
+  githubApiUrl: string;
+  updateBranch: string;
   /** Set Secure on session cookies (true behind HTTPS). */
   cookieSecure: boolean;
   /** Anyone may sign up. When false, only the very first account (the admin) can self-register. */
@@ -94,6 +100,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     publicBaseUrl,
     mediaBaseUrl: (env.MEDIA_BASE_URL ?? publicBaseUrl).replace(/\/+$/, ''),
     mediaDir: env.MEDIA_DIR ?? '/var/lib/podsovereign/media',
+    controlDir: env.CONTROL_DIR ?? path.join(path.dirname(path.resolve(env.MEDIA_DIR ?? '/var/lib/podsovereign/media')), 'control'),
+    githubRepo: (env.GITHUB_REPO ?? 'rgblack316/podsovereign').replace(/^\/+|\/+$/g, ''),
+    githubApiUrl: env.GITHUB_API_URL ?? 'https://api.github.com',
+    updateBranch: env.UPDATE_BRANCH ?? 'main',
     cookieSecure: bool(env.COOKIE_SECURE, publicBaseUrl.startsWith('https://')),
     allowRegistration: bool(env.ALLOW_REGISTRATION, false),
     allowPrivateNetworks: bool(env.ALLOW_PRIVATE_NETWORKS, false),

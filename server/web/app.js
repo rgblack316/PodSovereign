@@ -4055,6 +4055,7 @@ async function viewSite() {
       h('p', { class: 'muted' }, 'These apply to the whole site and every podcaster on it.')),
     brandForm,
     addrForm,
+    updatePanel(),
     storagePanel(storage),
     usagePanel(usage),
     verifyPanel(s),
@@ -4420,6 +4421,82 @@ function auphonicSitePanel(s) {
 }
 
 // One-time catch-up: Podlove chapters for episodes whose chapters were saved before they were added to the feed.
+function updatePanel() {
+  const panel = h('section', { class: 'panel' });
+  const body = h('div');
+  panel.append(h('h2', null, 'Software updates'), body);
+  let timer = null;
+  let sawRestart = false;
+  cleanup.push(() => clearTimeout(timer));
+
+  const draw = (r) => {
+    const { check: c, state: st } = r;
+    const err = formError();
+    const busyNow = st.state === 'queued' || st.state === 'running';
+    const lines = [];
+    lines.push(h('p', { class: 'hint' }, 'Running version ', h('strong', null, c.known ? c.current.slice(0, 7) : c.current),
+      c.latest && c.latest !== c.current.slice(0, 7) ? [' · latest ', h('strong', null, c.latest)] : null));
+    if (c.updateAvailable) {
+      lines.push(h('p', { style: 'margin-top:8px' }, h('strong', null, `${c.behindBy} new change${c.behindBy === 1 ? '' : 's'} available`)));
+      if (c.changes.length) lines.push(h('ul', { class: 'hint' }, c.changes.map((t) => h('li', null, t))));
+    } else if (!c.error && c.known) lines.push(h('p', { class: 'hint' }, h('span', { class: 'light on' }, 'Up to date')));
+    else if (!c.known) lines.push(h('p', { class: 'hint' }, 'This copy wasn’t installed with the update script, so it can’t tell whether it is current. “Update now” rebuilds it from the latest version.'));
+    if (c.error) lines.push(h('p', { class: 'warn-note' }, c.error));
+
+    const state = busyNow
+      ? h('p', { class: 'hint', role: 'status' }, st.message ?? 'Updating…')
+      : st.state === 'success' ? h('p', { class: 'hint', role: 'status' }, `${st.message}${st.revisionAfter && st.revisionBefore !== st.revisionAfter ? ` (${st.revisionBefore} → ${st.revisionAfter})` : ''}`)
+      : st.state === 'failed' ? h('p', { class: 'error' }, st.message)
+      : null;
+    const notes = [];
+    if (!st.available) notes.push(h('p', { class: 'warn-note' }, 'One-click updates aren’t available here. On the server, run ', h('code', null, 'sudo ./update.sh'), '.'));
+    else if (!st.watcherAlive && !busyNow) notes.push(h('p', { class: 'warn-note' }, 'The updater service on the server isn’t running. On the server, run ', h('code', null, 'sudo ./install-updater.sh'), ' once (older installs: in /opt/feedhost).'));
+
+    const check = h('button', { type: 'button', disabled: busyNow, onclick: () => busy(check, async () => {
+      err.hidden = true;
+      try {
+        draw(await api('POST', '/api/admin/update/check'));
+        toast('Checked for updates');
+      } catch (e) {
+        showError(err, e);
+      }
+    }) }, 'Check for updates');
+    const apply = h('button', { type: 'button', class: 'primary', disabled: busyNow || !st.available || !st.watcherAlive, onclick: async () => {
+      if (!confirm('Update now? The database is backed up first, then the app restarts. The dashboard is unavailable for a minute or two.')) return;
+      err.hidden = true;
+      try {
+        sawRestart = false;
+        draw(await api('POST', '/api/admin/update/apply'));
+      } catch (e) {
+        showError(err, e);
+      }
+    } }, st.state === 'running' ? 'Updating…' : st.state === 'queued' ? 'Waiting to start…' : 'Update now');
+
+    body.replaceChildren(...lines, ...(state ? [state] : []), ...notes, err, h('div', { class: 'actions' }, apply, check));
+    clearTimeout(timer);
+    if (busyNow) timer = setTimeout(poll, 3000);
+  };
+
+  async function poll() {
+    try {
+      const r = await api('GET', '/api/admin/update');
+      if (sawRestart && r.state.state !== 'running' && r.state.state !== 'queued') {
+        sawRestart = false;
+        if (r.state.state === 'success' && !confirm('The update finished. Reload this page to use the new version?')) return draw(r);
+        if (r.state.state === 'success') return location.reload();
+      }
+      draw(r);
+    } catch {
+      // The app is restarting: keep trying.
+      sawRestart = true;
+      body.querySelector('[role=status]')?.replaceChildren('The app is restarting…');
+      timer = setTimeout(poll, 3000);
+    }
+  }
+  api('GET', '/api/admin/update').then(draw).catch((e) => body.replaceChildren(h('p', { class: 'error' }, e.message)));
+  return panel;
+}
+
 function pscCatchupPanel() {
   const panel = h('section', { class: 'panel' });
   const title = h('h2', null, 'Podlove chapters for existing episodes');

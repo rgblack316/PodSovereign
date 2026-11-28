@@ -143,6 +143,8 @@ Migrations run automatically on startup. The **first account registered becomes 
 | `PODPING_HUB_URL` | `https://hub.podcastindex.org/pubnotify` | The Podcast Index hub endpoint |
 | `PODPING_DELAY_SEC` | `30` | Wait before sending, so a burst of edits becomes one ping |
 | `AUPHONIC_URL` | `https://auphonic.com` | Auphonic API address (only changed for testing) |
+| `GITHUB_REPO` · `UPDATE_BRANCH` · `GITHUB_API_URL` | `rgblack316/podsovereign` · `main` · `https://api.github.com` | Where Site settings → Software updates looks for new versions (a fork changes these) |
+| `CONTROL_DIR` | `control/` next to the media folder | Where the app and the updater service pass update requests and progress |
 | `PODCHAPTERS_URL` | `https://podchapters.com` | PodChapters API address (only changed for testing) |
 | `CLOUDFLARE_API_URL` | `https://api.cloudflare.com/client/v4` | Cloudflare API address (only changed for testing) |
 

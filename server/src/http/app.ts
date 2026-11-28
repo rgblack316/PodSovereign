@@ -46,6 +46,7 @@ import { changeStorage, latestMove, MoveError } from '../storage/move.js';
 import { unseal } from '../crypto/secrets.js';
 import { buildView, queueManualBuild, saveBuildSettings, SiteBuildError, testBuild } from '../sitebuild/sitebuild.js';
 import { catchupState, pendingCount, startCatchup } from '../publish/psc-catchup.js';
+import { checkForUpdate, requestUpdate, updateState, UpdateError } from '../update/update.js';
 import { estimateCredits, generateChapters, PodChaptersError, saveShowSettings as savePodChaptersSettings, showSettings as podChaptersSettings, testPodChaptersKey } from '../podchapters/podchapters.js';
 import { applyShownotes, handleWebhook, isRunning, latestJob, listPresets, processingView, saveShowSettings, setPublishIntent, showSettings, startProcessing, testAuphonicKey, AuphonicError } from '../auphonic/auphonic.js';
 import { chaptersFromAudio, getChapters, isWritingMp3, saveChapters, startMp3ChapterWrite } from '../publish/chapters.js';
@@ -642,6 +643,25 @@ export function createApp(deps: AppDeps) {
     const { podcastId } = await requirePodcast(ctx, 'viewer');
     const ep = await getEpisode(db, podcastId, ctx.params.episodeId!);
     sendJson(ctx.res, 200, { configured: !!config.podchaptersKey, credits: estimateCredits(ep.duration) });
+  });
+
+  // ───────────── software updates ─────────────
+
+  router.get('/api/admin/update', async (ctx) => {
+    await requireAdmin(ctx);
+    sendJson(ctx.res, 200, { check: await checkForUpdate(config), state: await updateState(config) });
+  });
+
+  router.post('/api/admin/update/check', async (ctx) => {
+    await requireAdmin(ctx);
+    sendJson(ctx.res, 200, { check: await checkForUpdate(config, true), state: await updateState(config) });
+  });
+
+  router.post('/api/admin/update/apply', async (ctx) => {
+    const admin = await requireAdmin(ctx);
+    const r = await requestUpdate(config, admin.email ?? admin.id);
+    deps.log?.(`update: requested by ${admin.email ?? admin.id}`);
+    sendJson(ctx.res, r.queued ? 202 : 200, r);
   });
 
   router.post('/api/admin/site/test-podchapters', async (ctx) => {
@@ -1341,6 +1361,7 @@ export function createApp(deps: AppDeps) {
         deps.log?.(`podchapters: ${req.method} ${url.pathname}: ${e.message}`);
         return fail(e.status, { error: e.message });
       }
+      if (e instanceof UpdateError) return fail(e.status, { error: e.message });
       if (e instanceof SiteBuildError) return fail(e.status, { error: e.message });
       if (e instanceof CdnError) return fail(e.status, { error: e.message });
       if (e instanceof Op3Error) return fail(e.status, { error: e.message, code: e.code ?? null });
