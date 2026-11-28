@@ -684,7 +684,7 @@ export function createApp(deps: AppDeps) {
     const admin = await requireAdmin(ctx);
     const r = await requestUpdate(config, admin.email ?? admin.id);
     deps.log?.(`update: requested by ${admin.email ?? admin.id}`);
-    sendJson(ctx.res, r.queued ? 202 : 200, r);
+    sendJson(ctx.res, r.queued ? 202 : 200, { ...r, check: await checkForUpdate(config) });
   });
 
   router.post('/api/admin/site/test-podchapters', async (ctx) => {
