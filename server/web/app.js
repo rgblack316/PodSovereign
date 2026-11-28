@@ -1397,34 +1397,121 @@ function chaptersEditor({ p, episodeId, canEdit, audio, markDirty }) {
     fromAudio(id);
   } }, 'Read from the MP3');
 
-  // PodChapters: AI chapters from the episode's transcript, only when asked for. They land here unsaved.
-  let pcCredits = null;
-  const pcBtn = h('button', { type: 'button', class: 'quiet', hidden: true, onclick: async () => {
-    if (isDirty && !confirm('Chapters here have unsaved changes. Make new ones anyway?')) return;
-    const cost = pcCredits ? ` This uses about ${pcCredits} PodChapters credits.` : '';
-    if (!confirm(`Make chapters with PodChapters from this episode’s transcript?${rows.length ? ` They replace the ${rows.length} chapters here (until you save, nothing is changed).` : ''}${cost}`)) return;
-    pcBtn.disabled = true;
-    offer.replaceChildren(h('p', { class: 'hint', role: 'status' }, 'PodChapters is making chapters. This can take a minute or two…'));
+  // AI chapters, only when asked for: each chapter maker the show uses runs on its own request, and every draft
+  // is shown to check and edit. Nothing changes here until "Use these chapters" is chosen.
+  let ai = null; // {providers: [{id, label, configured, credits}], options}
+  let drafts = []; // {id, label, status: 'working'|'done'|'error', rows, error, model, at, credits}
+  let active = null;
+  let aiOptions = null;
+  const aiBox = h('div', { class: 'ai-chapters' });
+  const aiBtn = h('button', { type: 'button', class: 'quiet', hidden: true, onclick: () => openAi() }, 'Make chapters with AI');
+
+  function openAi() {
+    const picks = ai.providers.map((pr) => {
+      const cb = h('input', { type: 'checkbox', checked: pr.configured, disabled: !pr.configured });
+      const note = !pr.configured ? ' (not set up yet)' : pr.credits ? ` (about ${pr.credits} credits)` : '';
+      return { pr, cb, label: h('label', { class: 'check' }, cb, pr.label + note) };
+    });
+    const o = ai.options;
+    const sel = (value, opts) => { const x = h('select', null, opts.map(([v, t]) => h('option', { value: v }, t))); x.value = value; return x; };
+    const style = sel(o.style, [['strict', 'Close to the spoken words'], ['balance', 'Balanced'], ['creative', 'Creative']]);
+    const count = sel(o.count, [['fewer', 'Fewer chapters'], ['moderate', 'A moderate number'], ['more', 'More chapters']]);
+    const ads = h('input', { type: 'checkbox', checked: o.ads });
+    const links = h('input', { type: 'checkbox', checked: o.links });
+    const go = h('button', { type: 'button', class: 'primary', onclick: () => {
+      const chosen = picks.filter((x) => x.cb.checked).map((x) => x.pr);
+      if (!chosen.length) return toast('Choose at least one chapter maker');
+      if (isDirty && !confirm('Chapters here have unsaved changes. Make new ones anyway? (They only replace these if you choose “Use these chapters”.)')) return;
+      const credits = chosen.reduce((n, pr) => n + (pr.credits ?? 0), 0);
+      if (credits && !confirm(`This uses about ${credits} PodChapters credits. Go ahead?`)) return;
+      aiOptions = { style: style.value, count: count.value, ads: ads.checked, links: links.checked };
+      drafts = chosen.map((pr) => ({ id: pr.id, label: pr.label, status: 'working', rows: [] }));
+      active = drafts[0].id;
+      drafts.forEach((d) => runDraft(d));
+      drawAi();
+    } }, 'Make chapters');
+    aiBox.replaceChildren(h('div', { class: 'panel-inline' },
+      h('p', { class: 'muted' }, 'Each chapter maker reads this episode’s transcript and suggests chapters. You check them before anything changes here.'),
+      h('div', { class: 'fields-grid' }, field('Chapter titles', style), field('Number of chapters', count)),
+      h('label', { class: 'check' }, ads, 'Mark ads and sponsor segments (titles start with “Ad:”)'),
+      h('label', { class: 'check' }, links, 'Add links mentioned in the episode to their chapters'),
+      h('div', null, ...picks.map((x) => x.label)),
+      h('div', { class: 'actions' }, go, h('button', { type: 'button', class: 'quiet', onclick: () => { aiBox.replaceChildren(); drafts = []; } }, 'Close'))));
+  }
+
+  async function runDraft(d) {
+    d.status = 'working';
+    d.error = null;
     try {
-      const r = await api('POST', `/api/podcasts/${p.id}/episodes/${episodeId}/chapters/generate`);
-      offer.replaceChildren();
-      load(r.chapters);
-      toast(`${r.chapters.length} chapters made. Check them, then save the episode to keep them.`);
+      const r = await api('POST', `/api/podcasts/${p.id}/episodes/${episodeId}/chapters/generate`, { provider: d.id, options: aiOptions });
+      d.rows = r.chapters.map(row);
+      d.model = r.model;
+      d.at = new Date(r.generatedAt);
+      d.credits = r.credits;
+      d.status = 'done';
     } catch (e) {
-      offer.replaceChildren(h('p', { class: 'error' }, e.message));
-    } finally {
-      pcBtn.disabled = false;
+      d.status = 'error';
+      d.error = e.message;
     }
-  } }, 'Make chapters with PodChapters');
+    if (drafts.includes(d)) drawAi();
+  }
+
+  function useDraft(d) {
+    if (d.rows.some((r) => r.startTime === null)) return toast('Every chapter needs a start time, like 12:30.');
+    if (!d.rows.length) return toast('There are no chapters to use.');
+    if (rows.length && !confirm(`Replace the ${rows.length} chapters here with these ${d.rows.length}? (Nothing is saved until you save the episode.)`)) return;
+    // Links and images typed in earlier stay when a new chapter starts at the same time.
+    const old = rows;
+    const keep = (r) => { const m = old.find((o) => o.startTime !== null && Math.abs(o.startTime - r.startTime) < 1); return { startTime: r.startTime, title: r.title, url: r.url || m?.url || null, img: r.img || m?.img || null, toc: r.toc }; };
+    load(d.rows.map(keep));
+    aiBox.replaceChildren();
+    drafts = [];
+    toast(`${d.rows.length} chapters loaded. Check them, then save the episode to keep them.`);
+  }
+
+  function drawAi() {
+    const tabs = h('div', { class: 'actions', role: 'tablist' }, drafts.map((d) => h('button', {
+      type: 'button', role: 'tab', class: d.id === active ? 'primary' : 'quiet', 'aria-selected': d.id === active ? 'true' : 'false',
+      onclick: () => { active = d.id; drawAi(); },
+    }, d.label + (d.status === 'working' ? ' …' : d.status === 'error' ? ' (failed)' : ''))));
+    const d = drafts.find((x) => x.id === active);
+    let body;
+    if (d.status === 'working') body = h('p', { class: 'hint', role: 'status' }, `${d.label} is making chapters. This can take a minute or two…`);
+    else if (d.status === 'error') body = h('div', null, h('p', { class: 'error' }, d.error), h('button', { type: 'button', onclick: () => { runDraft(d); drawAi(); } }, 'Try again'));
+    else {
+      const trs = d.rows.map((r) => {
+        const time = h('input', { type: 'text', value: r.timeText, 'aria-label': 'Start time', size: 8 });
+        time.addEventListener('input', () => { r.timeText = time.value; r.startTime = parseTime(time.value); time.classList.toggle('invalid', r.startTime === null); });
+        const title = h('input', { type: 'text', value: r.title, 'aria-label': 'Chapter title', maxlength: 200 });
+        title.addEventListener('input', () => { r.title = title.value; });
+        return h('div', { class: 'chapter-row' }, time, title,
+          h('button', { type: 'button', class: 'quiet', 'aria-label': 'Remove this chapter', onclick: () => { d.rows = d.rows.filter((x) => x !== r); drawAi(); } }, 'Remove'));
+      });
+      const made = [d.model ? `${d.label} (${d.model})` : d.label, d.at ? `made ${d.at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : null, d.credits ? `${d.credits} credits used` : null].filter(Boolean).join(', ');
+      body = h('div', null,
+        h('p', { class: 'hint' }, `${made}. ${d.rows.length} chapters.`),
+        h('div', { class: 'chapter-rows' }, trs),
+        h('div', { class: 'actions' },
+          h('button', { type: 'button', class: 'primary', onclick: () => useDraft(d) }, 'Use these chapters'),
+          h('button', { type: 'button', onclick: () => { d.rows.push(row({ startTime: (d.rows.at(-1)?.startTime ?? 0) + 60, title: '' })); drawAi(); } }, 'Add chapter'),
+          h('button', { type: 'button', class: 'quiet', onclick: () => {
+            if (d.credits !== null && d.id === 'podchapters' && !confirm('Make them again? PodChapters charges credits for each run.')) return;
+            runDraft(d); drawAi();
+          } }, 'Make again')));
+    }
+    aiBox.replaceChildren(h('div', { class: 'panel-inline' }, tabs, body, h('div', { class: 'actions' },
+      h('button', { type: 'button', class: 'quiet', onclick: () => { aiBox.replaceChildren(); drafts = []; } }, 'Close'))));
+  }
 
   el.append(
     h('p', { class: 'muted' }, 'Chapters let listeners skip to a part of the episode. Play the audio, pause where a chapter starts and choose “Use player time”.'),
     offer,
+    aiBox,
     player,
     list,
     notes,
     canEdit ? h('div', { class: 'actions', style: 'margin-top:8px' }, addBtn,
-      h('button', { type: 'button', class: 'quiet', onclick: () => jsonInput.click() }, 'Import chapters file (Audacity labels, .txt or .json)'), audioBtn, pcBtn,
+      h('button', { type: 'button', class: 'quiet', onclick: () => jsonInput.click() }, 'Import chapters file (Audacity labels, .txt or .json)'), audioBtn, aiBtn,
       h('button', { type: 'button', class: 'quiet', onclick: () => { if (rows.length && confirm('Remove all chapters?')) { rows = []; changed(); draw(); } } }, 'Remove all')) : null,
     jsonInput,
     writeRow,
@@ -1433,7 +1520,7 @@ function chaptersEditor({ p, episodeId, canEdit, audio, markDirty }) {
   // Existing episode: load its chapters.
   if (episodeId && canEdit) {
     api('GET', `/api/podcasts/${p.id}/episodes/${episodeId}/chapters/generate`).then((r) => {
-      if (r.configured) { pcCredits = r.credits; pcBtn.hidden = false; }
+      if (r.providers?.some((x) => x.configured)) { ai = r; aiBtn.hidden = false; }
     }).catch(() => {});
   }
   if (episodeId) {
@@ -3703,15 +3790,17 @@ async function auphonicShowPanel(p, canEdit) {
 
 async function podchaptersShowPanel(p, canEdit) {
   const panel = h('section', { class: 'panel' });
-  const title = h('h2', null, 'PodChapters');
-  const intro = h('p', { class: 'muted' }, 'Make chapters with AI when you ask for them, from the episode’s own transcript (Auphonic’s costs nothing extra, so PodChapters only charges for the chapters). In an episode’s Chapters section, choose “Make chapters with PodChapters”. They appear there to check and edit; nothing is saved until you save the episode.');
+  const title = h('h2', null, 'AI chapters');
+  const intro = h('p', { class: 'muted' }, 'Make chapters with AI when you ask for them, from the episode’s own transcript. In an episode’s Chapters section, choose “Make chapters with AI”. Each chapter maker you turn on here makes its own suggestion to check and edit; nothing is saved until you save the episode.');
   panel.append(title, intro, h('p', { class: 'hint' }, 'Loading…'));
   (async () => {
     const a = await api('GET', `/api/podcasts/${p.id}/podchapters`);
-    if (!a.configured) {
-      panel.replaceChildren(title, intro, h('p', { class: 'hint' }, state.me.isAdmin ? ['Add your PodChapters API key in ', h('a', { href: '#/site' }, 'Site settings'), ' first.'] : 'An administrator adds the PodChapters API key in Site settings first.'));
+    if (!a.available.podchapters && !a.available.gemini) {
+      panel.replaceChildren(title, intro, h('p', { class: 'hint' }, state.me.isAdmin ? ['Add a PodChapters or Gemini API key in ', h('a', { href: '#/site' }, 'Site settings'), ' first.'] : 'An administrator adds a PodChapters or Gemini API key in Site settings first.'));
       return;
     }
+    const pcOn = h('input', { type: 'checkbox', checked: a.providers.podchapters, disabled: !canEdit });
+    const gemOn = h('input', { type: 'checkbox', checked: a.providers.gemini, disabled: !canEdit });
     const sel = (value, opts) => { const s = h('select', { disabled: !canEdit }, opts.map(([v, t]) => h('option', { value: v }, t))); s.value = value; return s; };
     const style = sel(a.settings.style, [['strict', 'Close to the spoken words'], ['balance', 'Balanced'], ['creative', 'Creative']]);
     const count = sel(a.settings.count, [['fewer', 'Fewer chapters'], ['moderate', 'A moderate number'], ['more', 'More chapters']]);
@@ -3724,19 +3813,24 @@ async function podchaptersShowPanel(p, canEdit) {
         err.hidden = true;
         busy(form, async () => {
           try {
-            await api('PUT', `/api/podcasts/${p.id}/podchapters`, { style: style.value, count: count.value, ads: ads.checked, links: links.checked });
-            toast('PodChapters settings saved');
+            await api('PUT', `/api/podcasts/${p.id}/podchapters`, { style: style.value, count: count.value, ads: ads.checked, links: links.checked, providers: { podchapters: pcOn.checked, gemini: gemOn.checked } });
+            toast('AI chapter settings saved');
           } catch (e) {
             showError(err, e);
           }
         });
       },
     },
+    h('h3', null, 'Chapter makers'),
+    h('label', { class: 'check' }, pcOn, 'PodChapters' + (a.available.podchapters ? '' : ' (no API key in Site settings yet)')),
+    h('label', { class: 'check' }, gemOn, 'Gemini' + (a.available.gemini ? '' : ' (no API key in Site settings yet)')),
+    h('h3', null, 'Starting options for each run'),
+    h('p', { class: 'hint' }, 'These fill in the options on an episode, where you can change them for that run.'),
     h('div', { class: 'fields-grid' }, field('Chapter titles', style, 'How closely titles follow what is said.'), field('Number of chapters', count)),
     h('label', { class: 'check' }, ads, 'Mark ads and sponsor segments (their titles start with “Ad:”)'),
     h('label', { class: 'check' }, links, 'Add links mentioned in the episode to their chapters'),
     err,
-    canEdit ? h('div', { class: 'actions' }, h('button', { class: 'primary', type: 'submit' }, 'Save PodChapters settings')) : null);
+    canEdit ? h('div', { class: 'actions' }, h('button', { class: 'primary', type: 'submit' }, 'Save AI chapter settings')) : null);
     panel.replaceChildren(title, intro, form);
   })().catch((e) => panel.replaceChildren(title, h('p', { class: 'error' }, e.message)));
   return panel;
@@ -3746,7 +3840,7 @@ async function tabSettings(p, canEdit, reload) {
   const parts = [
     ['podping', 'Podping', await tabPodping(p, canEdit, reload)],
     ['auphonic', 'Auphonic', await auphonicShowPanel(p, canEdit)],
-    ['podchapters', 'PodChapters', await podchaptersShowPanel(p, canEdit)],
+    ['podchapters', 'AI chapters', await podchaptersShowPanel(p, canEdit)],
     ['prefixes', 'Stats prefixes', await tabPrefixes(p, canEdit, reload)],
     ['team', 'Team', await tabTeam(p, canEdit, reload)],
     ['feed', 'Feed', null],
@@ -4087,6 +4181,7 @@ async function viewSite() {
     op3Panel(s),
     auphonicSitePanel(s),
     podchaptersSitePanel(s),
+    geminiSitePanel(s),
     pscCatchupPanel(),
     cloudflarePanel(s),
     h('section', { class: 'panel' },
@@ -4611,6 +4706,52 @@ function podchaptersSitePanel(s) {
     h('p', { class: 'hint', style: 'margin-bottom:12px' }, s.podchapters.keySet
       ? h('span', { class: 'light on' }, 'Key saved')
       : ['Create a key in PodChapters under Settings → API & MCP (', h('a', { href: 'https://podchapters.com/app/settings/api-keys', target: '_blank', rel: 'noopener' }, 'podchapters.com'), ').']),
+    form);
+}
+
+function geminiSitePanel(s) {
+  const err = formError();
+  const msg = h('p', { class: 'hint', role: 'status' });
+  const key = h('input', { type: 'password', autocomplete: 'off', placeholder: s.gemini.keySet ? 'Saved. Leave blank to keep it.' : 'AIza…' });
+  const model = h('input', { type: 'text', value: s.gemini.model, autocomplete: 'off' });
+  const form = h('form', {
+    onsubmit: (ev) => {
+      ev.preventDefault();
+      err.hidden = true;
+      if (!key.value.trim() && !s.gemini.keySet) return showError(err, 'Paste the key first');
+      busy(form, async () => {
+        try {
+          await api('POST', '/api/admin/site/test-gemini', { key: key.value, model: model.value });
+          await api('PUT', '/api/admin/site', { ...(key.value.trim() ? { geminiKey: key.value } : {}), geminiModel: model.value });
+          toast('Gemini connected');
+          render();
+        } catch (e) {
+          showError(err, e);
+        }
+      });
+    },
+  },
+  h('div', { class: 'fields-grid' }, field('Gemini API key', key), field('Model', model, 'A Flash-class model is fast and costs cents per episode.')),
+  err,
+  h('div', { class: 'actions' },
+    h('button', { class: 'primary', type: 'submit' }, 'Check and save'),
+    s.gemini.keySet ? h('button', {
+      type: 'button',
+      class: 'quiet',
+      onclick: async () => {
+        if (!confirm('Remove the Gemini key? Gemini will stop being offered for chapters.')) return;
+        await api('PUT', '/api/admin/site', { geminiKey: null });
+        toast('Gemini key removed');
+        render();
+      },
+    }, 'Remove key') : null),
+  msg);
+  return h('section', { class: 'panel' },
+    h('h2', null, 'Gemini'),
+    h('p', { class: 'muted' }, 'Makes chapters from an episode’s transcript when you ask. The transcript is sent to Google; check the data-use terms for your API plan.'),
+    h('p', { class: 'hint', style: 'margin-bottom:12px' }, s.gemini.keySet
+      ? h('span', { class: 'light on' }, 'Key saved')
+      : ['Create a key in Google AI Studio (', h('a', { href: 'https://aistudio.google.com/apikey', target: '_blank', rel: 'noopener' }, 'aistudio.google.com'), ').']),
     form);
 }
 

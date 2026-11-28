@@ -47,7 +47,9 @@ import { unseal } from '../crypto/secrets.js';
 import { buildView, queueManualBuild, saveBuildSettings, SiteBuildError, testBuild } from '../sitebuild/sitebuild.js';
 import { catchupState, pendingCount, startCatchup } from '../publish/psc-catchup.js';
 import { checkForUpdate, requestUpdate, updateState, UpdateError } from '../update/update.js';
-import { estimateCredits, generateChapters, PodChaptersError, saveShowSettings as savePodChaptersSettings, showSettings as podChaptersSettings, testPodChaptersKey } from '../podchapters/podchapters.js';
+import { GeminiError, testGemini } from '../chapters-ai/gemini.js';
+import { enabledProviders, isConfigured, makeChapters, providerMenu, saveEnabledProviders, type ProviderId } from '../chapters-ai/index.js';
+import { PodChaptersError, saveShowSettings as savePodChaptersSettings, showSettings as podChaptersSettings, testPodChaptersKey } from '../podchapters/podchapters.js';
 import { applyShownotes, handleWebhook, isRunning, latestJob, listPresets, processingView, saveShowSettings, setPublishIntent, showSettings, startProcessing, testAuphonicKey, AuphonicError } from '../auphonic/auphonic.js';
 import { chaptersFromAudio, getChapters, isWritingMp3, saveChapters, startMp3ChapterWrite } from '../publish/chapters.js';
 import { Op3Error, op3Daily, op3State, requestOp3Refresh, testOp3Token } from '../stats/op3.js';
@@ -622,27 +624,48 @@ export function createApp(deps: AppDeps) {
 
   router.get('/api/podcasts/:id/podchapters', async (ctx) => {
     const { podcastId } = await requirePodcast(ctx, 'viewer');
-    sendJson(ctx.res, 200, { configured: !!config.podchaptersKey, settings: await podChaptersSettings(db, podcastId) });
+    sendJson(ctx.res, 200, await chapterSettings(podcastId));
   });
 
   router.put('/api/podcasts/:id/podchapters', async (ctx) => {
     const { podcastId } = await requirePodcast(ctx, 'editor');
-    await savePodChaptersSettings(db, podcastId, await readJson(ctx.req));
-    sendJson(ctx.res, 200, { configured: !!config.podchaptersKey, settings: await podChaptersSettings(db, podcastId) });
+    const body = await readJson(ctx.req);
+    await savePodChaptersSettings(db, podcastId, body);
+    if (body.providers !== undefined) await saveEnabledProviders(db, podcastId, body.providers);
+    sendJson(ctx.res, 200, await chapterSettings(podcastId));
+  });
+
+  /** The show's chapter options (defaults for each run) and which chapter makers it uses. */
+  const chapterSettings = async (podcastId: string) => ({
+    configured: !!config.podchaptersKey,
+    settings: await podChaptersSettings(db, podcastId),
+    providers: await enabledProviders(db, podcastId),
+    available: { podchapters: isConfigured(config, 'podchapters'), gemini: isConfigured(config, 'gemini') },
   });
 
   /** AI chapters, only when asked for. They aren't saved: the editor shows them to be checked first. */
   router.post('/api/podcasts/:id/episodes/:episodeId/chapters/generate', async (ctx) => {
     const { podcastId } = await requirePodcast(ctx, 'editor');
     const episodeId = ctx.params.episodeId!;
-    const r = await generateChapters(db, config, podcastId, episodeId, deps.log);
-    sendJson(ctx.res, 200, r);
+    const body = await readJson(ctx.req);
+    const provider = body.provider === undefined ? 'podchapters' : body.provider;
+    if (provider !== 'podchapters' && provider !== 'gemini') throw new HttpError(400, 'provider must be podchapters or gemini');
+    sendJson(ctx.res, 200, await makeChapters(db, config, podcastId, episodeId, provider as ProviderId, body.options, deps.log));
   });
 
   router.get('/api/podcasts/:id/episodes/:episodeId/chapters/generate', async (ctx) => {
     const { podcastId } = await requirePodcast(ctx, 'viewer');
     const ep = await getEpisode(db, podcastId, ctx.params.episodeId!);
-    sendJson(ctx.res, 200, { configured: !!config.podchaptersKey, credits: estimateCredits(ep.duration) });
+    sendJson(ctx.res, 200, await providerMenu(db, config, podcastId, ep.id));
+  });
+
+  router.post('/api/admin/site/test-gemini', async (ctx) => {
+    await requireAdmin(ctx);
+    const body = await readJson(ctx.req);
+    const key = typeof body.key === 'string' && body.key.trim() ? body.key.trim() : config.geminiKey;
+    const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : config.geminiModel;
+    if (!key) throw new HttpError(400, 'Enter the Gemini API key first');
+    sendJson(ctx.res, 200, { ok: true, ...(await testGemini(config, key, model)) });
   });
 
   // ───────────── software updates ─────────────
@@ -1363,6 +1386,10 @@ export function createApp(deps: AppDeps) {
         return fail(e.status, { error: e.message });
       }
       if (e instanceof UpdateError) return fail(e.status, { error: e.message });
+      if (e instanceof GeminiError) {
+        deps.log?.(`gemini: ${req.method} ${url.pathname}: ${e.message}`);
+        return fail(e.status, { error: e.message });
+      }
       if (e instanceof SiteBuildError) return fail(e.status, { error: e.message });
       if (e instanceof CdnError) return fail(e.status, { error: e.message });
       if (e instanceof Op3Error) return fail(e.status, { error: e.message, code: e.code ?? null });

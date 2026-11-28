@@ -52,3 +52,14 @@ PodChapters' own message and hint are shown as they are (for example "Not enough
 The episode's existing chapters are never touched by a failed request.
 
 `PODCHAPTERS_URL` (default `https://podchapters.com`) exists only for testing.
+
+## Gemini as a second chapter maker
+
+Gemini can make chapters from the same transcript, next to PodChapters.
+
+- **Set up:** an administrator adds a Gemini API key and a model name in Site settings → Gemini (the key is checked before saving and stored encrypted). The model is a Flash-class one by default; change it there when Google renames models.
+- **Per show:** Show settings → AI chapters has a checkbox for each chapter maker (at least one stays on) and the starting options for each run.
+- **Per episode:** in the Chapters section, “Make chapters with AI” asks for the four options (number of chapters, title style, mark ads, add links) and which makers to run. Each maker runs in its own request, so each draft appears when it is ready and one failing doesn’t stop the other. Each draft is an editable list; “Use these chapters” puts it into the chapter editor, and nothing is saved until the episode is saved. Links and images already typed in stay when a new chapter starts at the same time.
+- **Checks on Gemini’s answer:** every start time is moved to a real transcript line, chapters are sorted, de-duplicated, kept at least 30 seconds apart and capped (by the number setting and the episode length, never over 30); titles are cleaned; a link is kept only if it appears in the transcript; “Ad:” labels are dropped when ad marking is off. An unusable answer is asked for once more, with the problem.
+- **Needs timings:** an SRT or VTT transcript. Plain text has no timings, so Gemini can’t be used with it.
+- **Privacy and cost:** the transcript is sent to Google. Check the data-use terms for your API plan. One text call per episode costs cents.
