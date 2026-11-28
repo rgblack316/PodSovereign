@@ -66,6 +66,12 @@ cd /opt/podsovereign && sudo ./update.sh
 
 It shows what's new, backs up the database to `backups/` (the last 10 are kept), downloads the new version, rebuilds and restarts. Database changes apply automatically on start. `upgrade.sh` does the same thing. Options: `--check` (only show what's new), `--yes` (don't ask), `--no-backup`, `--force` (rebuild even if nothing changed). If the app doesn't come back, the script prints the exact commands to return to the previous version.
 
+**From the dashboard:** Site settings → Software updates shows whether newer changes are on GitHub, lists what they are, and has an **Update now** button that runs the same `update.sh` (database backup included). The app can't rebuild its own container, so a small service on the server, `podsovereign-updater`, does the work: the button leaves a request in `data/control/`, the service runs `update.sh` and writes progress back for the page to show (the log is `data/control/upgrade.log`). The installer and `update.sh` set the service up. If the page says it isn't running (an install that predates this feature), run this once on the server:
+
+```bash
+cd /opt/podsovereign && sudo ./install-updater.sh
+```
+
 ## Backups and restore
 
 A backup is the database: shows, episodes, tags, accounts and settings. Media files aren't in it; they stay in your media storage (`/opt/podsovereign/data` when stored on this server, or your storage bucket).
