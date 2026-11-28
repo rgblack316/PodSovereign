@@ -146,6 +146,7 @@ Migrations run automatically on startup. The **first account registered becomes 
 | `GITHUB_REPO` · `UPDATE_BRANCH` · `GITHUB_API_URL` | `rgblack316/podsovereign` · `main` · `https://api.github.com` | Where Site settings → Software updates looks for new versions (a fork changes these) |
 | `CONTROL_DIR` | `control/` next to the media folder | Where the app and the updater service pass update requests and progress |
 | `UPLOAD_WAIT_MS` | `25000` | How long finishing an upload may take before the request answers "still working" (Cloudflare cuts requests at 100 s) |
+| `GEMINI_URL` | `https://generativelanguage.googleapis.com` | Gemini API address (only changed for testing) |
 | `PODCHAPTERS_URL` | `https://podchapters.com` | PodChapters API address (only changed for testing) |
 | `CLOUDFLARE_API_URL` | `https://api.cloudflare.com/client/v4` | Cloudflare API address (only changed for testing) |
 

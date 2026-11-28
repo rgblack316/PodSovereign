@@ -23,8 +23,8 @@ export type TitleStyle = 'strict' | 'balance' | 'creative';
 export type ChapterCount = 'fewer' | 'moderate' | 'more';
 export interface ShowSettings { style: TitleStyle; count: ChapterCount; ads: boolean; links: boolean }
 
-const STYLES: TitleStyle[] = ['strict', 'balance', 'creative'];
-const COUNTS: ChapterCount[] = ['fewer', 'moderate', 'more'];
+export const STYLES: TitleStyle[] = ['strict', 'balance', 'creative'];
+export const COUNTS: ChapterCount[] = ['fewer', 'moderate', 'more'];
 /** PodChapters' price for AI chapters, in credits per minute of audio. */
 export const CREDITS_PER_MINUTE = 0.04;
 
@@ -181,12 +181,12 @@ async function pcEpisode(db: Db, config: Config, podcastId: string, episodeId: s
  * Make chapters for an episode. Nothing is saved here: the chapters go back to the editor to be checked.
  * The first one always starts at 00:00:00.
  */
-export async function generateChapters(db: Db, config: Config, podcastId: string, episodeId: string, log?: (m: string) => void): Promise<{ chapters: MadeChapter[]; credits: number }> {
+export async function generateChapters(db: Db, config: Config, podcastId: string, episodeId: string, log?: (m: string) => void, options?: ShowSettings): Promise<{ chapters: MadeChapter[]; credits: number }> {
   if (!config.podchaptersKey) throw new PodChaptersError('PodChapters isn’t set up: an administrator adds the API key in Site settings.', 409);
   const ep = await getEpisode(db, podcastId, episodeId);
   if (!ep.enclosure?.url) throw new PodChaptersError('Add the episode’s audio first.', 409);
   const transcript = await episodeTranscript(db, config, podcastId, episodeId);
-  const opts = await showSettings(db, podcastId);
+  const opts = options ?? (await showSettings(db, podcastId));
 
   const run = async (force: boolean) => {
     const pc = await pcEpisode(db, config, podcastId, episodeId, ep.enclosure!.url, force);

@@ -61,6 +61,10 @@ export interface Config {
   podchaptersUrl: string;
   /** How long finishing an upload may take before the request answers "still working" (ms). */
   uploadWaitMs: number;
+  /** Gemini API key (Site settings), null = not set up; the model name; and the API address (overridable for tests). */
+  geminiKey: string | null;
+  geminiModel: string;
+  geminiUrl: string;
   /** Secret part of Auphonic's callback address. */
   auphonicHookToken: string | null;
   /** Auphonic's address (overridable for tests). */
@@ -129,6 +133,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     podchaptersKey: null,
     podchaptersUrl: env.PODCHAPTERS_URL ?? 'https://podchapters.com',
     uploadWaitMs: Number(env.UPLOAD_WAIT_MS) || 25_000,
+    geminiKey: null,
+    geminiModel: 'gemini-2.5-flash',
+    geminiUrl: env.GEMINI_URL ?? 'https://generativelanguage.googleapis.com',
     auphonicHookToken: null,
     auphonicUrl: env.AUPHONIC_URL ?? 'https://auphonic.com',
     cfZoneId: null,
