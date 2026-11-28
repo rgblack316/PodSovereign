@@ -9,7 +9,7 @@ import { loadSiteSettings } from './site/settings.js';
 import { createPgDb } from './db/pg.js';
 import { createApp } from './http/app.js';
 import { startImportWorker } from './import/importer.js';
-import { cleanupUploads } from './media/uploads.js';
+import { cleanupUploads, resumeUploads } from './media/uploads.js';
 import { startBackupWorker } from './backup/backups.js';
 import { startOp3Worker } from './stats/op3.js';
 import { startAuphonicWorker } from './auphonic/auphonic.js';
@@ -38,6 +38,7 @@ async function main() {
   const auphonic = startAuphonicWorker({ db, config, log });
   // Old feeds confirmed to redirect here are re-checked weekly.
   const redirects = startRedirectWorker({ db, config, log });
+  void resumeUploads(db, config, log).catch((e) => log(`resume uploads: ${e.message}`));
   // Abandoned uploads and uploaded files never saved into an episode.
   const housekeeping = setInterval(() => void cleanupUploads(db, config, log).catch((e) => log(`cleanup: ${e.message}`)), 3600_000);
   const server = http.createServer(createApp({ db, config, log }));

@@ -734,7 +734,7 @@ export function createApp(deps: AppDeps) {
   /** How much has arrived, to resume an interrupted upload. */
   router.get('/api/podcasts/:id/uploads/:uploadId', async (ctx) => {
     const { podcastId } = await requirePodcast(ctx, 'editor');
-    sendJson(ctx.res, 200, { upload: await uploadStatus(db, podcastId, ctx.params.uploadId!) });
+    sendJson(ctx.res, 200, { upload: await uploadStatus(db, config, podcastId, ctx.params.uploadId!) });
   });
 
   /** One chunk of raw bytes, sent as application/octet-stream, at ?offset= */
@@ -746,7 +746,8 @@ export function createApp(deps: AppDeps) {
 
   router.post('/api/podcasts/:id/uploads/:uploadId/complete', async (ctx) => {
     const { podcastId } = await requirePodcast(ctx, 'editor');
-    sendJson(ctx.res, 201, { media: await completeUpload(db, config, podcastId, ctx.params.uploadId!) });
+    const r = await completeUpload(db, config, podcastId, ctx.params.uploadId!);
+    sendJson(ctx.res, 'media' in r ? 201 : 202, r);
   });
 
   router.delete('/api/podcasts/:id/uploads/:uploadId', async (ctx) => {

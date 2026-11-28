@@ -1121,7 +1121,31 @@ async function uploadFile(podcastId, file, kind, { onProgress, signal } = {}) {
       }
       onProgress?.(offset / file.size);
     }
-    return (await api('POST', `${base}/complete`)).media;
+    // A big file can take longer to store than one request may last, so the server may answer
+    // "still working" and we ask again every couple of seconds until it's stored.
+    onProgress?.(1, 'Processing…');
+    let r = await api('POST', `${base}/complete`);
+    const give = Date.now() + 30 * 60_000;
+    let misses = 0;
+    while (!r.media) {
+      if (r.upload?.status === 'failed') throw new Error(r.upload.error || 'The file could not be stored. Try uploading it again.');
+      if (Date.now() > give) throw new Error('Storing the file is taking very long. Refresh in a few minutes: it may still finish.');
+      await sleep(2000);
+      if (signal?.aborted) throw new DOMException('Upload cancelled', 'AbortError');
+      try {
+        r = { upload: (await api('GET', base)).upload };
+        misses = 0;
+      } catch (e) {
+        if (e instanceof ApiError && e.status < 500) throw e;
+        if (++misses > 30) throw e;
+        continue;
+      }
+      if (r.upload.status === 'done') {
+        if (!r.upload.media) throw new Error('That file was removed. Upload it again.');
+        r = { media: r.upload.media };
+      }
+    }
+    return r.media;
   } catch (e) {
     if (e.name === 'AbortError') api('DELETE', base).catch(() => {});
     throw e;
